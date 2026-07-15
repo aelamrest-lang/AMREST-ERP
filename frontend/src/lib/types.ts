@@ -1,0 +1,438 @@
+export type Role = "admin" | "sales" | "production" | "purchase" | "testing" | "store";
+
+export type PermissionAction = "view" | "create" | "edit" | "delete" | "approve" | "print" | "export";
+export type ModulePermission = Record<PermissionAction, boolean>;
+export type PermissionMatrix = Record<string, ModulePermission>;
+
+export interface User {
+  id: string;
+  name: string;
+  email: string;
+  username: string;
+  password: string; // demo: plain text
+  role: Role;
+  customRoleName?: string;
+  permissions?: PermissionMatrix;
+  active: boolean;
+  createdAt: string;
+}
+
+export interface Party {
+  id: string;
+  name: string;
+  type: "customer" | "vendor" | "supplier";
+  gst?: string;
+  address?: string;
+  contactPerson?: string;
+  mobile?: string;
+  email?: string;
+  paymentTerms?: string;
+  creditLimit?: number;
+  ownerId: string; // sales user id
+  createdAt: string;
+}
+
+export interface Item {
+  id: string;
+  code: string;
+  name: string;
+  category: "Raw Material" | "Finished Goods" | "Semi-Finished";
+  unit: string;
+  hsn?: string;
+  gstRate: number;
+  openingStock: number;
+  currentStock: number;
+  minStock: number;
+  reorderLevel: number;
+  purchaseRate: number;
+  saleRate: number;
+}
+
+export interface CostingMaterial {
+  name: string;
+  qty: number;
+  rate: number;
+}
+
+export interface CostingSheet {
+  id: string;
+  number: string;
+  title: string;
+  customerId?: string;
+  kva?: string; // transformer rating
+  materials: CostingMaterial[];
+  gstRate: number;
+  marginPct: number;
+  status: "draft" | "pending" | "approved" | "rejected";
+  ownerId: string;
+  createdAt: string;
+  version: number;
+}
+
+export type DocStatus =
+  | "Inquiry"
+  | "Quotation Sent"
+  | "Negotiation"
+  | "Order Confirmed"
+  | "Production"
+  | "Delivered";
+
+export interface Quotation {
+  id: string;
+  number: string;
+  date: string;
+  customerId: string;
+  costingId?: string;
+  items: { name: string; description?: string; qty: number; rate: number; gst: number }[];
+  terms: string;
+  status: DocStatus;
+  ownerId: string;
+  createdAt: string;
+}
+
+export interface Proforma {
+  id: string;
+  number: string;
+  date: string;
+  quotationId?: string;
+  customerId: string;
+  items: { name: string; qty: number; rate: number; gst: number }[];
+  paymentTerms: string;
+  transport?: string;
+  ownerId: string;
+  createdAt: string;
+}
+
+export interface SalesOrder {
+  id: string;
+  number: string;
+  date: string;
+  customerId: string;
+  proformaId?: string;
+  items: { name: string; qty: number; rate: number; gst: number }[];
+  deliveryDate?: string;
+  status: "Pending" | "Confirmed" | "In Production" | "Dispatched" | "Delivered";
+  ownerId: string;
+  createdAt: string;
+}
+
+export interface PurchaseOrder {
+  id: string;
+  number: string;
+  date: string;
+  vendorId: string;
+  items: { itemId: string; qty: number; rate: number; description?: string }[];
+  terms?: string;
+  status: "Draft" | "Approved" | "Received" | "Cancelled";
+  createdAt: string;
+}
+
+export interface GRN {
+  id: string;
+  number: string;
+  date: string;
+  poId: string;
+  receivedItems: { itemId: string; qty: number }[];
+  qcPassed: boolean;
+  createdAt: string;
+}
+
+export interface MaterialIssueLine {
+  itemId: string;
+  requiredQty: number;
+  alreadyIssuedQty: number;
+  pendingQty: number;
+  currentStock: number;
+  issueQty: number;
+  unit: string;
+  status: "Pending" | "Partial Issued" | "Fully Issued";
+}
+
+export interface MaterialIssue {
+  id: string;
+  number: string;
+  date: string;
+  jobCardId: string;
+  jobCardNumber: string;
+  productName: string;
+  bomId?: string;
+  storeLocation: string;
+  issueBy: string;
+  remarks: string;
+  lines: MaterialIssueLine[];
+  createdAt: string;
+}
+
+export interface BOM {
+  id: string;
+  name: string; // e.g. 100 KVA Transformer
+  productItemId?: string;
+  kva: string;
+  materials: { itemId?: string; name: string; qty: number; unit: string }[];
+  createdAt: string;
+}
+
+export type ProductionStage = string;
+
+export interface ProductionEntry {
+  id: string;
+  date: string;
+  jobCardId: string;
+  jobCardNumber: string;
+  stage: ProductionStage;
+  productName: string;
+  totalJobQty: number;
+  stageMultiplier?: number;
+  previousCompletedQty: number;
+  todayQty: number;
+  balanceQty: number;
+  operatorName: string;
+  shift: "Day" | "Night" | "General";
+  machineName: string;
+  status?: "Pending" | "Running" | "Completed" | "Hold";
+  remarks: string;
+  createdAt: string;
+}
+
+export interface SerialRecord {
+  id: string;
+  serialNo: string;
+  jobCardId: string;
+  productName: string;
+  productionStatus: "Pending" | "In Production" | "Completed";
+  qcStatus: "Pending" | "Pass" | "Fail" | "Hold" | "Approved";
+  dispatchStatus: "Pending" | "Ready" | "Dispatched";
+  reworkStatus: "None" | "Rework" | "Scrap";
+  customerId?: string;
+  warrantyStatus: "Pending" | "Active" | "Expired";
+  createdAt: string;
+}
+
+export interface QCTestRecord {
+  id: string;
+  jobCardId: string;
+  serialNo: string;
+  srNo: number;
+  uniqueNo: string;
+  polarity: string;
+  hvTitle: string;
+  hvAmbientTemp: number;
+  hvAB: string;
+  hvBC: string;
+  hvCA: string;
+  lvTitle: string;
+  lvAB: string;
+  lvBC: string;
+  lvCA: string;
+  ratioR: string;
+  ratioY: string;
+  ratioB: string;
+  irHVE: string;
+  irLVE: string;
+  irHVLV: string;
+  dvdfVolt: string;
+  hvKv: string;
+  lvKv: string;
+  result: "Pending" | "Pass" | "Fail" | "Hold";
+  workflowStatus: "Testing Entry" | "QC Verification" | "QC Approval" | "Final Approval" | "Ready For Dispatch";
+  testingEngineer: string;
+  dateOfTesting: string;
+  qcFormatId?: string;
+  dynamicValues?: Record<string, string>;
+  returnedToInventory?: boolean;
+}
+
+export interface QCFormat {
+  id: string;
+  name: string;
+  useFor: string;
+  attachmentName?: string;
+  attachmentType?: string;
+  attachmentUrl?: string;
+  columns: { id: string; name: string; width?: number; parameter?: string; passFailLogic?: string; autoCalculation?: string }[];
+  pdfLayout: "table" | "certificate" | "routine";
+  createdAt: string;
+}
+
+export interface QCFinalReportAttachment {
+  id: string;
+  jobCardId: string;
+  fileName: string;
+  fileType: string;
+  fileUrl: string;
+  uploadedBy: string;
+  uploadedAt: string;
+}
+
+export interface JobCard {
+  id: string;
+  number: string;
+  date: string;
+  salesOrderId?: string;
+  bomId?: string;
+  qcFormatId?: string;
+  product: string;
+  qty: number;
+  serialStart?: string;
+  reservedItems: { itemId: string; qty: number }[];
+  stageQuantities?: { stage: ProductionStage; multiplier: number; totalQty: number }[];
+  stages: { stage: ProductionStage; status: "pending" | "in-progress" | "done"; worker?: string; date?: string }[];
+  status: "Open" | "In Progress" | "Completed";
+  createdAt: string;
+}
+
+export interface DeliveryChallan {
+  id: string;
+  number: string;
+  date: string;
+  salesOrderId: string;
+  customerId: string;
+  vehicle?: string;
+  driver?: string;
+  transport?: string;
+  acknowledged: boolean;
+  createdAt: string;
+}
+
+export interface Lead {
+  id: string;
+  date: string;
+  customerName: string;
+  contactPerson?: string;
+  contact: string;
+  email?: string;
+  product: string;
+  notes: string;
+  status: "Inquiry" | "Quotation Sent" | "Negotiation" | "Order Confirmed" | "Production" | "Delivered" | "New" | "Followup" | "Quoted" | "Converted" | "Lost";
+  ownerId: string;
+  followups: { date: string; note: string }[];
+}
+
+export interface CTLine {
+  description: string;
+  specification: string;
+  weight: number;
+  unit: string;
+  rate: number;
+  idMm?: number;
+  odMm?: number;
+  heightMm?: number;
+  density?: number;
+  swg?: "17" | "18" | "19" | "20";
+  turns?: number;
+  swgWeightPerMeter?: number;
+  copperLengthMeter?: number;
+  mltMeter?: number;
+}
+
+export type CTWorkflowKey = "enquiry" | "quotation" | "salesOrder" | "po" | "grn" | "inventory" | "jobCard" | "production" | "quality" | "challan" | "dispatch" | "pdf";
+
+export interface CTWorkflowStage {
+  key: CTWorkflowKey;
+  label: string;
+  completed: boolean;
+  ref: string;
+  date: string;
+  notes: string;
+}
+
+export interface CTRecord {
+  id: string;
+  number: string;
+  date: string;
+  projectType: string;
+  productType: string;
+  customerId: string;
+  customerName: string;
+  contact: string;
+  productDetails: string;
+  ratio: string;
+  burdenClass: string;
+  lines: CTLine[];
+  labourPct: number;
+  marginPct: number;
+  gstPct: number;
+  workflow: CTWorkflowStage[];
+  approved: boolean;
+  ownerId: string;
+  createdAt: string;
+}
+
+export interface ActivityLog {
+  id: string;
+  userId: string;
+  action: string;
+  module: string;
+  timestamp: string;
+}
+
+export interface CompanySettings {
+  name: string;
+  address: string;
+  gst: string;
+  email: string;
+  phone: string;
+  logoText: string;
+  logoUrl?: string;
+  invoicePrefix: string;
+  fyStart: string;
+  documentFormats?: DocumentFormat[];
+}
+
+export interface DocumentTerm {
+  id: string;
+  text: string;
+  active: boolean;
+  order: number;
+}
+
+export interface DocumentFormat {
+  id: string;
+  documentType: string;
+  formatName: string;
+  active: boolean;
+  logoUrl?: string;
+  companyName: string;
+  address: string;
+  gstNo: string;
+  contactDetails: string;
+  headerContent: string;
+  footerContent: string;
+  terms: DocumentTerm[];
+  bankDetails: string;
+  declaration: string;
+  signatureName: string;
+  signatureUrl?: string;
+  qrCode: boolean;
+  watermark?: string;
+  fitToSinglePage?: boolean;
+  pageSize: "A4" | "A5";
+  orientation: "Portrait" | "Landscape";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DB {
+  users: User[];
+  parties: Party[];
+  items: Item[];
+  costings: CostingSheet[];
+  quotations: Quotation[];
+  proformas: Proforma[];
+  salesOrders: SalesOrder[];
+  purchaseOrders: PurchaseOrder[];
+  grns: GRN[];
+  materialIssues: MaterialIssue[];
+  boms: BOM[];
+  jobCards: JobCard[];
+  challans: DeliveryChallan[];
+  productionEntries: ProductionEntry[];
+  serials: SerialRecord[];
+  qcTests: QCTestRecord[];
+  qcFormats: QCFormat[];
+  qcFinalReports: QCFinalReportAttachment[];
+  leads: Lead[];
+  ctCostings: CTRecord[];
+  logs: ActivityLog[];
+  settings: CompanySettings;
+}
