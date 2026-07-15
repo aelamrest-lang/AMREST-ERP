@@ -126,6 +126,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!currentUser) return;
     const int = setInterval(async () => {
+      if (!getToken()) return;
       try {
         const v = await fetchRemoteVersion();
         if (v > localVersion.current) {
