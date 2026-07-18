@@ -145,7 +145,7 @@ export function PurchaseOrders() {
                       setDB(d => ({...d, purchaseOrders: d.purchaseOrders.map(x => x.id === p.id ? {...x, status: e.target.value} : x)}));
                       log(`PO ${p.number} → ${e.target.value}`, "Purchase");
                     }} className="text-xs py-1">
-                      <option>Draft</option><option>Approved</option><option>Received</option><option>Cancelled</option>
+                      <option>Draft</option><option>Approved</option><option>Partially Received</option><option>Completed</option><option>Received</option><option>Cancelled</option>
                     </Select>
                   </Td>
                   <Td><div className="flex gap-1">
@@ -243,30 +243,82 @@ export function GRNPage() {
   const [received, setReceived] = useState<{ itemId: string; qty: number }[]>([]);
   const [qcPassed, setQcPassed] = useState(true);
 
+  // Sum of already-received quantities per item across all prior GRNs for a given PO
+  const alreadyReceivedByItem = (targetPoId: string): Record<string, number> => {
+    const acc: Record<string, number> = {};
+    db.grns.filter(g => g.poId === targetPoId).forEach(g => {
+      g.receivedItems.forEach(r => { acc[r.itemId] = (acc[r.itemId] || 0) + (r.qty || 0); });
+    });
+    return acc;
+  };
+
+  const initReceivedFromPO = (targetPoId: string) => {
+    const target = db.purchaseOrders.find(x => x.id === targetPoId);
+    if (!target) { setReceived([]); return; }
+    const already = alreadyReceivedByItem(targetPoId);
+    setReceived(target.items.map(i => ({
+      itemId: i.itemId,
+      qty: Math.max(0, i.qty - (already[i.itemId] || 0)),
+    })));
+  };
+
   const openNew = () => {
-    if (!po) return alert("No PO available");
-    setPoId(po.id);
-    setReceived(po.items.map(i => ({ itemId: i.itemId, qty: i.qty })));
+    // Prefer a PO that is not yet fully received
+    const openPOs = db.purchaseOrders.filter(p => p.status !== "Cancelled" && p.status !== "Draft" && p.status !== "Completed" && p.status !== "Received");
+    const target = openPOs[0] || db.purchaseOrders[0];
+    if (!target) return alert("No PO available");
+    setPoId(target.id);
+    initReceivedFromPO(target.id);
     setQcPassed(true);
     setOpen(true);
   };
 
+  const itemStatus = (poQty: number, already: number, receiveNow: number): { label: "Pending" | "Partially Received" | "Completed"; color: "gray" | "amber" | "green" } => {
+    const total = already + Math.max(0, receiveNow || 0);
+    if (total <= 0) return { label: "Pending", color: "gray" };
+    if (total >= poQty) return { label: "Completed", color: "green" };
+    return { label: "Partially Received", color: "amber" };
+  };
+
   const save = () => {
+    if (!po) return;
+    // Filter out zero-qty receipts; guard over-receipt against balance
+    const already = alreadyReceivedByItem(po.id);
+    const cleaned = received
+      .map(r => {
+        const line = po.items.find(i => i.itemId === r.itemId);
+        if (!line) return null;
+        const balance = Math.max(0, line.qty - (already[r.itemId] || 0));
+        const q = Math.max(0, Math.min(balance, Number(r.qty) || 0));
+        return q > 0 ? { itemId: r.itemId, qty: q } : null;
+      })
+      .filter(Boolean) as { itemId: string; qty: number }[];
+
+    if (cleaned.length === 0) return alert("Enter at least one non-zero Receive Now quantity.");
+
     const grn: GRN = {
       id: uid(), number: nextNumber("GRN", db.grns), date: todayISO(),
-      poId, receivedItems: received, qcPassed, createdAt: new Date().toISOString(),
+      poId, receivedItems: cleaned, qcPassed, createdAt: new Date().toISOString(),
     };
+
+    // Determine new PO status
+    const cumulativeAfter: Record<string, number> = { ...already };
+    cleaned.forEach(r => { cumulativeAfter[r.itemId] = (cumulativeAfter[r.itemId] || 0) + r.qty; });
+    const fullyReceived = po.items.every(i => (cumulativeAfter[i.itemId] || 0) >= i.qty);
+    const anyReceived = po.items.some(i => (cumulativeAfter[i.itemId] || 0) > 0);
+    const nextStatus: PurchaseOrder["status"] = fullyReceived ? "Completed" : (anyReceived ? "Partially Received" : po.status);
+
     setDB(d => {
       const items = d.items.map(it => {
-        const r = received.find(x => x.itemId === it.id);
+        const r = cleaned.find(x => x.itemId === it.id);
         return r ? {...it, currentStock: it.currentStock + r.qty} : it;
       });
       return {
         ...d, grns: [grn, ...d.grns], items,
-        purchaseOrders: d.purchaseOrders.map(p => p.id === poId ? {...p, status: "Received"} : p),
+        purchaseOrders: d.purchaseOrders.map(p => p.id === poId ? {...p, status: nextStatus} : p),
       };
     });
-    log(`GRN ${grn.number} created (PO ${po?.number})`, "GRN");
+    log(`GRN ${grn.number} created (PO ${po?.number}) → PO ${nextStatus}`, "GRN");
     setOpen(false);
   };
 
@@ -302,33 +354,57 @@ export function GRNPage() {
           <div><Label>Select PO</Label>
             <Select value={poId} onChange={(e: any) => {
               setPoId(e.target.value);
-              const newPo = db.purchaseOrders.find(x => x.id === e.target.value);
-              if (newPo) setReceived(newPo.items.map(i => ({ itemId: i.itemId, qty: i.qty })));
+              initReceivedFromPO(e.target.value);
             }}>
-              {db.purchaseOrders.map(p => <option key={p.id} value={p.id}>{p.number} — {db.parties.find(v => v.id === p.vendorId)?.name}</option>)}
+              {db.purchaseOrders.map(p => <option key={p.id} value={p.id}>{p.number} — {db.parties.find(v => v.id === p.vendorId)?.name} ({p.status})</option>)}
             </Select>
           </div>
-          <Table>
-            <thead><tr><Th>Item</Th><Th>Ordered</Th><Th>Received Now</Th></tr></thead>
-            <tbody>
-              {po?.items.map((oi, idx) => {
-                const it = db.items.find(x => x.id === oi.itemId);
-                const r = received.find(x => x.itemId === oi.itemId);
-                return (
-                  <tr key={idx}>
-                    <Td>{it?.name}</Td>
-                    <Td>{oi.qty} {it?.unit}</Td>
-                    <Td>
-                      <Input type="number" value={r?.qty || 0} onChange={(e: any) => {
-                        const q = Number(e.target.value);
-                        setReceived(prev => prev.map(x => x.itemId === oi.itemId ? {...x, qty: q} : x));
-                      }}/>
-                    </Td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </Table>
+          {po && (() => {
+            const already = alreadyReceivedByItem(po.id);
+            return (
+              <Table>
+                <thead><tr><Th>Item</Th><Th>PO Qty</Th><Th>Already Received</Th><Th>Balance</Th><Th>Receive Now</Th><Th>Status</Th></tr></thead>
+                <tbody>
+                  {po.items.map((oi, idx) => {
+                    const it = db.items.find(x => x.id === oi.itemId);
+                    const r = received.find(x => x.itemId === oi.itemId);
+                    const alr = already[oi.itemId] || 0;
+                    const balance = Math.max(0, oi.qty - alr);
+                    const now = Math.max(0, Math.min(balance, Number(r?.qty) || 0));
+                    const st = itemStatus(oi.qty, alr, now);
+                    return (
+                      <tr key={idx}>
+                        <Td>{it?.name}</Td>
+                        <Td>{oi.qty} {it?.unit}</Td>
+                        <Td>{alr} {it?.unit}</Td>
+                        <Td className="font-semibold">{balance} {it?.unit}</Td>
+                        <Td>
+                          <Input
+                            type="number"
+                            min={0}
+                            max={balance}
+                            disabled={balance === 0}
+                            value={r?.qty ?? 0}
+                            onChange={(e: any) => {
+                              const raw = Number(e.target.value);
+                              const q = isNaN(raw) ? 0 : Math.max(0, Math.min(balance, raw));
+                              setReceived(prev => {
+                                const exists = prev.some(x => x.itemId === oi.itemId);
+                                return exists
+                                  ? prev.map(x => x.itemId === oi.itemId ? { ...x, qty: q } : x)
+                                  : [...prev, { itemId: oi.itemId, qty: q }];
+                              });
+                            }}
+                          />
+                        </Td>
+                        <Td><Badge color={st.color as any}>{st.label}</Badge></Td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </Table>
+            );
+          })()}
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={qcPassed} onChange={e => setQcPassed(e.target.checked)} className="rounded"/>
             Quality Check Passed
