@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useStore, uid } from "../lib/store";
-import { Card, Button, Input, Select, Label, Table, Th, Td, Empty, Badge } from "../components/ui";
+import { Card, Button, Input, Select, Label, Table, Th, Td, Empty, Badge, Modal } from "../components/ui";
 import type { BOM } from "../lib/types";
 import { IconPlus, IconTrash, IconSearch, IconEdit, IconCheck } from "../components/icons";
 import { userCan } from "../lib/permissions";
@@ -21,6 +21,9 @@ export function BOMPage() {
   const [registrySearch, setRegistrySearch] = useState("");
   const [materialSearch, setMaterialSearch] = useState("");
   const [saveMessage, setSaveMessage] = useState("");
+  const [copyOpen, setCopyOpen] = useState(false);
+  const [copyTargetId, setCopyTargetId] = useState("");
+  const [copySearch, setCopySearch] = useState("");
 
   const selectedProduct = finishedProducts.find(i => i.id === selectedProductId) || finishedProducts[0];
   const currentBom = useMemo(() => {
@@ -140,6 +143,52 @@ export function BOMPage() {
     setTimeout(() => setSaveMessage(""), 2500);
   };
 
+  const openCopyDialog = () => {
+    if (!currentBom || currentBom.materials.length === 0) {
+      alert("Select a source BOM that has at least one mapped material before copying.");
+      return;
+    }
+    setCopyTargetId("");
+    setCopySearch("");
+    setCopyOpen(true);
+  };
+
+  const copyBom = () => {
+    if (!currentBom || !copyTargetId) return;
+    const target = finishedProducts.find(p => p.id === copyTargetId);
+    if (!target) return;
+    if (target.id === selectedProduct?.id) {
+      alert("Source and target model are the same.");
+      return;
+    }
+    const existing = db.boms.find(b => b.productItemId === target.id) || db.boms.find(b => b.name === target.name);
+    if (existing && !window.confirm(`${target.name} already has a BOM with ${existing.materials.length} material(s). Overwrite it?`)) return;
+
+    const clonedMaterials = currentBom.materials.map(m => ({ ...m }));
+    const newBom: BOM = existing
+      ? { ...existing, materials: clonedMaterials, name: target.name, productItemId: target.id }
+      : { id: uid(), name: target.name, productItemId: target.id, materials: clonedMaterials, createdAt: new Date().toISOString() };
+
+    setDB(d => ({
+      ...d,
+      boms: existing
+        ? d.boms.map(b => b.id === existing.id ? newBom : b)
+        : [...d.boms, newBom],
+    }));
+    log(`Copied BOM ${selectedProduct?.name} → ${target.name} (${clonedMaterials.length} materials)`, "BOM");
+    setSelectedProductId(target.id);
+    setCopyOpen(false);
+    setSaveMessage(`BOM copied to ${target.name}.`);
+    setTimeout(() => setSaveMessage(""), 3000);
+  };
+
+  const copyCandidates = useMemo(() => {
+    const term = copySearch.toLowerCase();
+    return finishedProducts
+      .filter(p => p.id !== selectedProduct?.id)
+      .filter(p => !term || p.name.toLowerCase().includes(term) || p.code.toLowerCase().includes(term));
+  }, [finishedProducts, copySearch, selectedProduct]);
+
   return (
     <div className="space-y-5">
       <div>
@@ -157,6 +206,9 @@ export function BOMPage() {
               </div>
               <div className="flex items-center gap-2">
                 {saveMessage && <span className="text-xs font-medium text-emerald-600">{saveMessage}</span>}
+                {(canCreate || canEdit) && currentBom && currentBom.materials.length > 0 && (
+                  <Button variant="outline" onClick={openCopyDialog} data-testid="copy-bom-btn"><IconPlus size={14}/> Copy BOM</Button>
+                )}
                 {(canCreate || canEdit) && <Button onClick={saveCurrentBom}><IconCheck size={14}/> Save BOM</Button>}
               </div>
             </div>
@@ -269,6 +321,55 @@ export function BOMPage() {
           </div>
         </Card>
       </div>
+
+      <Modal open={copyOpen} onClose={() => setCopyOpen(false)} title="Copy BOM to another Transformer Model" size="lg">
+        <div className="space-y-4">
+          <div className="rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 p-3 text-sm">
+            <div className="text-slate-500 text-xs uppercase tracking-wide">Source</div>
+            <div className="font-semibold">{selectedProduct?.name}</div>
+            <div className="text-xs text-slate-500 mt-1">{currentBom?.materials.length || 0} material(s) will be cloned</div>
+          </div>
+          <div>
+            <Label>Search Target Model</Label>
+            <div className="relative">
+              <IconSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
+              <Input className="pl-9" value={copySearch} onChange={(e: any) => setCopySearch(e.target.value)} placeholder="Type model name or code..." data-testid="copy-bom-search"/>
+            </div>
+          </div>
+          <div className="max-h-72 overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-800">
+            {copyCandidates.map(p => {
+              const existing = db.boms.find(b => b.productItemId === p.id) || db.boms.find(b => b.name === p.name);
+              const active = copyTargetId === p.id;
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => setCopyTargetId(p.id)}
+                  data-testid={`copy-bom-target-${p.code}`}
+                  className={"w-full text-left p-3 flex items-start justify-between gap-3 " + (active ? "bg-indigo-50 dark:bg-indigo-900/30" : "hover:bg-slate-50 dark:hover:bg-slate-800/50")}
+                >
+                  <div>
+                    <div className="font-semibold text-slate-800 dark:text-slate-100">{p.name}</div>
+                    <div className="text-xs text-slate-500 mt-0.5">{p.code}</div>
+                  </div>
+                  <div className="text-right">
+                    {existing ? (
+                      <Badge color="amber">Has BOM · {existing.materials.length} items</Badge>
+                    ) : (
+                      <Badge color="slate">No BOM</Badge>
+                    )}
+                    {active && <div className="text-xs mt-1 text-indigo-600 font-medium">Selected</div>}
+                  </div>
+                </button>
+              );
+            })}
+            {copyCandidates.length === 0 && <div className="p-6 text-sm text-slate-500 text-center">No other finished products match.</div>}
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setCopyOpen(false)}>Cancel</Button>
+            <Button disabled={!copyTargetId} onClick={copyBom} data-testid="copy-bom-confirm"><IconCheck size={14}/> Copy BOM</Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
