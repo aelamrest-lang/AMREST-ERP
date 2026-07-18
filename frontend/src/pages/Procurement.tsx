@@ -332,6 +332,98 @@ export function PurchaseOrders() {
   );
 }
 
+function POCombobox({
+  purchaseOrders, parties, value, onChange, placeholder = "Search PO by number, vendor, status...",
+}: {
+  purchaseOrders: PurchaseOrder[]; parties: Party[]; value: string; onChange: (id: string) => void; placeholder?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [highlight, setHighlight] = useState(0);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const selected = purchaseOrders.find(p => p.id === value) || null;
+  const vendorName = (id: string) => parties.find(v => v.id === id)?.name || "";
+
+  const labelFor = (p: PurchaseOrder) => `${p.number} — ${vendorName(p.vendorId)} (${p.status})`;
+  const displayText = open ? query : (selected ? labelFor(selected) : "");
+
+  const statusColor: Record<string, "green" | "amber" | "blue" | "slate" | "red"> = {
+    "Completed": "green", "Received": "green", "Partially Received": "amber",
+    "Approved": "blue", "Draft": "slate", "Cancelled": "red",
+  };
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const sorted = [...purchaseOrders].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+    if (!q) return sorted;
+    return sorted.filter(p =>
+      p.number.toLowerCase().includes(q) ||
+      vendorName(p.vendorId).toLowerCase().includes(q) ||
+      p.status.toLowerCase().includes(q) ||
+      (p.date || "").toLowerCase().includes(q),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [purchaseOrders, query, parties]);
+
+  const pick = (p: PurchaseOrder) => { onChange(p.id); setOpen(false); setQuery(""); };
+
+  const handleKey = (e: React.KeyboardEvent) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setOpen(true); setHighlight(h => Math.min(filtered.length - 1, h + 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setHighlight(h => Math.max(0, h - 1)); }
+    else if (e.key === "Enter") { e.preventDefault(); if (filtered[highlight]) pick(filtered[highlight]); }
+    else if (e.key === "Escape") { setOpen(false); setQuery(""); }
+  };
+
+  const onBlur = () => {
+    setTimeout(() => {
+      if (wrapRef.current && !wrapRef.current.contains(document.activeElement)) { setOpen(false); setQuery(""); }
+    }, 0);
+  };
+
+  return (
+    <div className="relative" ref={wrapRef} onBlur={onBlur}>
+      <div className="relative">
+        <IconSearch size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"/>
+        <Input
+          className="pl-9"
+          value={displayText}
+          placeholder={placeholder}
+          onFocus={() => { setOpen(true); setHighlight(0); }}
+          onChange={(e: any) => { setQuery(e.target.value); setOpen(true); setHighlight(0); }}
+          onKeyDown={handleKey}
+          data-testid="grn-po-combobox"
+        />
+      </div>
+      {open && (
+        <div className="absolute z-30 mt-1 w-full max-h-80 overflow-auto rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg">
+          {filtered.length === 0 && <div className="p-3 text-sm text-slate-500">No POs match “{query}”.</div>}
+          {filtered.map((p, idx) => (
+            <button
+              type="button"
+              key={p.id}
+              onMouseDown={(e) => { e.preventDefault(); pick(p); }}
+              onMouseEnter={() => setHighlight(idx)}
+              data-testid={`grn-po-option-${p.number}`}
+              className={"w-full text-left px-3 py-2 flex items-center justify-between gap-3 " + (idx === highlight ? "bg-indigo-50 dark:bg-indigo-900/30" : "hover:bg-slate-50 dark:hover:bg-slate-800/50")}
+            >
+              <div className="min-w-0">
+                <div className="font-medium text-slate-800 dark:text-slate-100 truncate">
+                  <span className="font-mono text-xs mr-2 text-slate-500">{p.number}</span>
+                  {vendorName(p.vendorId) || "Unknown Vendor"}
+                </div>
+                <div className="text-xs text-slate-500 truncate">
+                  {p.date} · {p.items.length} item{p.items.length !== 1 ? "s" : ""}
+                </div>
+              </div>
+              <Badge color={statusColor[p.status] || "slate"}>{p.status}</Badge>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function GRNPage() {
   const { db, setDB, log, currentUser } = useStore();
   const canCreate = userCan(currentUser, "grn", "create");
@@ -450,12 +542,12 @@ export function GRNPage() {
       <Modal open={open} onClose={() => setOpen(false)} title="New Goods Receipt Note" size="lg">
         <div className="space-y-3">
           <div><Label>Select PO</Label>
-            <Select value={poId} onChange={(e: any) => {
-              setPoId(e.target.value);
-              initReceivedFromPO(e.target.value);
-            }}>
-              {db.purchaseOrders.map(p => <option key={p.id} value={p.id}>{p.number} — {db.parties.find(v => v.id === p.vendorId)?.name} ({p.status})</option>)}
-            </Select>
+            <POCombobox
+              purchaseOrders={db.purchaseOrders}
+              parties={db.parties}
+              value={poId}
+              onChange={(id) => { setPoId(id); initReceivedFromPO(id); }}
+            />
           </div>
           {po && (() => {
             const already = alreadyReceivedByItem(po.id);
