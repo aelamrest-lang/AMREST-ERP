@@ -432,6 +432,24 @@ export function GRNPage() {
   const po = db.purchaseOrders.find(p => p.id === poId);
   const [received, setReceived] = useState<{ itemId: string; qty: number }[]>([]);
   const [qcPassed, setQcPassed] = useState(true);
+  const [hideCompleted, setHideCompleted] = useState(true);
+
+  const isFullyReceived = (p: PurchaseOrder): boolean => {
+    if (p.status === "Completed" || p.status === "Received" || p.status === "Cancelled") return true;
+    const already: Record<string, number> = {};
+    db.grns.filter(g => g.poId === p.id).forEach(g => {
+      g.receivedItems.forEach(r => { already[r.itemId] = (already[r.itemId] || 0) + (r.qty || 0); });
+    });
+    return p.items.length > 0 && p.items.every(i => (already[i.itemId] || 0) >= i.qty);
+  };
+
+  const visiblePOs = useMemo(() => {
+    if (!hideCompleted) return db.purchaseOrders;
+    // Keep currently selected PO in list even if it becomes hidden after filtering,
+    // so the user isn't confused about a "missing" selection.
+    return db.purchaseOrders.filter(p => p.id === poId || !isFullyReceived(p));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [db.purchaseOrders, db.grns, hideCompleted, poId]);
 
   // Sum of already-received quantities per item across all prior GRNs for a given PO
   const alreadyReceivedByItem = (targetPoId: string): Record<string, number> => {
@@ -541,13 +559,30 @@ export function GRNPage() {
 
       <Modal open={open} onClose={() => setOpen(false)} title="New Goods Receipt Note" size="lg">
         <div className="space-y-3">
-          <div><Label>Select PO</Label>
+          <div>
+            <div className="flex items-center justify-between gap-2">
+              <Label>Select PO</Label>
+              <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 cursor-pointer select-none" data-testid="grn-hide-completed-toggle">
+                <input
+                  type="checkbox"
+                  className="rounded"
+                  checked={hideCompleted}
+                  onChange={e => setHideCompleted(e.target.checked)}
+                />
+                Hide fully received
+              </label>
+            </div>
             <POCombobox
-              purchaseOrders={db.purchaseOrders}
+              purchaseOrders={visiblePOs}
               parties={db.parties}
               value={poId}
               onChange={(id) => { setPoId(id); initReceivedFromPO(id); }}
             />
+            {visiblePOs.length === 0 && (
+              <div className="mt-2 text-xs text-slate-500">
+                No pending POs. Untick “Hide fully received” to see completed orders.
+              </div>
+            )}
           </div>
           {po && (() => {
             const already = alreadyReceivedByItem(po.id);
