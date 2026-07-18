@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header, UploadFile, File, Query, Response
 from fastapi.security import HTTPBearer
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -8,8 +8,10 @@ from typing import Optional
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import os
+import uuid
 import logging
 import jwt
+import requests
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -215,6 +217,178 @@ async def put_state(body: StateBody, user_id: str = Depends(get_current_user_id)
 async def get_version(user_id: str = Depends(get_current_user_id)):
     doc = await db.erp_state.find_one({"_id": STATE_ID}, {"version": 1})
     return {"version": (doc.get("version", 0) if doc else 0)}
+
+
+# ---------------------------------------------------------------------------
+# File / Object Storage (Emergent Storage)
+# ---------------------------------------------------------------------------
+
+STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"
+EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
+APP_NAME = "amrest-erp"
+_storage_key: Optional[str] = None
+
+MIME_TYPES = {
+    "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+    "gif": "image/gif", "webp": "image/webp", "svg": "image/svg+xml",
+    "pdf": "application/pdf", "json": "application/json",
+    "csv": "text/csv", "txt": "text/plain",
+}
+
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+
+
+def init_storage() -> str:
+    global _storage_key
+    if _storage_key:
+        return _storage_key
+    if not EMERGENT_KEY:
+        raise RuntimeError("EMERGENT_LLM_KEY missing")
+    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
+    resp.raise_for_status()
+    _storage_key = resp.json()["storage_key"]
+    return _storage_key
+
+
+def put_object(path: str, data: bytes, content_type: str) -> dict:
+    key = init_storage()
+    resp = requests.put(
+        f"{STORAGE_URL}/objects/{path}",
+        headers={"X-Storage-Key": key, "Content-Type": content_type},
+        data=data, timeout=120,
+    )
+    if resp.status_code == 403:
+        # Refresh key and retry once
+        global _storage_key
+        _storage_key = None
+        key = init_storage()
+        resp = requests.put(
+            f"{STORAGE_URL}/objects/{path}",
+            headers={"X-Storage-Key": key, "Content-Type": content_type},
+            data=data, timeout=120,
+        )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_object(path: str) -> tuple[bytes, str]:
+    key = init_storage()
+    resp = requests.get(
+        f"{STORAGE_URL}/objects/{path}",
+        headers={"X-Storage-Key": key}, timeout=60,
+    )
+    if resp.status_code == 403:
+        global _storage_key
+        _storage_key = None
+        key = init_storage()
+        resp = requests.get(
+            f"{STORAGE_URL}/objects/{path}",
+            headers={"X-Storage-Key": key}, timeout=60,
+        )
+    resp.raise_for_status()
+    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+
+
+@app.on_event("startup")
+async def _startup_storage():
+    try:
+        if EMERGENT_KEY:
+            init_storage()
+            logger.info("Emergent object storage initialized")
+    except Exception as e:
+        logger.error(f"Storage init failed: {e}")
+
+
+async def get_current_user_from_any(
+    authorization: Optional[str] = Header(None),
+    auth: Optional[str] = Query(None),
+) -> str:
+    """Accept token via Authorization header OR ?auth= query param (used for <img> tags)."""
+    token: Optional[str] = None
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(" ", 1)[1].strip()
+    elif auth:
+        token = auth
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing token")
+    uid_ = decode_token(token)
+    if not uid_:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    return uid_
+
+
+@api_router.post("/upload")
+async def upload_file(
+    file: UploadFile = File(...),
+    category: str = Query("general"),
+    user_id: str = Depends(get_current_user_id),
+):
+    """Upload a file to object storage. Returns id + url that the frontend can use in <img src>."""
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"File exceeds {MAX_UPLOAD_BYTES // (1024 * 1024)}MB limit")
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty file")
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else "bin"
+    if len(ext) > 8:
+        ext = "bin"
+    content_type = file.content_type or MIME_TYPES.get(ext, "application/octet-stream")
+    safe_category = "".join(c for c in category if c.isalnum() or c in ("-", "_")).lower() or "general"
+    path = f"{APP_NAME}/{safe_category}/{user_id}/{uuid.uuid4()}.{ext}"
+    try:
+        result = put_object(path, data, content_type)
+    except Exception as e:
+        logger.exception("upload failed")
+        raise HTTPException(status_code=502, detail=f"Upload failed: {e}")
+    file_id = str(uuid.uuid4())
+    record = {
+        "_id": file_id,
+        "id": file_id,
+        "storage_path": result.get("path", path),
+        "original_filename": file.filename,
+        "content_type": content_type,
+        "size": result.get("size", len(data)),
+        "category": safe_category,
+        "uploaded_by": user_id,
+        "is_deleted": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.files.insert_one(record)
+    return {
+        "id": file_id,
+        "path": record["storage_path"],
+        "filename": file.filename,
+        "content_type": content_type,
+        "size": record["size"],
+        "url": f"/api/files/{file_id}",
+    }
+
+
+@api_router.get("/files/{file_id}")
+async def download_file(
+    file_id: str,
+    user_id: str = Depends(get_current_user_from_any),
+):
+    record = await db.files.find_one({"_id": file_id, "is_deleted": False})
+    if not record:
+        raise HTTPException(status_code=404, detail="File not found")
+    try:
+        data, ct = get_object(record["storage_path"])
+    except Exception as e:
+        logger.exception("download failed")
+        raise HTTPException(status_code=502, detail=f"Download failed: {e}")
+    return Response(content=data, media_type=record.get("content_type") or ct)
+
+
+@api_router.delete("/files/{file_id}")
+async def delete_file(file_id: str, user_id: str = Depends(get_current_user_id)):
+    res = await db.files.update_one(
+        {"_id": file_id, "is_deleted": False},
+        {"$set": {"is_deleted": True, "deleted_at": datetime.now(timezone.utc).isoformat(), "deleted_by": user_id}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="File not found")
+    return {"ok": True}
 
 
 app.include_router(api_router)

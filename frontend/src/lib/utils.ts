@@ -2,6 +2,7 @@ import html2canvas from "html2canvas";
 import { jsPDF } from "jspdf";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { fileDisplayUrl } from "./upload";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -132,9 +133,9 @@ export function professionalDocument(settings: any, opts: { title: string; numbe
   const format = (settings.documentFormats || []).find((f: any) => f.active && normalize(f.documentType) === titleKey)
     || (settings.documentFormats || []).find((f: any) => f.active && (titleKey.includes(normalize(f.documentType)) || normalize(f.documentType).includes(titleKey)))
     || null;
-  const logoSrc = format?.logoUrl || settings.logoUrl;
+  const logoSrc = fileDisplayUrl(format?.logoUrl || settings.logoUrl);
   const logo = logoSrc
-    ? `<img src="${logoSrc}" alt="Logo"/>`
+    ? `<img src="${logoSrc}" alt="Logo" crossorigin="anonymous"/>`
     : (settings.logoText || "AE");
   const companyName = format?.companyName || settings.name;
   const address = format?.address || settings.address;
@@ -146,7 +147,7 @@ export function professionalDocument(settings: any, opts: { title: string; numbe
     ${!opts.skipFormatTerms && terms.length ? `<div class="box"><div class="section-title">Terms & Conditions</div><ol>${terms.map((t: any) => `<li>${t.text}</li>`).join("")}</ol></div>` : ""}
     ${format?.bankDetails ? `<div class="box"><div class="section-title">Bank Details</div>${String(format.bankDetails).replace(/\n/g, "<br/>")}</div>` : ""}
     ${format?.declaration ? `<div class="box"><div class="section-title">Declaration</div>${String(format.declaration).replace(/\n/g, "<br/>")}</div>` : ""}
-    ${format?.signatureName || format?.signatureUrl ? `<div style="margin-top:30px;display:flex;justify-content:flex-end"><div style="text-align:center;min-width:190px">${format.signatureUrl ? `<img src="${format.signatureUrl}" style="height:72px;max-width:150px;object-fit:contain;display:block;margin:0 auto 8px"/>` : `<div style="height:72px;display:flex;align-items:center;justify-content:center;color:#64748b;font-size:11px">Company Stamp</div>`}<div style="font-weight:700">${format.signatureName || "Authorized Signatory"}</div></div></div>` : ""}
+    ${format?.signatureName || format?.signatureUrl ? `<div style="margin-top:30px;display:flex;justify-content:flex-end"><div style="text-align:center;min-width:190px">${format.signatureUrl ? `<img src="${fileDisplayUrl(format.signatureUrl)}" crossorigin="anonymous" style="height:72px;max-width:150px;object-fit:contain;display:block;margin:0 auto 8px"/>` : `<div style="height:72px;display:flex;align-items:center;justify-content:center;color:#64748b;font-size:11px">Company Stamp</div>`}<div style="font-weight:700">${format.signatureName || "Authorized Signatory"}</div></div></div>` : ""}
     ${format?.footerContent ? `<div class="muted" style="border-top:1px solid #e2e8f0;margin-top:18px;padding-top:8px;font-size:11px">${String(format.footerContent).replace(/\n/g, "<br/>")}</div>` : ""}`;
   return `
     <div class="doc" data-fit-one-page="${format?.fitToSinglePage ? "true" : "false"}" data-page-size="${(format?.pageSize || "A4").toLowerCase()}" data-orientation="${(format?.orientation || "Portrait").toLowerCase()}">

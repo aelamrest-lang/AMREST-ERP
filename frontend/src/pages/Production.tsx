@@ -82,7 +82,10 @@ export function JobCards() {
   const openNew = () => {
     const f = blank();
     const bom = db.boms.find(b => b.id === f.bomId);
-    if (bom) f.reservedItems = bom.materials.filter(m => m.itemId).map(m => ({ itemId: m.itemId!, qty: m.qty * f.qty }));
+    if (bom) {
+      f.reservedItems = bom.materials.filter(m => m.itemId).map(m => ({ itemId: m.itemId!, qty: m.qty * f.qty }));
+      f.number = `${f.number.split(" - ")[0]} - ${bom.name}`;
+    }
     setEdit(null); setForm(f); setOpen(true);
   };
   const openEdit = (j: JobCard) => { setEdit(j); setForm({...j, reservedItems: j.reservedItems.map(i => ({...i})), stageQuantities: j.stageQuantities || defaultStageQuantities(j.qty), stages: j.stages.map(s => ({...s}))}); setOpen(true); };
@@ -131,7 +134,12 @@ export function JobCards() {
 
   const updateBOM = (bomId: string) => {
     const bom = db.boms.find(b => b.id === bomId);
-    setForm(f => ({...f, bomId, reservedItems: bom ? bom.materials.filter(m => m.itemId).map(m => ({ itemId: m.itemId!, qty: m.qty * f.qty })) : []}));
+    setForm(f => ({
+      ...f,
+      bomId,
+      number: `${f.number.split(" - ")[0]}${bom ? ` - ${bom.name}` : ""}`,
+      reservedItems: bom ? bom.materials.filter(m => m.itemId).map(m => ({ itemId: m.itemId!, qty: m.qty * f.qty })) : [],
+    }));
   };
   const updateQty = (qty: number) => {
     setForm(f => {

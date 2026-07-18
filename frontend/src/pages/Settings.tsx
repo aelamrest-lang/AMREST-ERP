@@ -3,18 +3,26 @@ import { useStore } from "../lib/store";
 import { Card, Button, Input, Label, Textarea } from "../components/ui";
 import { IconCheck } from "../components/icons";
 import { seedDB } from "../lib/seed";
+import { uploadFile, fileDisplayUrl } from "../lib/upload";
 
 export function Settings() {
   const { db, setDB, log } = useStore();
   const [s, setS] = useState(db.settings);
   const [saved, setSaved] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
-  const uploadLogo = (file?: File) => {
+  const uploadLogo = async (file?: File) => {
     if (!file) return;
     if (!file.type.startsWith("image/")) return alert("Please upload an image file.");
-    const reader = new FileReader();
-    reader.onload = () => setS(prev => ({ ...prev, logoUrl: String(reader.result || "") }));
-    reader.readAsDataURL(file);
+    setUploading(true);
+    try {
+      const res = await uploadFile(file, "company-logo");
+      setS(prev => ({ ...prev, logoUrl: res.url }));
+    } catch (err: any) {
+      alert("Upload failed: " + err.message);
+    } finally {
+      setUploading(false);
+    }
   };
 
   const save = () => {
@@ -37,15 +45,15 @@ export function Settings() {
         <div className="p-5 grid sm:grid-cols-2 gap-3">
           <div className="sm:col-span-2 flex items-center gap-4 rounded-xl border border-slate-200 dark:border-slate-700 p-4 bg-slate-50 dark:bg-slate-800/40">
             <div className="h-16 w-16 rounded-xl bg-gradient-to-br from-amber-400 to-orange-600 flex items-center justify-center overflow-hidden text-white font-bold">
-              {s.logoUrl ? <img src={s.logoUrl} alt="Company logo" className="h-full w-full object-contain bg-white" /> : s.logoText || "AE"}
+              {s.logoUrl ? <img src={fileDisplayUrl(s.logoUrl)} alt="Company logo" className="h-full w-full object-contain bg-white" /> : s.logoText || "AE"}
             </div>
             <div className="flex-1">
               <div className="font-semibold text-slate-800 dark:text-slate-100">Company Logo</div>
-              <p className="text-xs text-slate-500 mb-2">Upload PNG, JPG, SVG, or WebP logo. It will sync with company settings.</p>
+              <p className="text-xs text-slate-500 mb-2">Upload PNG, JPG, SVG, or WebP logo. Stored in cloud object storage.</p>
               <div className="flex flex-wrap gap-2">
                 <label className="inline-flex items-center justify-center gap-1.5 rounded-lg font-medium px-3.5 py-2 text-sm border border-slate-300 dark:border-slate-700 cursor-pointer bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800">
-                  Upload Logo
-                  <input type="file" accept="image/*" className="hidden" onChange={(e) => uploadLogo(e.target.files?.[0])} />
+                  {uploading ? "Uploading..." : "Upload Logo"}
+                  <input type="file" accept="image/*" className="hidden" disabled={uploading} onChange={(e) => uploadLogo(e.target.files?.[0])} data-testid="company-logo-upload" />
                 </label>
                 {s.logoUrl && <Button variant="outline" onClick={() => setS({...s, logoUrl: ""})}>Remove Logo</Button>}
               </div>
