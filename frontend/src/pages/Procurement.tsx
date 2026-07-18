@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useStore, uid } from "../lib/store";
 import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Badge, Empty, Textarea } from "../components/ui";
-import type { PurchaseOrder, GRN } from "../lib/types";
-import { IconPlus, IconEdit, IconTrash, IconPrint } from "../components/icons";
+import type { PurchaseOrder, GRN, Party } from "../lib/types";
+import { IconPlus, IconEdit, IconTrash, IconPrint, IconSearch } from "../components/icons";
 import { fmtINR, nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
 import { userCan } from "../lib/permissions";
 
@@ -11,6 +11,102 @@ const DEFAULT_PO_TERMS = `1. Material should be as per specification.
 3. Test certificate mandatory.
 4. GST and transport terms as mutually agreed.
 5. Material will be subject to quality inspection at our works.`;
+
+function VendorCombobox({
+  vendors, value, onChange, placeholder = "Search vendor by name, GST, city...",
+}: {
+  vendors: Party[]; value: string; onChange: (id: string) => void; placeholder?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [highlight, setHighlight] = useState(0);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const selected = vendors.find(v => v.id === value) || null;
+  const displayText = open ? query : (selected?.name || "");
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return vendors;
+    return vendors.filter(v =>
+      v.name.toLowerCase().includes(q) ||
+      (v.gst || "").toLowerCase().includes(q) ||
+      (v.city || "").toLowerCase().includes(q) ||
+      (v.mobile || "").toLowerCase().includes(q) ||
+      (v.email || "").toLowerCase().includes(q),
+    );
+  }, [vendors, query]);
+
+  const pick = (v: Party) => {
+    onChange(v.id);
+    setOpen(false);
+    setQuery("");
+  };
+
+  const handleKey = (e: React.KeyboardEvent) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setOpen(true); setHighlight(h => Math.min(filtered.length - 1, h + 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setHighlight(h => Math.max(0, h - 1)); }
+    else if (e.key === "Enter") { e.preventDefault(); if (filtered[highlight]) pick(filtered[highlight]); }
+    else if (e.key === "Escape") { setOpen(false); setQuery(""); }
+  };
+
+  const onBlur = (e: React.FocusEvent) => {
+    // Only close if focus leaves the wrapper entirely
+    setTimeout(() => {
+      if (wrapRef.current && !wrapRef.current.contains(document.activeElement)) {
+        setOpen(false);
+        setQuery("");
+      }
+    }, 0);
+  };
+
+  return (
+    <div className="relative" ref={wrapRef} onBlur={onBlur}>
+      <div className="relative">
+        <IconSearch size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"/>
+        <Input
+          className="pl-9"
+          value={displayText}
+          placeholder={placeholder}
+          onFocus={() => { setOpen(true); setHighlight(0); }}
+          onChange={(e: any) => { setQuery(e.target.value); setOpen(true); setHighlight(0); }}
+          onKeyDown={handleKey}
+          data-testid="po-vendor-combobox"
+        />
+        {selected && !open && (
+          <button
+            type="button"
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-400 hover:text-rose-500"
+            onMouseDown={(e) => { e.preventDefault(); onChange(""); }}
+            title="Clear vendor"
+          >✕</button>
+        )}
+      </div>
+      {open && (
+        <div className="absolute z-30 mt-1 w-full max-h-72 overflow-auto rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg">
+          {filtered.length === 0 && <div className="p-3 text-sm text-slate-500">No vendors match “{query}”.</div>}
+          {filtered.map((v, idx) => (
+            <button
+              type="button"
+              key={v.id}
+              onMouseDown={(e) => { e.preventDefault(); pick(v); }}
+              onMouseEnter={() => setHighlight(idx)}
+              data-testid={`po-vendor-option-${v.id}`}
+              className={"w-full text-left px-3 py-2 flex items-start justify-between gap-3 " + (idx === highlight ? "bg-indigo-50 dark:bg-indigo-900/30" : "hover:bg-slate-50 dark:hover:bg-slate-800/50")}
+            >
+              <div className="min-w-0">
+                <div className="font-medium text-slate-800 dark:text-slate-100 truncate">{v.name}</div>
+                <div className="text-xs text-slate-500 truncate">
+                  {[v.city, v.gst, v.mobile].filter(Boolean).join(" · ") || v.email || ""}
+                </div>
+              </div>
+              {v.id === value && <span className="text-xs text-indigo-600 font-semibold">Selected</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function getDefaultPurchaseTerms(settings: any) {
   const format = (settings.documentFormats || []).find((f: any) => f.active && f.documentType === "Purchase Order");
@@ -166,9 +262,11 @@ export function PurchaseOrders() {
           <div><Label>PO No.</Label><Input value={form.number} disabled/></div>
           <div><Label>Date</Label><Input type="date" value={form.date} onChange={(e: any) => setForm({...form, date: e.target.value})}/></div>
           <div><Label>Vendor</Label>
-            <Select value={form.vendorId} onChange={(e: any) => setForm({...form, vendorId: e.target.value})}>
-              {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
-            </Select>
+            <VendorCombobox
+              vendors={vendors}
+              value={form.vendorId}
+              onChange={(id) => setForm({...form, vendorId: id})}
+            />
           </div>
         </div>
         <div className="mt-3 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
