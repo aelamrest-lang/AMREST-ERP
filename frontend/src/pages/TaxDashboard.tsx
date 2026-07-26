@@ -5,6 +5,8 @@ import { Card, Button, Input, Select, Label, Badge, Table, Th, Td } from "../com
 import { BarChart, LineChart } from "../components/charts";
 import { fmtINR, professionalDocument, printArea, todayISO } from "../lib/utils";
 import { IconChart, IconPrint, IconDownload, IconCheck } from "../components/icons";
+import { totalOrderQty } from "../lib/delivery";
+import type { SalesOrder } from "../lib/types";
 
 const DEFAULT_PURCHASE_GST = 18; // used only when an item has no gstRate set
 
@@ -57,17 +59,35 @@ export function TaxDashboard() {
     return found ? found.key : (fyMonthList[fyMonthList.length - 1]?.key || currentMonthKey);
   });
 
-  const expectedSales = settings.expectedSales?.[monthKey] || 0;
-  const setExpectedSales = (val: number) => {
-    setDB(d => ({
-      ...d,
-      settings: {
-        ...d.settings,
-        expectedSales: { ...(d.settings.expectedSales || {}), [monthKey]: Math.max(0, val || 0) },
-      },
-    }));
-    log(`Set expected sales for ${monthKey} to ₹${val}`, "Tax");
+  // ------------------------------------------------------------------
+  // Expected Sales — derived from Sales Order Delivery Schedules
+  // Only *pending* qty (scheduled − delivered) of schedules falling in
+  // the selected month contribute. Completed / cancelled / delivered
+  // slots are excluded automatically because their pending qty is 0.
+  // ------------------------------------------------------------------
+  const expectedFor = (month: string): { total: number; contributions: { so: SalesOrder; pendingQty: number; unitValue: number; value: number; scheduledDate: string }[] } => {
+    const contributions: { so: SalesOrder; pendingQty: number; unitValue: number; value: number; scheduledDate: string }[] = [];
+    let total = 0;
+    db.salesOrders.forEach(so => {
+      if (!so.schedules || so.schedules.length === 0) return;
+      const orderQty = totalOrderQty(so);
+      if (!orderQty) return;
+      const orderValue = so.items.reduce((a, it) => a + (Number(it.qty) || 0) * (Number(it.rate) || 0), 0);
+      const unitValue = orderValue / orderQty;
+      so.schedules.forEach(s => {
+        if (!s.date || s.date.slice(0, 7) !== month) return;
+        const pending = Math.max(0, (Number(s.qty) || 0) - (Number(s.deliveredQty) || 0));
+        if (pending <= 0) return;
+        const value = pending * unitValue;
+        contributions.push({ so, pendingQty: pending, unitValue, value, scheduledDate: s.date });
+        total += value;
+      });
+    });
+    return { total, contributions };
   };
+
+  const expectedBreakdown = useMemo(() => expectedFor(monthKey), [db.salesOrders, monthKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const expectedSales = expectedBreakdown.total;
 
   // ---- helpers to compute sales / purchases per proforma / PO ----
   const proformaTotals = (p: typeof db.proformas[number]) => {
@@ -253,27 +273,53 @@ export function TaxDashboard() {
         </div>
       </div>
 
-      {/* Expected Sales input */}
+      {/* Expected Sales — auto-derived from Sales Order Delivery Schedules */}
       <Card>
-        <div className="p-5 grid md:grid-cols-[1fr_auto] gap-4 items-end">
-          <div>
-            <Label>Expected Sales — {current.label}</Label>
-            <div className="flex items-center gap-2">
-              <Input
-                type="number"
-                min={0}
-                step="1000"
-                placeholder="e.g. 5000000"
-                value={expectedSales || ""}
-                onChange={(e: any) => setExpectedSales(Number(e.target.value))}
-                className="max-w-md"
-                data-testid="tax-expected-sales"
-              />
-              <span className="text-xs text-slate-500">₹</span>
+        <div className="p-5 grid md:grid-cols-[1fr_auto] gap-4 items-start">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Label className="!mb-0">Expected Sales — {current.label}</Label>
+              <Badge color="indigo">Auto from Delivery Schedule</Badge>
             </div>
-            <p className="text-xs text-slate-500 mt-1">Enter the sales you plan to close this month. Estimated Net GST Payable auto-updates using your current effective GST rate.</p>
+            <div className="text-3xl font-bold mt-2 text-slate-800 dark:text-slate-100" data-testid="tax-expected-auto">
+              {fmtINR(expectedSales)}
+            </div>
+            <p className="text-xs text-slate-500 mt-1">
+              Computed from every Sales Order's delivery schedule falling in {current.label}. Only the <b>pending</b> qty per slot
+              (scheduled − delivered) contributes, so completed / cancelled deliveries are excluded automatically.
+            </p>
+            {expectedBreakdown.contributions.length > 0 ? (
+              <div className="mt-3 rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
+                <div className="px-3 py-1.5 text-[11px] uppercase tracking-wide text-slate-500 bg-slate-50 dark:bg-slate-800/40 border-b border-slate-200 dark:border-slate-700">
+                  Slot breakdown ({expectedBreakdown.contributions.length})
+                </div>
+                <div className="max-h-40 overflow-y-auto">
+                  {expectedBreakdown.contributions.map((c, i) => {
+                    const cust = db.parties.find(p => p.id === c.so.customerId);
+                    return (
+                      <div key={c.so.id + "-" + i} className="flex items-center justify-between text-xs px-3 py-1.5 border-b last:border-b-0 border-slate-100 dark:border-slate-800">
+                        <div className="min-w-0">
+                          <div className="font-medium text-slate-700 dark:text-slate-200 truncate">
+                            <span className="font-mono text-[10px] text-slate-500 mr-2">{c.so.number}</span>
+                            {cust?.name || "Unknown Customer"}
+                          </div>
+                          <div className="text-[11px] text-slate-500">
+                            {c.scheduledDate} · {c.pendingQty} Nos × {fmtINR(c.unitValue)}
+                          </div>
+                        </div>
+                        <div className="font-semibold text-slate-800 dark:text-slate-100 ml-3 shrink-0">{fmtINR(c.value)}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <div className="mt-3 text-xs text-slate-500 rounded-lg border border-dashed border-slate-300 dark:border-slate-700 px-3 py-2">
+                No pending delivery slots scheduled for {current.label}. Add or update the schedule on any Sales Order to see the number appear here in real time.
+              </div>
+            )}
           </div>
-          <div className="text-right">
+          <div className="text-right shrink-0">
             <div className="text-xs uppercase text-slate-500">Avg Output GST Rate</div>
             <div className="text-lg font-semibold">{avgGstOnSalesPct.toFixed(2)}%</div>
           </div>
