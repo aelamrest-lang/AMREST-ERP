@@ -3,7 +3,7 @@ import type { ModulePermission, PermissionAction, PermissionMatrix, Role, User }
 export type RouteId =
   | "dashboard" | "leads" | "parties" | "items" | "quotations" | "proformas" | "salesorders"
   | "purchase" | "grn" | "inventory" | "rawissue" | "bom" | "jobcards" | "production" | "testing" | "challans"
-  | "reports" | "users" | "settings" | "docformats" | "logs" | "profile";
+  | "reports" | "taxdash" | "users" | "settings" | "docformats" | "logs" | "profile";
 
 export const permissionActions: PermissionAction[] = ["view", "create", "edit", "delete", "approve", "print", "export"];
 
@@ -25,6 +25,7 @@ export const moduleLabels: Record<RouteId, string> = {
   testing: "QC Testing",
   challans: "Delivery Challan",
   reports: "Reports",
+  taxdash: "Tax Dashboard",
   users: "User Management",
   settings: "Company Settings",
   docformats: "Document Format Settings",
@@ -35,7 +36,7 @@ export const moduleLabels: Record<RouteId, string> = {
 export const permissionModules: RouteId[] = [
   "dashboard", "leads", "parties", "items", "quotations", "proformas", "salesorders",
   "purchase", "grn", "inventory", "rawissue", "bom", "jobcards", "production", "testing", "challans",
-  "reports", "users", "settings", "docformats", "logs", "profile",
+  "reports", "taxdash", "users", "settings", "docformats", "logs", "profile",
 ];
 
 export const roleLabels: Record<Role, string> = {
@@ -80,6 +81,7 @@ export function defaultPermissionsForRole(role: Role): PermissionMatrix {
   if (role === "sales") {
     ["leads", "parties", "quotations", "proformas", "salesorders"].forEach(m => grant(p, m as RouteId, ["view", "create", "edit", "delete", "print", "export"]));
     grant(p, "reports", ["view", "export"]);
+    grant(p, "taxdash", ["view", "export"]);
   }
 
   if (role === "production") {
@@ -97,6 +99,7 @@ export function defaultPermissionsForRole(role: Role): PermissionMatrix {
     grant(p, "purchase", ["view", "create", "edit", "delete", "approve", "print", "export"]);
     grant(p, "grn", ["view", "create", "edit", "delete", "print", "export"]);
     grant(p, "reports", ["view", "export"]);
+    grant(p, "taxdash", ["view", "export"]);
   }
 
   if (role === "testing") {

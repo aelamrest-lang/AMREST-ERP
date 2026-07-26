@@ -377,6 +377,7 @@ export interface CompanySettings {
   invoicePrefix: string;
   fyStart: string;
   documentFormats?: DocumentFormat[];
+  expectedSales?: Record<string, number>; // key: "YYYY-MM" → ₹ expected sales for that month
 }
 
 export interface DocumentTerm {

@@ -33,6 +33,7 @@ const navGroups: { label: string; items: { id: Route; label: string; icon: any }
   ]},
   { label: "Insights", items: [
     { id: "reports", label: "Reports", icon: IconChart },
+    { id: "taxdash", label: "Tax Dashboard", icon: IconChart },
   ]},
   { label: "Administration", items: [
     { id: "users", label: "Users", icon: IconUser },

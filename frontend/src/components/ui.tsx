@@ -54,17 +54,19 @@ export function Label({ children, className }: any) {
   return <label className={cn("block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1", className)}>{children}</label>;
 }
 
-export function Badge({ children, color = "slate" }: { children: ReactNode; color?: string }) {
+export function Badge({ children, color = "slate", className }: { children: ReactNode; color?: string; className?: string }) {
   const colors: Record<string, string> = {
     slate: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
+    gray: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
     green: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300",
     yellow: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
+    amber: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
     red: "bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300",
     blue: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
     purple: "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300",
     indigo: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300",
   };
-  return <span className={cn("inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium", colors[color])}>{children}</span>;
+  return <span className={cn("inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium", colors[color] || colors.slate, className)}>{children}</span>;
 }
 
 export function Modal({ open, onClose, title, children, size = "md" }: { open: boolean; onClose: () => void; title: string; children: ReactNode; size?: "sm" | "md" | "lg" | "xl" }) {

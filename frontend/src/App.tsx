@@ -17,6 +17,7 @@ import { JobCards, ProductionDashboard } from "./pages/Production";
 import { TestingPage } from "./pages/Testing";
 import { Challans } from "./pages/Challans";
 import { Reports } from "./pages/Reports";
+import { TaxDashboard } from "./pages/TaxDashboard";
 import { Users } from "./pages/Users";
 import { Settings } from "./pages/Settings";
 import { DocumentFormatSettings } from "./pages/DocumentFormatSettings";
@@ -59,6 +60,7 @@ function Shell() {
       {effective === "testing" && <TestingPage />}
       {effective === "challans" && <Challans />}
       {effective === "reports" && <Reports />}
+      {effective === "taxdash" && <TaxDashboard />}
       {effective === "users" && <Users />}
       {effective === "settings" && <Settings />}
       {effective === "docformats" && <DocumentFormatSettings />}
