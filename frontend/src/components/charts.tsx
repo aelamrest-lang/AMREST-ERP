@@ -1,25 +1,54 @@
 // Lightweight pure-SVG charts (no external dependency)
 
-export function BarChart({ data, height = 220, color = "#6366f1" }: { data: { label: string; value: number }[]; height?: number; color?: string }) {
+export function BarChart({ data, height = 220, color = "#6366f1", onBarClick }: { data: { label: string; value: number }[]; height?: number; color?: string; onBarClick?: (index: number) => void }) {
   const max = Math.max(1, ...data.map(d => d.value));
   const w = 100 / Math.max(1, data.length);
+  const clickable = !!onBarClick;
   return (
     <div className="w-full">
       <svg viewBox={`0 0 100 ${height / 2}`} preserveAspectRatio="none" className="w-full" style={{ height }}>
         {data.map((d, i) => {
           const h = (d.value / max) * (height / 2 - 10);
+          const disabled = d.value === 0;
           return (
             <g key={i}>
-              <rect x={i * w + w * 0.15} y={height / 2 - h - 6} width={w * 0.7} height={h} fill={color} rx={0.6}>
-                <title>{`${d.label}: ${d.value}`}</title>
+              <rect
+                x={i * w + w * 0.15}
+                y={height / 2 - h - 6}
+                width={w * 0.7}
+                height={h}
+                fill={color}
+                rx={0.6}
+                style={clickable && !disabled ? { cursor: "pointer" } : {}}
+                onClick={() => { if (clickable && !disabled) onBarClick!(i); }}
+              >
+                <title>{`${d.label}: ${d.value}${clickable && !disabled ? " · click for details" : ""}`}</title>
               </rect>
+              {clickable && !disabled && (
+                <rect
+                  x={i * w}
+                  y={0}
+                  width={w}
+                  height={height / 2}
+                  fill="transparent"
+                  style={{ cursor: "pointer" }}
+                  onClick={() => onBarClick!(i)}
+                />
+              )}
             </g>
           );
         })}
       </svg>
       <div className="flex w-full mt-1">
         {data.map((d, i) => (
-          <div key={i} className="text-[10px] text-slate-500 dark:text-slate-400 text-center truncate" style={{ width: `${w}%` }}>{d.label}</div>
+          <button
+            key={i}
+            type="button"
+            disabled={!clickable || d.value === 0}
+            onClick={() => { if (clickable && d.value > 0) onBarClick!(i); }}
+            className={"text-[10px] text-center truncate " + (clickable && d.value > 0 ? "text-indigo-600 hover:underline cursor-pointer" : "text-slate-500 dark:text-slate-400 cursor-default")}
+            style={{ width: `${w}%` }}
+          >{d.label}</button>
         ))}
       </div>
     </div>

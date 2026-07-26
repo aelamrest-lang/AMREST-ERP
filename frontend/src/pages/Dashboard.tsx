@@ -21,30 +21,47 @@ export function Dashboard() {
   const lowStock = db.items.filter(i => i.currentStock <= i.minStock);
   const productionInProg = db.jobCards.filter(j => j.status === "In Progress").length;
 
-  // Charts: monthly sales (last 6 months)
-  const months: { label: string; value: number }[] = [];
+  const [drill, setDrill] = useState<{ type: "sales" | "production" | "customer"; monthKey?: string; monthLabel?: string; customerId?: string } | null>(null);
+
+  // Monthly buckets (last 6 months, incl. current)
+  const monthBuckets: { key: string; label: string; date: Date }[] = [];
   const now = new Date();
   for (let i = 5; i >= 0; i--) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const label = d.toLocaleString("en-US", { month: "short" });
-    const total = salesOrders
-      .filter(o => { const od = new Date(o.date); return od.getFullYear() === d.getFullYear() && od.getMonth() === d.getMonth(); })
-      .reduce((s, o) => s + o.items.reduce((a, b) => a + b.qty * b.rate, 0), 0);
-    months.push({ label, value: Math.round(total / 1000) }); // in K
+    monthBuckets.push({
+      key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+      label: d.toLocaleString("en-US", { month: "short" }),
+      date: d,
+    });
   }
 
-  const monthlyProduction = (() => {
-    const defaults = [12, 18, 15, 22, 28, 35];
-    return months.map((m, i) => {
-      const monthIndex = (now.getMonth() - 5 + i + 12) % 12;
-      const year = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1).getFullYear();
-      const completedUnits = db.jobCards
-        .filter(j => j.status === "Completed")
-        .filter(j => { const d = new Date(j.date); return d.getMonth() === monthIndex && d.getFullYear() === year; })
-        .reduce((sum, j) => sum + j.qty, 0);
-      return { label: i === 5 ? `${m.label} (Est)` : m.label, value: completedUnits || defaults[i] };
+  // ---- Monthly Sales from Delivery Challans ----
+  const soValue = (soId: string): { qty: number; value: number } => {
+    const so = db.salesOrders.find(o => o.id === soId);
+    if (!so) return { qty: 0, value: 0 };
+    let qty = 0, value = 0;
+    so.items.forEach(it => {
+      qty += Number(it.qty) || 0;
+      value += (Number(it.qty) || 0) * (Number(it.rate) || 0);
     });
-  })();
+    return { qty, value };
+  };
+
+  const months = monthBuckets.map(m => {
+    const total = db.challans
+      .filter(c => c.date && c.date.slice(0, 7) === m.key)
+      .reduce((s, c) => s + soValue(c.salesOrderId).value, 0);
+    return { label: m.label, value: Math.round(total / 1000) }; // in ₹K
+  });
+
+  // ---- Monthly Production from Completed Job Cards only ----
+  const monthlyProduction = monthBuckets.map(m => {
+    const completedUnits = db.jobCards
+      .filter(j => j.status === "Completed")
+      .filter(j => (j.date || "").slice(0, 7) === m.key)
+      .reduce((sum, j) => sum + (Number(j.qty) || 0), 0);
+    return { label: m.label, value: completedUnits };
+  });
 
   const inventoryByCategory = ["Raw Material", "Semi-Finished", "Finished Goods"].map((c, i) => ({
     label: c,
@@ -52,20 +69,31 @@ export function Dashboard() {
     color: ["#6366f1", "#f59e0b", "#10b981"][i],
   }));
 
-  const topCustomers = (() => {
-    const map = new Map<string, number>();
-    salesOrders.forEach(o => {
-      const tot = o.items.reduce((a, b) => a + b.qty * b.rate, 0);
-      map.set(o.customerId, (map.get(o.customerId) || 0) + tot);
-    });
-    quotations.forEach(o => {
-      const tot = o.items.reduce((a, b) => a + b.qty * b.rate, 0);
-      map.set(o.customerId, (map.get(o.customerId) || 0) + tot * 0.3);
-    });
-    return Array.from(map.entries())
-      .map(([cid, val]) => ({ label: db.parties.find(p => p.id === cid)?.name?.slice(0, 10) || "—", value: Math.round(val / 1000) }))
-      .sort((a, b) => b.value - a.value).slice(0, 5);
-  })();
+  // ---- Top Customers from Sales Order Total Value ----
+  interface CustomerAgg { customerId: string; name: string; totalQty: number; totalValue: number; orders: number }
+  const customerAggMap = new Map<string, CustomerAgg>();
+  salesOrders.forEach(o => {
+    const totQty = o.items.reduce((a, b) => a + (Number(b.qty) || 0), 0);
+    const totVal = o.items.reduce((a, b) => a + (Number(b.qty) || 0) * (Number(b.rate) || 0), 0);
+    const existing = customerAggMap.get(o.customerId);
+    if (existing) {
+      existing.totalQty += totQty; existing.totalValue += totVal; existing.orders += 1;
+    } else {
+      customerAggMap.set(o.customerId, {
+        customerId: o.customerId,
+        name: db.parties.find(p => p.id === o.customerId)?.name || "—",
+        totalQty: totQty, totalValue: totVal, orders: 1,
+      });
+    }
+  });
+  const [customerMetric, setCustomerMetric] = useState<"value" | "qty">("value");
+  const topCustomersList = Array.from(customerAggMap.values())
+    .sort((a, b) => customerMetric === "value" ? b.totalValue - a.totalValue : b.totalQty - a.totalQty)
+    .slice(0, 5);
+  const topCustomers = topCustomersList.map(c => ({
+    label: c.name.length > 10 ? c.name.slice(0, 10) + "…" : c.name,
+    value: customerMetric === "value" ? Math.round(c.totalValue / 1000) : c.totalQty,
+  }));
 
   return (
     <div className="space-y-5">
@@ -83,17 +111,24 @@ export function Dashboard() {
 
       <div className="grid lg:grid-cols-2 gap-5">
         <Card>
-          <CardHeader title="Monthly Sales (₹ thousands)" subtitle="Last 6 months order value" />
+          <CardHeader title="Monthly Sales (₹ thousands)" subtitle="Value of Delivery Challans dispatched · click a month for the DC list" />
           <div className="p-4">
-            <BarChart data={months} color="#6366f1" />
+            <BarChart
+              data={months}
+              color="#6366f1"
+              onBarClick={(i) => setDrill({ type: "sales", monthKey: monthBuckets[i].key, monthLabel: `${monthBuckets[i].label} ${monthBuckets[i].date.getFullYear()}` })}
+            />
           </div>
         </Card>
         <Card>
           <div className="p-5">
-            <h3 className="text-lg font-bold uppercase tracking-wide text-slate-900 dark:text-slate-100">Monthly Transformer Production (Units)</h3>
-            <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">Aggregate number of distribution & power transformers completing routine tests</p>
+            <h3 className="text-lg font-bold uppercase tracking-wide text-slate-900 dark:text-slate-100">Monthly Production</h3>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">Total Completed Job Cards · click a month to view completed job cards</p>
             <div className="mt-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 p-5">
-              <ProductionBarChart data={monthlyProduction} />
+              <ProductionBarChart
+                data={monthlyProduction}
+                onBarClick={(i) => setDrill({ type: "production", monthKey: monthBuckets[i].key, monthLabel: `${monthBuckets[i].label} ${monthBuckets[i].date.getFullYear()}` })}
+              />
             </div>
           </div>
         </Card>
@@ -105,9 +140,34 @@ export function Dashboard() {
           <div className="p-5"><DonutChart data={inventoryByCategory} /></div>
         </Card>
         <Card>
-          <CardHeader title="Top Customers (₹K)" />
+          <CardHeader
+            title={customerMetric === "value" ? "Top Customers (₹K)" : "Top Customers (Nos)"}
+            right={
+              <div className="flex items-center gap-1 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => setCustomerMetric("value")}
+                  className={"px-2 py-0.5 rounded " + (customerMetric === "value" ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300")}
+                  data-testid="top-customers-metric-value"
+                >Value</button>
+                <button
+                  type="button"
+                  onClick={() => setCustomerMetric("qty")}
+                  className={"px-2 py-0.5 rounded " + (customerMetric === "qty" ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300")}
+                  data-testid="top-customers-metric-qty"
+                >Qty</button>
+              </div>
+            }
+          />
           <div className="p-4">
-            {topCustomers.length ? <BarChart data={topCustomers} color="#f59e0b" /> : <Empty title="No data yet" />}
+            {topCustomers.length ? (
+              <BarChart
+                data={topCustomers}
+                color="#f59e0b"
+                onBarClick={(i) => setDrill({ type: "customer", customerId: topCustomersList[i].customerId })}
+              />
+            ) : <Empty title="No Sales Orders yet" />}
+            <div className="mt-2 text-[11px] text-slate-500">Click any bar to see all Sales Orders from that customer.</div>
           </div>
         </Card>
         <Card>
@@ -182,11 +242,13 @@ export function Dashboard() {
           </div>
         </Card>
       )}
+
+      <DashboardDrillDown drill={drill} onClose={() => setDrill(null)} db={db} monthBuckets={monthBuckets} />
     </div>
   );
 }
 
-function ProductionBarChart({ data }: { data: { label: string; value: number }[] }) {
+function ProductionBarChart({ data, onBarClick }: { data: { label: string; value: number }[]; onBarClick?: (index: number) => void }) {
   const max = Math.max(1, ...data.map(d => d.value));
   return (
     <div className="relative h-52">
@@ -194,18 +256,25 @@ function ProductionBarChart({ data }: { data: { label: string; value: number }[]
       <div className="absolute inset-x-8 top-20 border-t border-dashed border-slate-200 dark:border-slate-700" />
       <div className="absolute inset-x-8 bottom-11 border-t border-dashed border-slate-200 dark:border-slate-700" />
       <div className="relative z-10 grid h-full grid-cols-6 items-end gap-5 px-8 pb-8 pt-4">
-        {data.map((d) => {
+        {data.map((d, i) => {
           const height = Math.max(18, (d.value / max) * 125);
+          const disabled = !onBarClick || d.value === 0;
           return (
-            <div key={d.label} className="flex h-full flex-col items-center justify-end gap-2">
+            <button
+              key={d.label}
+              type="button"
+              disabled={disabled}
+              onClick={() => onBarClick && onBarClick(i)}
+              className={"flex h-full flex-col items-center justify-end gap-2 focus:outline-none " + (disabled ? "cursor-default" : "cursor-pointer")}
+            >
               <div className="text-sm font-bold text-indigo-700 dark:text-indigo-300">{d.value}</div>
               <div
-                className="w-full max-w-14 rounded-t-md bg-gradient-to-t from-indigo-300 to-indigo-600 shadow-sm shadow-indigo-500/30 transition-all hover:from-indigo-400 hover:to-indigo-700"
+                className={"w-full max-w-14 rounded-t-md bg-gradient-to-t shadow-sm shadow-indigo-500/30 transition-all " + (disabled ? "from-indigo-200 to-indigo-400 opacity-60" : "from-indigo-300 to-indigo-600 hover:from-indigo-400 hover:to-indigo-700")}
                 style={{ height }}
-                title={`${d.label}: ${d.value} units`}
+                title={`${d.label}: ${d.value} units${!disabled ? " · click for job cards" : ""}`}
               />
-              <div className="text-xs font-semibold text-slate-500 dark:text-slate-400">{d.label}</div>
-            </div>
+              <div className={"text-xs font-semibold " + (!disabled ? "text-indigo-600 dark:text-indigo-300" : "text-slate-500 dark:text-slate-400")}>{d.label}</div>
+            </button>
           );
         })}
       </div>
@@ -502,6 +571,175 @@ function SalesForecast({ salesOrders, db }: { salesOrders: any[]; db: any }) {
         )}
       </Modal>
     </Card>
+  );
+}
+
+
+function DashboardDrillDown({
+  drill, onClose, db, monthBuckets,
+}: {
+  drill: { type: "sales" | "production" | "customer"; monthKey?: string; monthLabel?: string; customerId?: string } | null;
+  onClose: () => void;
+  db: any;
+  monthBuckets: { key: string; label: string; date: Date }[];
+}) {
+  if (!drill) return <Modal open={false} onClose={onClose} title=""></Modal>;
+
+  const soValue = (soId: string): { qty: number; value: number } => {
+    const so = db.salesOrders.find((o: any) => o.id === soId);
+    if (!so) return { qty: 0, value: 0 };
+    return {
+      qty: so.items.reduce((a: number, b: any) => a + (Number(b.qty) || 0), 0),
+      value: so.items.reduce((a: number, b: any) => a + (Number(b.qty) || 0) * (Number(b.rate) || 0), 0),
+    };
+  };
+
+  if (drill.type === "sales") {
+    const rows = db.challans
+      .filter((c: any) => c.date && c.date.slice(0, 7) === drill.monthKey)
+      .map((c: any) => {
+        const so = db.salesOrders.find((o: any) => o.id === c.salesOrderId);
+        const cust = db.parties.find((p: any) => p.id === c.customerId);
+        const val = soValue(c.salesOrderId);
+        return { c, so, cust, ...val };
+      })
+      .sort((a: any, b: any) => (b.c.date || "").localeCompare(a.c.date || ""));
+    const totalQty = rows.reduce((a: number, r: any) => a + r.qty, 0);
+    const totalValue = rows.reduce((a: number, r: any) => a + r.value, 0);
+    return (
+      <Modal open={true} onClose={onClose} title={`Delivery Challans · ${drill.monthLabel}`} size="xl">
+        <div className="space-y-3">
+          <div className="grid grid-cols-3 gap-3 text-sm">
+            <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
+              <div className="text-xs text-slate-500">Total Challans</div>
+              <div className="text-xl font-bold">{rows.length}</div>
+            </div>
+            <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
+              <div className="text-xs text-slate-500">Total Qty</div>
+              <div className="text-xl font-bold">{totalQty} Nos</div>
+            </div>
+            <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
+              <div className="text-xs text-slate-500">Total Amount</div>
+              <div className="text-xl font-bold">{fmtINR(totalValue)}</div>
+            </div>
+          </div>
+          <div className="rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700">
+            <Table>
+              <thead><tr><Th>DC #</Th><Th>Date</Th><Th>Customer</Th><Th>SO #</Th><Th className="text-right">Qty</Th><Th className="text-right">Amount</Th></tr></thead>
+              <tbody>
+                {rows.length === 0 ? (
+                  <tr><Td colSpan={6}><Empty title="No delivery challans in this month" /></Td></tr>
+                ) : rows.map((r: any) => (
+                  <tr key={r.c.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                    <Td className="font-mono text-xs">{r.c.number}</Td>
+                    <Td>{r.c.date}</Td>
+                    <Td>{r.cust?.name || "—"}</Td>
+                    <Td className="font-mono text-xs text-slate-500">{r.so?.number || "—"}</Td>
+                    <Td className="text-right font-semibold">{r.qty}</Td>
+                    <Td className="text-right">{fmtINR(r.value)}</Td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          </div>
+        </div>
+      </Modal>
+    );
+  }
+
+  if (drill.type === "production") {
+    const rows = db.jobCards
+      .filter((j: any) => j.status === "Completed" && (j.date || "").slice(0, 7) === drill.monthKey)
+      .sort((a: any, b: any) => (b.date || "").localeCompare(a.date || ""));
+    const totalQty = rows.reduce((a: number, j: any) => a + (Number(j.qty) || 0), 0);
+    return (
+      <Modal open={true} onClose={onClose} title={`Completed Job Cards · ${drill.monthLabel}`} size="xl">
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
+              <div className="text-xs text-slate-500">Completed Job Cards</div>
+              <div className="text-xl font-bold">{rows.length}</div>
+            </div>
+            <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
+              <div className="text-xs text-slate-500">Total Units Produced</div>
+              <div className="text-xl font-bold">{totalQty}</div>
+            </div>
+          </div>
+          <div className="rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700">
+            <Table>
+              <thead><tr><Th>JC #</Th><Th>Date</Th><Th>Product</Th><Th className="text-right">Qty</Th><Th>Linked SO</Th></tr></thead>
+              <tbody>
+                {rows.length === 0 ? (
+                  <tr><Td colSpan={5}><Empty title="No completed Job Cards in this month" /></Td></tr>
+                ) : rows.map((j: any) => {
+                  const so = db.salesOrders.find((o: any) => o.id === j.salesOrderId);
+                  return (
+                    <tr key={j.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                      <Td className="font-mono text-xs">{j.number}</Td>
+                      <Td>{j.date}</Td>
+                      <Td>{j.product}</Td>
+                      <Td className="text-right font-semibold">{j.qty}</Td>
+                      <Td className="font-mono text-xs text-slate-500">{so?.number || "—"}</Td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </Table>
+          </div>
+        </div>
+      </Modal>
+    );
+  }
+
+  // Customer drill-down
+  const cust = db.parties.find((p: any) => p.id === drill.customerId);
+  const custSOs = db.salesOrders
+    .filter((o: any) => o.customerId === drill.customerId)
+    .sort((a: any, b: any) => (b.date || "").localeCompare(a.date || ""));
+  const totQty = custSOs.reduce((a: number, o: any) => a + o.items.reduce((s: number, it: any) => s + (Number(it.qty) || 0), 0), 0);
+  const totVal = custSOs.reduce((a: number, o: any) => a + o.items.reduce((s: number, it: any) => s + (Number(it.qty) || 0) * (Number(it.rate) || 0), 0), 0);
+  void monthBuckets;
+  return (
+    <Modal open={true} onClose={onClose} title={`Sales Orders · ${cust?.name || "Customer"}`} size="xl">
+      <div className="space-y-3">
+        <div className="grid grid-cols-3 gap-3 text-sm">
+          <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
+            <div className="text-xs text-slate-500">Total Sales Orders</div>
+            <div className="text-xl font-bold">{custSOs.length}</div>
+          </div>
+          <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
+            <div className="text-xs text-slate-500">Total Qty</div>
+            <div className="text-xl font-bold">{totQty} Nos</div>
+          </div>
+          <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
+            <div className="text-xs text-slate-500">Total Value</div>
+            <div className="text-xl font-bold">{fmtINR(totVal)}</div>
+          </div>
+        </div>
+        <div className="rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700">
+          <Table>
+            <thead><tr><Th>SO #</Th><Th>Date</Th><Th className="text-right">Qty</Th><Th className="text-right">Value</Th><Th>Status</Th></tr></thead>
+            <tbody>
+              {custSOs.length === 0 ? (
+                <tr><Td colSpan={5}><Empty title="No sales orders for this customer" /></Td></tr>
+              ) : custSOs.map((o: any) => {
+                const q = o.items.reduce((s: number, it: any) => s + (Number(it.qty) || 0), 0);
+                const v = o.items.reduce((s: number, it: any) => s + (Number(it.qty) || 0) * (Number(it.rate) || 0), 0);
+                return (
+                  <tr key={o.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                    <Td className="font-mono text-xs">{o.number}</Td>
+                    <Td>{o.date}</Td>
+                    <Td className="text-right font-semibold">{q}</Td>
+                    <Td className="text-right">{fmtINR(v)}</Td>
+                    <Td><Badge color={o.status === "Delivered" ? "green" : o.status === "In Production" ? "blue" : "amber"}>{o.status}</Badge></Td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </Table>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
