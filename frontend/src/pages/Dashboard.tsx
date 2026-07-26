@@ -22,15 +22,16 @@ export function Dashboard() {
   const productionInProg = db.jobCards.filter(j => j.status === "In Progress").length;
 
   const [drill, setDrill] = useState<{ type: "sales" | "production" | "customer"; monthKey?: string; monthLabel?: string; customerId?: string } | null>(null);
+  const [rangeMonths, setRangeMonths] = useState<3 | 6 | 12>(6);
 
-  // Monthly buckets (last 6 months, incl. current)
+  // Monthly buckets (last N months, incl. current)
   const monthBuckets: { key: string; label: string; date: Date }[] = [];
   const now = new Date();
-  for (let i = 5; i >= 0; i--) {
+  for (let i = rangeMonths - 1; i >= 0; i--) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     monthBuckets.push({
       key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
-      label: d.toLocaleString("en-US", { month: "short" }),
+      label: d.toLocaleString("en-US", { month: "short" }) + (rangeMonths === 12 ? ` ${String(d.getFullYear()).slice(2)}` : ""),
       date: d,
     });
   }
@@ -97,9 +98,22 @@ export function Dashboard() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100">Dashboard</h1>
-        <p className="text-sm text-slate-500 dark:text-slate-400">Live overview of operations, sales, production and inventory.</p>
+      <div className="flex items-start justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100">Dashboard</h1>
+          <p className="text-sm text-slate-500 dark:text-slate-400">Live overview of operations, sales, production and inventory.</p>
+        </div>
+        <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 rounded-lg p-1" data-testid="dashboard-range-toggle">
+          {[3, 6, 12].map(n => (
+            <button
+              key={n}
+              type="button"
+              onClick={() => setRangeMonths(n as 3 | 6 | 12)}
+              className={"px-3 py-1 text-xs rounded-md transition " + (rangeMonths === n ? "bg-white dark:bg-slate-900 text-indigo-600 shadow font-semibold" : "text-slate-600 dark:text-slate-300 hover:text-slate-900")}
+              data-testid={`dashboard-range-${n}m`}
+            >{n}M</button>
+          ))}
+        </div>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -111,7 +125,7 @@ export function Dashboard() {
 
       <div className="grid lg:grid-cols-2 gap-5">
         <Card>
-          <CardHeader title="Monthly Sales (₹ thousands)" subtitle="Value of Delivery Challans dispatched · click a month for the DC list" />
+          <CardHeader title="Monthly Sales (₹ thousands)" subtitle={`Value of Delivery Challans · last ${rangeMonths} months · click a month for the DC list`} />
           <div className="p-4">
             <BarChart
               data={months}
@@ -123,7 +137,7 @@ export function Dashboard() {
         <Card>
           <div className="p-5">
             <h3 className="text-lg font-bold uppercase tracking-wide text-slate-900 dark:text-slate-100">Monthly Production</h3>
-            <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">Total Completed Job Cards · click a month to view completed job cards</p>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">Total Completed Job Cards · last {rangeMonths} months · click a month to view completed job cards</p>
             <div className="mt-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 p-5">
               <ProductionBarChart
                 data={monthlyProduction}
@@ -255,7 +269,7 @@ function ProductionBarChart({ data, onBarClick }: { data: { label: string; value
       <div className="absolute inset-x-8 top-7 border-t border-dashed border-slate-200 dark:border-slate-700" />
       <div className="absolute inset-x-8 top-20 border-t border-dashed border-slate-200 dark:border-slate-700" />
       <div className="absolute inset-x-8 bottom-11 border-t border-dashed border-slate-200 dark:border-slate-700" />
-      <div className="relative z-10 grid h-full grid-cols-6 items-end gap-5 px-8 pb-8 pt-4">
+      <div className="relative z-10 grid h-full items-end gap-5 px-8 pb-8 pt-4" style={{ gridTemplateColumns: `repeat(${data.length}, minmax(0, 1fr))` }}>
         {data.map((d, i) => {
           const height = Math.max(18, (d.value / max) * 125);
           const disabled = !onBarClick || d.value === 0;
@@ -583,7 +597,7 @@ function DashboardDrillDown({
   db: any;
   monthBuckets: { key: string; label: string; date: Date }[];
 }) {
-  if (!drill) return <Modal open={false} onClose={onClose} title=""></Modal>;
+  if (!drill) return null;
 
   const soValue = (soId: string): { qty: number; value: number } => {
     const so = db.salesOrders.find((o: any) => o.id === soId);
