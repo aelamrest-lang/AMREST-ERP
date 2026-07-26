@@ -167,7 +167,7 @@ export function BOMPage() {
     const clonedMaterials = currentBom.materials.map(m => ({ ...m }));
     const newBom: BOM = existing
       ? { ...existing, materials: clonedMaterials, name: target.name, productItemId: target.id }
-      : { id: uid(), name: target.name, productItemId: target.id, materials: clonedMaterials, createdAt: new Date().toISOString() };
+      : { id: uid(), name: target.name, productItemId: target.id, kva: extractKva(target.name), materials: clonedMaterials, createdAt: new Date().toISOString() };
 
     setDB(d => ({
       ...d,

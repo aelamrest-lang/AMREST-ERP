@@ -13,7 +13,7 @@ const DEFAULT_PO_TERMS = `1. Material should be as per specification.
 5. Material will be subject to quality inspection at our works.`;
 
 function VendorCombobox({
-  vendors, value, onChange, placeholder = "Search vendor by name, GST, city...",
+  vendors, value, onChange, placeholder = "Search vendor by name, GST, contact...",
 }: {
   vendors: Party[]; value: string; onChange: (id: string) => void; placeholder?: string;
 }) {
@@ -30,9 +30,10 @@ function VendorCombobox({
     return vendors.filter(v =>
       v.name.toLowerCase().includes(q) ||
       (v.gst || "").toLowerCase().includes(q) ||
-      (v.city || "").toLowerCase().includes(q) ||
+      (v.address || "").toLowerCase().includes(q) ||
       (v.mobile || "").toLowerCase().includes(q) ||
-      (v.email || "").toLowerCase().includes(q),
+      (v.email || "").toLowerCase().includes(q) ||
+      (v.contactPerson || "").toLowerCase().includes(q),
     );
   }, [vendors, query]);
 
@@ -96,7 +97,7 @@ function VendorCombobox({
               <div className="min-w-0">
                 <div className="font-medium text-slate-800 dark:text-slate-100 truncate">{v.name}</div>
                 <div className="text-xs text-slate-500 truncate">
-                  {[v.city, v.gst, v.mobile].filter(Boolean).join(" · ") || v.email || ""}
+                  {[v.contactPerson, v.gst, v.mobile].filter(Boolean).join(" · ") || v.email || v.address || ""}
                 </div>
               </div>
               {v.id === value && <span className="text-xs text-indigo-600 font-semibold">Selected</span>}
