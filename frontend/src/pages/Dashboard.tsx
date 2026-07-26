@@ -281,7 +281,7 @@ function ProductionBarChart({ data, onBarClick }: { data: { label: string; value
               onClick={() => onBarClick && onBarClick(i)}
               className={"flex h-full flex-col items-center justify-end gap-2 focus:outline-none " + (disabled ? "cursor-default" : "cursor-pointer")}
             >
-              <div className="text-sm font-bold text-indigo-700 dark:text-indigo-300">{d.value}</div>
+              <div className={"text-sm font-bold " + (disabled ? "text-transparent" : "text-indigo-700 dark:text-indigo-300")}>{d.value}</div>
               <div
                 className={"w-full max-w-14 rounded-t-md bg-gradient-to-t shadow-sm shadow-indigo-500/30 transition-all " + (disabled ? "from-indigo-200 to-indigo-400 opacity-60" : "from-indigo-300 to-indigo-600 hover:from-indigo-400 hover:to-indigo-700")}
                 style={{ height }}
