@@ -126,6 +126,14 @@ export interface SalesOrder {
   createdAt: string;
 }
 
+export interface POApprovalEvent {
+  userId: string;
+  userName: string;
+  action: "Submitted" | "Approved" | "Rejected" | "Resubmitted";
+  reason?: string;
+  timestamp: string;
+}
+
 export interface PurchaseOrder {
   id: string;
   number: string;
@@ -135,7 +143,15 @@ export interface PurchaseOrder {
   terms?: string;
   expectedDeliveryDate?: string;
   status: "Draft" | "Approved" | "Partially Received" | "Received" | "Completed" | "Cancelled";
+  approvalStatus?: "Pending" | "Approved" | "Rejected";
+  approvedById?: string;
+  approvedByName?: string;
+  approvedAt?: string;
+  rejectionReason?: string;
+  approvalHistory?: POApprovalEvent[];
   createdAt: string;
+  createdByName?: string;
+  createdById?: string;
 }
 
 export interface GRN {

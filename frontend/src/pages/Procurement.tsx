@@ -1,8 +1,8 @@
 import { useMemo, useRef, useState } from "react";
 import { useStore, uid } from "../lib/store";
 import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Badge, Empty, Textarea } from "../components/ui";
-import type { PurchaseOrder, GRN, Party } from "../lib/types";
-import { IconPlus, IconEdit, IconTrash, IconPrint, IconSearch } from "../components/icons";
+import type { PurchaseOrder, GRN, Party, POApprovalEvent } from "../lib/types";
+import { IconPlus, IconEdit, IconTrash, IconPrint, IconSearch, IconCheck } from "../components/icons";
 import { fmtINR, nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
 import { userCan } from "../lib/permissions";
 
@@ -164,32 +164,123 @@ export function PurchaseOrders() {
   const [open, setOpen] = useState(false);
   const [edit, setEdit] = useState<PurchaseOrder | null>(null);
   const [itemSearch, setItemSearch] = useState<Record<number, string>>({});
+  const [preview, setPreview] = useState<PurchaseOrder | null>(null);
+  const [rejectingId, setRejectingId] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
 
   const vendors = db.parties.filter(p => p.type === "vendor" || p.type === "supplier");
 
   const blank = (): PurchaseOrder => {
     const d = todayISO();
+    const now = new Date().toISOString();
     return {
       id: "", number: nextNumber("PO", db.purchaseOrders), date: d, vendorId: vendors[0]?.id || "",
       items: [], terms: getDefaultPurchaseTerms(db.settings),
       expectedDeliveryDate: addDaysISO(d, DEFAULT_LEAD_TIME_DAYS),
-      status: "Draft", createdAt: new Date().toISOString(),
+      status: "Draft",
+      approvalStatus: "Pending",
+      approvalHistory: [{ userId: currentUser?.id || "", userName: currentUser?.name || "", action: "Submitted", timestamp: now }],
+      createdByName: currentUser?.name,
+      createdById: currentUser?.id,
+      createdAt: now,
     };
   };
   const [form, setForm] = useState<PurchaseOrder>(blank());
 
+  const isCreator = (p: PurchaseOrder) => !!currentUser && p.createdById === currentUser.id;
+  const isAdmin = currentUser?.role === "admin";
+  const canEditPO = (p: PurchaseOrder) => {
+    if (!canEdit) return false;
+    if (isAdmin) return true;
+    // Locked after approval for non-admins
+    if (p.approvalStatus === "Approved") return false;
+    // If rejected, only creator can edit and resubmit
+    if (p.approvalStatus === "Rejected") return isCreator(p);
+    return true;
+  };
+
   const openNew = () => { setEdit(null); setForm(blank()); setItemSearch({}); setOpen(true); };
-  const openEdit = (p: PurchaseOrder) => { setEdit(p); setForm({...p, terms: p.terms || getDefaultPurchaseTerms(db.settings), items: p.items.map(i => ({...i}))}); setItemSearch({}); setOpen(true); };
+  const openEdit = (p: PurchaseOrder) => {
+    if (!canEditPO(p)) return alert("This PO is locked. Only Admin can edit approved orders.");
+    // If it was rejected and the creator is opening it, treat this as a resubmission when saved
+    setEdit(p);
+    setForm({...p, terms: p.terms || getDefaultPurchaseTerms(db.settings), items: p.items.map(i => ({...i}))});
+    setItemSearch({});
+    setOpen(true);
+  };
   const save = () => {
-    if (edit) setDB(d => ({...d, purchaseOrders: d.purchaseOrders.map(x => x.id === edit.id ? form : x)}));
-    else setDB(d => ({...d, purchaseOrders: [{...form, id: uid()}, ...d.purchaseOrders]}));
+    const now = new Date().toISOString();
+    let next: PurchaseOrder = { ...form };
+    if (edit && edit.approvalStatus === "Rejected") {
+      // Resubmit for approval
+      next = {
+        ...next,
+        approvalStatus: "Pending",
+        rejectionReason: "",
+        approvedById: undefined, approvedByName: undefined, approvedAt: undefined,
+        approvalHistory: [
+          ...(next.approvalHistory || []),
+          { userId: currentUser?.id || "", userName: currentUser?.name || "", action: "Resubmitted", timestamp: now },
+        ],
+      };
+      log(`Resubmitted PO ${next.number} for approval`, "Purchase");
+    } else if (!edit) {
+      next.approvalStatus = "Pending";
+      next.createdById = currentUser?.id;
+      next.createdByName = currentUser?.name;
+      next.approvalHistory = [{ userId: currentUser?.id || "", userName: currentUser?.name || "", action: "Submitted", timestamp: now }];
+    }
+    if (edit) setDB(d => ({...d, purchaseOrders: d.purchaseOrders.map(x => x.id === edit.id ? next : x)}));
+    else setDB(d => ({...d, purchaseOrders: [{...next, id: uid()}, ...d.purchaseOrders]}));
     log(`${edit ? "Updated" : "Created"} PO ${form.number}`, "Purchase");
     setOpen(false);
   };
   const remove = (p: PurchaseOrder) => {
-    if (!confirm(`Delete ${p.number}?`)) return;
+    if (!window.confirm(`Delete ${p.number}?`)) return;
     setDB(d => ({...d, purchaseOrders: d.purchaseOrders.filter(x => x.id !== p.id)}));
     log(`Deleted PO ${p.number}`, "Purchase");
+  };
+
+  const approvePO = (p: PurchaseOrder) => {
+    if (!canApprove) return alert("You don't have permission to approve Purchase Orders.");
+    const now = new Date().toISOString();
+    const event: POApprovalEvent = { userId: currentUser!.id, userName: currentUser!.name, action: "Approved", timestamp: now };
+    const next: PurchaseOrder = {
+      ...p,
+      approvalStatus: "Approved",
+      approvedById: currentUser!.id, approvedByName: currentUser!.name, approvedAt: now,
+      rejectionReason: "",
+      status: p.status === "Draft" ? "Approved" : p.status,
+      approvalHistory: [...(p.approvalHistory || []), event],
+    };
+    setDB(d => ({...d, purchaseOrders: d.purchaseOrders.map(x => x.id === p.id ? next : x)}));
+    log(`Approved PO ${p.number}`, "Purchase");
+    setPreview(next);
+  };
+
+  const submitReject = () => {
+    if (!rejectingId) return;
+    const reason = rejectReason.trim();
+    if (!reason) return alert("Please provide a rejection reason.");
+    const now = new Date().toISOString();
+    setDB(d => ({
+      ...d,
+      purchaseOrders: d.purchaseOrders.map(p => {
+        if (p.id !== rejectingId) return p;
+        const event: POApprovalEvent = { userId: currentUser!.id, userName: currentUser!.name, action: "Rejected", reason, timestamp: now };
+        return {
+          ...p,
+          approvalStatus: "Rejected",
+          rejectionReason: reason,
+          approvedById: currentUser!.id, approvedByName: currentUser!.name, approvedAt: now,
+          approvalHistory: [...(p.approvalHistory || []), event],
+        };
+      }),
+    }));
+    const target = db.purchaseOrders.find(x => x.id === rejectingId);
+    log(`Rejected PO ${target?.number} — ${reason}`, "Purchase");
+    setRejectingId(null); setRejectReason("");
+    setPreview(null);
   };
   const addItem = () => setForm(f => ({...f, items: [...f.items, { itemId: db.items[0]?.id || "", qty: 1, rate: 0, description: "" }]}));
   const updateItem = (i: number, key: string, val: any) => setForm(f => ({...f, items: f.items.map((it, idx) => idx === i ? {...it, [key]: key === "itemId" || key === "description" ? val : Number(val)} : it)}));
@@ -247,19 +338,43 @@ export function PurchaseOrders() {
     alert("Default purchase order terms saved.");
   };
 
-  const printPO = (p: PurchaseOrder) => {
+  const approvalBannerHtml = (p: PurchaseOrder): string => {
+    const badgeColor = p.approvalStatus === "Approved"
+      ? "#059669"
+      : p.approvalStatus === "Rejected" ? "#e11d48" : "#f59e0b";
+    const label = p.approvalStatus || "Pending";
+    const ts = p.approvedAt ? new Date(p.approvedAt).toLocaleString("en-IN") : "";
+    const line = p.approvalStatus === "Approved"
+      ? `Approved by <b>${p.approvedByName || "—"}</b> on ${ts}`
+      : p.approvalStatus === "Rejected"
+        ? `Rejected by <b>${p.approvedByName || "—"}</b> on ${ts}${p.rejectionReason ? ` · Reason: ${p.rejectionReason}` : ""}`
+        : `Pending approval · created by ${p.createdByName || "—"}`;
+    return `
+      <div style="border:1px solid ${badgeColor};background:${badgeColor}10;color:#0f172a;padding:10px 12px;border-radius:8px;margin-bottom:12px;display:flex;align-items:center;gap:10px">
+        <span style="background:${badgeColor};color:#fff;padding:3px 10px;border-radius:999px;font-weight:700;font-size:11px;letter-spacing:0.5px">${label.toUpperCase()}</span>
+        <span style="font-size:12px">${line}</span>
+      </div>`;
+  };
+
+  const buildPOHtml = (p: PurchaseOrder): string => {
     const v = db.parties.find(x => x.id === p.vendorId);
     const t = p.items.reduce((s, i) => s + i.qty * i.rate, 0);
+    const historyRows = (p.approvalHistory || []).map(e => `<tr><td>${new Date(e.timestamp).toLocaleString("en-IN")}</td><td>${e.userName}</td><td>${e.action}</td><td>${e.reason || ""}</td></tr>`).join("");
     const body = `
-      <div class="box"><div class="section-title">Vendor Details</div><b>${v?.name}</b><br/>${v?.address}<br/>GST: ${v?.gst || ""}<br/>Contact: ${v?.mobile || ""} | ${v?.email || ""}</div>
-      <div class="box"><span class="badge">${p.status}</span></div>
+      ${approvalBannerHtml(p)}
+      <div class="box"><div class="section-title">Vendor Details</div><b>${v?.name || ""}</b><br/>${v?.address || ""}${v?.city ? `, ${v.city}` : ""}<br/>GST: ${v?.gst || ""}<br/>Contact: ${v?.mobile || ""} | ${v?.email || ""}</div>
+      <div class="box"><span class="badge">${p.status}</span> &nbsp; <b>Expected Delivery:</b> ${p.expectedDeliveryDate || "—"}</div>
       <table><thead><tr><th>#</th><th>Item</th><th class="right">Qty</th><th class="right">Rate</th><th class="right">Amount</th></tr></thead>
       <tbody>${p.items.map((i, idx) => { const it = db.items.find(x => x.id === i.itemId); return `<tr><td>${idx+1}</td><td><b>${it?.name || "-"} (${it?.code || ""})</b>${i.description ? `<br/><span class="muted">${i.description}</span>` : ""}</td><td class="right">${i.qty}</td><td class="right">${fmtINR(i.rate)}</td><td class="right">${fmtINR(i.qty*i.rate)}</td></tr>`; }).join("")}</tbody></table>
       <div class="totals"><div class="grand"><span>Total</span><b>${fmtINR(t)}</b></div></div>
-      <div class="box"><div class="section-title">Terms & Conditions</div><pre style="white-space:pre-wrap;font-family:inherit;font-size:12px;margin:6px 0">${p.terms || getDefaultPurchaseTerms(db.settings)}</pre></div>
+      <div class="box"><div class="section-title">Terms &amp; Conditions</div><pre style="white-space:pre-wrap;font-family:inherit;font-size:12px;margin:6px 0">${p.terms || getDefaultPurchaseTerms(db.settings)}</pre></div>
+      ${historyRows ? `<div class="box"><div class="section-title">Approval History</div><table><thead><tr><th>Date &amp; Time</th><th>User</th><th>Action</th><th>Reason</th></tr></thead><tbody>${historyRows}</tbody></table></div>` : ""}
     `;
-    const html = professionalDocument(db.settings, { title: "Purchase Order", number: p.number, date: p.date, body, accent: "#ea580c", skipFormatTerms: true });
-    printArea(html, p.number);
+    return professionalDocument(db.settings, { title: "Purchase Order", number: p.number, date: p.date, body, accent: "#ea580c", skipFormatTerms: true });
+  };
+
+  const printPO = (p: PurchaseOrder) => {
+    printArea(buildPOHtml(p), p.number);
   };
 
   return (
@@ -281,7 +396,28 @@ export function PurchaseOrders() {
                 : p.status;
               return (
                 <tr key={p.id} className={"hover:bg-slate-50 dark:hover:bg-slate-800/50 " + (showDelay ? "bg-rose-50/60 dark:bg-rose-900/10" : "")}>
-                  <Td className="font-mono text-xs">{p.number}</Td>
+                  <Td>
+                    <button
+                      type="button"
+                      onClick={() => setPreview(p)}
+                      className="font-mono text-xs text-indigo-600 hover:text-indigo-800 hover:underline dark:text-indigo-400"
+                      data-testid={`po-preview-${p.number}`}
+                      title="Open PO preview"
+                    >{p.number}</button>
+                    <div className="mt-1">
+                      {p.approvalStatus === "Approved" && <Badge color="green">Approved</Badge>}
+                      {p.approvalStatus === "Rejected" && <Badge color="red">Rejected</Badge>}
+                      {(!p.approvalStatus || p.approvalStatus === "Pending") && <Badge color="amber">Pending Approval</Badge>}
+                    </div>
+                    {p.approvedByName && p.approvedAt && (
+                      <div className="text-[10px] text-slate-500 mt-0.5">
+                        {p.approvalStatus === "Approved" ? "Approved" : "Rejected"} by {p.approvedByName} · {new Date(p.approvedAt).toLocaleDateString("en-IN")} {new Date(p.approvedAt).toLocaleTimeString("en-IN", {hour: "2-digit", minute: "2-digit"})}
+                      </div>
+                    )}
+                    {p.approvalStatus === "Rejected" && p.rejectionReason && (
+                      <div className="text-[10px] text-rose-600 mt-0.5 italic">“{p.rejectionReason}”</div>
+                    )}
+                  </Td>
                   <Td>{p.date}</Td>
                   <Td>{db.parties.find(v => v.id === p.vendorId)?.name}</Td>
                   <Td>{p.items.length}</Td>
@@ -315,8 +451,8 @@ export function PurchaseOrders() {
                     )}
                   </Td>
                   <Td><div className="flex gap-1">
-                    {canEdit && <Button size="sm" variant="ghost" onClick={() => openEdit(p)}><IconEdit size={14}/></Button>}
-                    {canPrint && <Button size="sm" variant="ghost" onClick={() => printPO(p)}><IconPrint size={14}/></Button>}
+                    {canEdit && <Button size="sm" variant="ghost" disabled={!canEditPO(p)} title={!canEditPO(p) ? "Locked after approval" : ""} onClick={() => openEdit(p)}><IconEdit size={14}/></Button>}
+                    {canPrint && <Button size="sm" variant="ghost" onClick={() => setPreview(p)}><IconPrint size={14}/></Button>}
                     {canDelete && <Button size="sm" variant="ghost" onClick={() => remove(p)}><IconTrash size={14}/></Button>}
                   </div></Td>
                 </tr>
@@ -431,8 +567,100 @@ export function PurchaseOrders() {
           <Textarea rows={7} value={form.terms || ""} onChange={(e: any) => setForm({...form, terms: e.target.value})}/>
           <p className="mt-1 text-xs text-slate-500">These terms print on the Purchase Order PDF and can be changed for this PO. Admin can save them as default PO terms.</p>
         </div>
-        <div className="mt-5 flex justify-end gap-2"><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={save}>{edit ? "Update" : "Create"}</Button></div>
+        <div className="mt-5 flex justify-end gap-2"><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={save}>{edit ? (edit.approvalStatus === "Rejected" ? "Save & Resubmit for Approval" : "Update") : "Create"}</Button></div>
       </Modal>
+
+      {/* PO Preview Modal with Approve / Reject */}
+      <Modal open={!!preview} onClose={() => setPreview(null)} title={preview ? `${preview.number} — Preview` : "PO Preview"} size="xl">
+        {preview && <POPreview
+          po={preview}
+          html={buildPOHtml(preview)}
+          canApprove={canApprove}
+          isAdmin={isAdmin}
+          onApprove={() => approvePO(preview)}
+          onReject={() => { setRejectingId(preview.id); setRejectReason(""); }}
+          onPrint={() => printPO(preview)}
+          onEdit={() => {
+            if (!canEditPO(preview)) return alert("This PO is locked. Only Admin can edit approved orders.");
+            setPreview(null);
+            openEdit(preview);
+          }}
+          canEditPO={canEditPO(preview)}
+        />}
+      </Modal>
+
+      {/* Reject Reason Modal */}
+      <Modal open={!!rejectingId} onClose={() => { setRejectingId(null); setRejectReason(""); }} title="Reject Purchase Order" size="sm">
+        <div className="space-y-3">
+          <Label>Rejection Reason (required)</Label>
+          <Textarea rows={4} value={rejectReason} onChange={(e: any) => setRejectReason(e.target.value)} placeholder="Explain why this PO is being rejected..." data-testid="po-reject-reason"/>
+          <p className="text-xs text-slate-500">The creator will be able to edit this PO and resubmit it after seeing your reason.</p>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => { setRejectingId(null); setRejectReason(""); }}>Cancel</Button>
+            <Button onClick={submitReject} data-testid="po-reject-confirm">Reject PO</Button>
+          </div>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+function POPreview({
+  po, html, canApprove, isAdmin, onApprove, onReject, onPrint, onEdit, canEditPO,
+}: {
+  po: PurchaseOrder; html: string; canApprove: boolean; isAdmin: boolean;
+  onApprove: () => void; onReject: () => void; onPrint: () => void; onEdit: () => void; canEditPO: boolean;
+}) {
+  const canAct = (canApprove || isAdmin) && (po.approvalStatus !== "Approved");
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2 justify-between">
+        <div className="text-xs text-slate-500">
+          Created by <b>{po.createdByName || "—"}</b> on {new Date(po.createdAt).toLocaleString("en-IN")}
+          {po.approvalStatus === "Approved" && po.approvedAt && (
+            <>· Approved by <b>{po.approvedByName}</b> on {new Date(po.approvedAt).toLocaleString("en-IN")}</>
+          )}
+          {po.approvalStatus === "Rejected" && po.approvedAt && (
+            <>· Rejected by <b>{po.approvedByName}</b> on {new Date(po.approvedAt).toLocaleString("en-IN")}</>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {canEditPO && po.approvalStatus === "Rejected" && (
+            <Button variant="outline" onClick={onEdit} data-testid="po-preview-edit">
+              <IconEdit size={14}/> Edit &amp; Resubmit
+            </Button>
+          )}
+          <Button variant="outline" onClick={onPrint} data-testid="po-preview-print">
+            <IconPrint size={14}/> Print / Download
+          </Button>
+          {canAct && (
+            <>
+              <Button variant="outline" onClick={onReject} data-testid="po-preview-reject" className="!border-rose-300 !text-rose-600 hover:!bg-rose-50">
+                Reject
+              </Button>
+              <Button onClick={onApprove} data-testid="po-preview-approve" className="!bg-emerald-600 hover:!bg-emerald-700">
+                <IconCheck size={14}/> Approve
+              </Button>
+            </>
+          )}
+        </div>
+      </div>
+      {po.approvalStatus === "Rejected" && po.rejectionReason && (
+        <div className="rounded-lg border border-rose-300 bg-rose-50 dark:bg-rose-900/20 dark:border-rose-800 p-3 text-sm">
+          <b className="text-rose-700 dark:text-rose-300">Rejection Reason:</b> <span className="text-rose-700 dark:text-rose-200">{po.rejectionReason}</span>
+        </div>
+      )}
+      <div
+        className="rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 bg-white"
+        style={{ maxHeight: "70vh", overflowY: "auto" }}
+      >
+        <iframe
+          title={`PO ${po.number} preview`}
+          srcDoc={html}
+          className="w-full"
+          style={{ minHeight: "70vh", border: "none", background: "white" }}
+        />
+      </div>
     </div>
   );
 }
