@@ -19,6 +19,44 @@ export function Dashboard() {
   const orderTotal = salesOrders.reduce((s, o) => s + o.items.reduce((a, b) => a + b.qty * b.rate * (1 + b.gst / 100), 0), 0);
   const pendingQuotations = quotations.filter(q => q.status === "Quotation Sent" || q.status === "Negotiation").length;
   const lowStock = db.items.filter(i => i.currentStock <= i.minStock);
+
+  // Shortage analysis from pending Job Cards (Open / In Progress).
+  // Each JC's `reservedItems` is already the BOM × qty snapshot at JC creation.
+  interface ShortageJC { jc: any; qty: number }
+  interface Shortage {
+    itemId: string;
+    itemName: string;
+    itemCode: string;
+    unit: string;
+    required: number;
+    available: number;
+    shortage: number;
+    jobCards: ShortageJC[];
+  }
+  const pendingJobCards = db.jobCards.filter((j: any) => j.status !== "Completed");
+  const requiredByItem = new Map<string, ShortageJC[]>();
+  pendingJobCards.forEach((jc: any) => {
+    (jc.reservedItems || []).forEach((r: { itemId: string; qty: number }) => {
+      if (!r.itemId || !r.qty) return;
+      const list = requiredByItem.get(r.itemId) || [];
+      list.push({ jc, qty: Number(r.qty) || 0 });
+      requiredByItem.set(r.itemId, list);
+    });
+  });
+  const shortages: Shortage[] = [];
+  requiredByItem.forEach((jcs, itemId) => {
+    const item = db.items.find((it: any) => it.id === itemId);
+    if (!item) return;
+    const required = jcs.reduce((a, j) => a + j.qty, 0);
+    const available = Number(item.currentStock) || 0;
+    if (required <= available) return;
+    shortages.push({
+      itemId, itemName: item.name, itemCode: item.code, unit: item.unit || "Nos",
+      required, available, shortage: required - available, jobCards: jcs,
+    });
+  });
+  shortages.sort((a, b) => b.shortage - a.shortage);
+  const [shortageDrill, setShortageDrill] = useState<Shortage | null>(null);
   const productionInProg = db.jobCards.filter(j => j.status === "In Progress").length;
 
   const [drill, setDrill] = useState<{ type: "sales" | "production" | "customer"; monthKey?: string; monthLabel?: string; customerId?: string } | null>(null);
@@ -120,7 +158,7 @@ export function Dashboard() {
         <KPI label="Total Sales Value" value={fmtINR(orderTotal)} color="emerald" icon={<IconShop size={22}/>} />
         <KPI label="Pending Quotations" value={String(pendingQuotations)} color="amber" icon={<IconFile size={22}/>} hint={`${quotations.length} total`} />
         <KPI label="Production In Progress" value={String(productionInProg)} color="indigo" icon={<IconFactory size={22}/>} hint={`${db.jobCards.length} job cards`} />
-        <KPI label="Low Stock Items" value={String(lowStock.length)} color="rose" icon={<IconBox size={22}/>} hint={`${db.items.length} items`} />
+        <KPI label="Material Shortages" value={String(shortages.length)} color="rose" icon={<IconBox size={22}/>} hint={`from ${pendingJobCards.length} pending JC`} />
       </div>
 
       <div className="grid lg:grid-cols-2 gap-5">
@@ -185,20 +223,34 @@ export function Dashboard() {
           </div>
         </Card>
         <Card>
-          <CardHeader title="Low Stock Alerts" right={<Badge color={lowStock.length ? "red" : "green"}>{lowStock.length}</Badge>} />
-          <div className="p-4 space-y-2 max-h-64 overflow-y-auto">
-            {lowStock.length === 0 && <Empty title="All items in healthy stock" />}
-            {lowStock.map(it => (
-              <div key={it.id} className="flex items-center justify-between text-sm border-b border-slate-100 dark:border-slate-800 pb-1.5">
-                <div>
-                  <div className="font-medium text-slate-700 dark:text-slate-200">{it.name}</div>
-                  <div className="text-xs text-slate-500">{it.code}</div>
+          <CardHeader
+            title="Low Stock Alerts"
+            subtitle="Shortages from Pending Job Cards vs current inventory"
+            right={<Badge color={shortages.length ? "red" : "green"}>{shortages.length}</Badge>}
+          />
+          <div className="p-4 space-y-2 max-h-72 overflow-y-auto" data-testid="dashboard-low-stock">
+            {shortages.length === 0 && <Empty title="No shortages against pending job cards" />}
+            {shortages.map(s => (
+              <button
+                key={s.itemId}
+                type="button"
+                onClick={() => setShortageDrill(s)}
+                className="w-full text-left flex items-start justify-between gap-3 text-sm border-b border-slate-100 dark:border-slate-800 pb-2 pt-1 hover:bg-slate-50 dark:hover:bg-slate-800/50 rounded px-2 -mx-2 transition"
+                data-testid={`shortage-row-${s.itemCode}`}
+              >
+                <div className="min-w-0">
+                  <div className="font-medium text-slate-700 dark:text-slate-200 truncate">{s.itemName}</div>
+                  <div className="text-[11px] text-slate-500 truncate">{s.itemCode} · {s.jobCards.length} JC{s.jobCards.length === 1 ? "" : "s"} affected</div>
+                  <div className="text-[11px] text-slate-500 mt-0.5">
+                    Req <b className="text-slate-700 dark:text-slate-200">{s.required}</b> · Avail <b className="text-slate-700 dark:text-slate-200">{s.available}</b>
+                  </div>
                 </div>
-                <div className="text-right">
-                  <div className="font-semibold text-rose-600">{it.currentStock} {it.unit}</div>
-                  <div className="text-xs text-slate-500">min {it.minStock}</div>
+                <div className="text-right shrink-0">
+                  <div className="text-base font-bold text-rose-600">-{s.shortage}</div>
+                  <div className="text-[10px] text-rose-500 uppercase tracking-wide">Shortage</div>
+                  <div className="text-[10px] text-slate-500 mt-0.5">{s.unit}</div>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         </Card>
@@ -258,6 +310,72 @@ export function Dashboard() {
       )}
 
       <DashboardDrillDown drill={drill} onClose={() => setDrill(null)} db={db} monthBuckets={monthBuckets} />
+
+      <Modal open={!!shortageDrill} onClose={() => setShortageDrill(null)} title={shortageDrill ? `Shortage · ${shortageDrill.itemName}` : "Shortage"} size="xl">
+        {shortageDrill && (
+          <div className="space-y-3" data-testid="shortage-drill-modal">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
+                <div className="text-xs text-slate-500">Required</div>
+                <div className="text-xl font-bold">{shortageDrill.required} <span className="text-xs text-slate-500">{shortageDrill.unit}</span></div>
+              </div>
+              <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
+                <div className="text-xs text-slate-500">Available Stock</div>
+                <div className="text-xl font-bold">{shortageDrill.available} <span className="text-xs text-slate-500">{shortageDrill.unit}</span></div>
+              </div>
+              <div className="rounded-lg border border-rose-200 dark:border-rose-800 bg-rose-50/50 dark:bg-rose-900/20 p-3">
+                <div className="text-xs text-rose-600">Shortage</div>
+                <div className="text-xl font-bold text-rose-600">{shortageDrill.shortage} <span className="text-xs">{shortageDrill.unit}</span></div>
+              </div>
+              <div className="rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50/50 dark:bg-indigo-900/20 p-3">
+                <div className="text-xs text-indigo-600">To Purchase</div>
+                <div className="text-xl font-bold text-indigo-700 dark:text-indigo-300">{shortageDrill.shortage} <span className="text-xs">{shortageDrill.unit}</span></div>
+              </div>
+            </div>
+            <div className="text-xs text-slate-500">
+              Material Code: <span className="font-mono">{shortageDrill.itemCode}</span> · Affected Job Cards: {shortageDrill.jobCards.length}
+            </div>
+            <div className="rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700">
+              <Table>
+                <thead>
+                  <tr>
+                    <Th>JC #</Th><Th>Date</Th><Th>Product</Th><Th>Status</Th>
+                    <Th className="text-right">Required Qty</Th>
+                    <Th className="text-right">Available</Th>
+                    <Th className="text-right">Shortage</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shortageDrill.jobCards
+                    .slice()
+                    .sort((a, b) => b.qty - a.qty)
+                    .map(({ jc, qty }, idx) => (
+                    <tr key={jc.id + "-" + idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                      <Td className="font-mono text-xs">{jc.number}</Td>
+                      <Td>{jc.date}</Td>
+                      <Td>{jc.product}</Td>
+                      <Td><Badge color={jc.status === "In Progress" ? "blue" : "amber"}>{jc.status}</Badge></Td>
+                      <Td className="text-right font-semibold">{qty} <span className="text-slate-400 text-[10px]">{shortageDrill.unit}</span></Td>
+                      <Td className="text-right text-slate-500">{shortageDrill.available}</Td>
+                      <Td className="text-right"><span className="font-bold text-rose-600">{Math.max(0, qty)}</span></Td>
+                    </tr>
+                  ))}
+                  <tr className="bg-slate-100 dark:bg-slate-800/60 font-semibold">
+                    <Td colSpan={4}>Total Required · Total Shortage</Td>
+                    <Td className="text-right">{shortageDrill.required}</Td>
+                    <Td className="text-right">{shortageDrill.available}</Td>
+                    <Td className="text-right text-rose-600">{shortageDrill.shortage}</Td>
+                  </tr>
+                </tbody>
+              </Table>
+            </div>
+            <div className="flex items-center justify-between flex-wrap gap-2 text-xs text-slate-500">
+              <div>Total quantity to be purchased to clear this shortage: <b className="text-rose-600">{shortageDrill.shortage} {shortageDrill.unit}</b></div>
+              <Button variant="outline" onClick={() => setShortageDrill(null)}>Close</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }
