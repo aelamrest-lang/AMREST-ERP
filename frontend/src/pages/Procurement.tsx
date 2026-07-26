@@ -30,6 +30,7 @@ function VendorCombobox({
     return vendors.filter(v =>
       v.name.toLowerCase().includes(q) ||
       (v.gst || "").toLowerCase().includes(q) ||
+      (v.city || "").toLowerCase().includes(q) ||
       (v.address || "").toLowerCase().includes(q) ||
       (v.mobile || "").toLowerCase().includes(q) ||
       (v.email || "").toLowerCase().includes(q) ||
@@ -97,7 +98,7 @@ function VendorCombobox({
               <div className="min-w-0">
                 <div className="font-medium text-slate-800 dark:text-slate-100 truncate">{v.name}</div>
                 <div className="text-xs text-slate-500 truncate">
-                  {[v.contactPerson, v.gst, v.mobile].filter(Boolean).join(" · ") || v.email || v.address || ""}
+                  {[v.city, v.gst, v.mobile].filter(Boolean).join(" · ") || v.email || v.address || ""}
                 </div>
               </div>
               {v.id === value && <span className="text-xs text-indigo-600 font-semibold">Selected</span>}

@@ -4,6 +4,7 @@ import { BarChart, DonutChart } from "../components/charts";
 import { fmtINR } from "../lib/utils";
 import { roleDescriptions, roleLabels } from "../lib/permissions";
 import { IconShop, IconFile, IconBox, IconFactory, IconCart, IconChart } from "../components/icons";
+import { orderDelayInfo, totalDeliveredQty, totalScheduledQty, totalOrderQty } from "../lib/delivery";
 
 export function Dashboard() {
   const { db, currentUser } = useStore();
@@ -127,6 +128,8 @@ export function Dashboard() {
         </Card>
       </div>
 
+      <DelayedDeliveries salesOrders={salesOrders} db={db} />
+
       <div className="grid lg:grid-cols-2 gap-5">
         <Card>
           <CardHeader title="Recent Quotations" right={<Badge color="indigo">{quotations.length}</Badge>} />
@@ -202,5 +205,52 @@ function ProductionBarChart({ data }: { data: { label: string; value: number }[]
         })}
       </div>
     </div>
+  );
+}
+
+
+function DelayedDeliveries({ salesOrders, db }: { salesOrders: any[]; db: any }) {
+  const rows = salesOrders
+    .map((so: any) => ({ so, info: orderDelayInfo(so) }))
+    .filter((r: any) => r.info.hasDelay)
+    .sort((a: any, b: any) => b.info.maxDelayDays - a.info.maxDelayDays);
+
+  return (
+    <Card data-testid="dashboard-delayed-deliveries">
+      <CardHeader
+        title="Delayed Deliveries"
+        right={<Badge color={rows.length ? "red" : "green"}>{rows.length}</Badge>}
+      />
+      {rows.length === 0 ? (
+        <div className="p-4"><Empty title="All scheduled deliveries are on time" /></div>
+      ) : (
+        <div className="p-4 space-y-2 max-h-80 overflow-y-auto">
+          {rows.map(({ so, info }: any) => {
+            const cust = db.parties.find((p: any) => p.id === so.customerId);
+            const oq = totalOrderQty(so);
+            const dq = totalDeliveredQty(so);
+            const sq = totalScheduledQty(so);
+            return (
+              <div key={so.id} className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2">
+                <div className="min-w-0">
+                  <div className="font-medium text-slate-700 dark:text-slate-200 truncate">
+                    <span className="font-mono text-xs mr-2 text-slate-500">{so.number}</span>
+                    {cust?.name || "Unknown Customer"}
+                  </div>
+                  <div className="text-xs text-slate-500 mt-0.5">
+                    Delivered {dq} of {sq} scheduled · {oq} ordered
+                    {info.earliestOverdueDate ? ` · Earliest overdue ${info.earliestOverdueDate}` : ""}
+                  </div>
+                </div>
+                <div className="text-right shrink-0 ml-3">
+                  <Badge color="red">{info.maxDelayDays} {info.maxDelayDays === 1 ? "Day" : "Days"} Delayed</Badge>
+                  <div className="text-[11px] text-slate-500 mt-1">Pending: <b>{info.pendingQty}</b></div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
   );
 }

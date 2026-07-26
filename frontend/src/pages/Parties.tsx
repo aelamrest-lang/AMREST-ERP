@@ -25,12 +25,12 @@ export function Parties() {
     if (type !== "all") p = p.filter(x => x.type === type);
     if (search) {
       const s = search.toLowerCase();
-      p = p.filter(x => x.name.toLowerCase().includes(s) || (x.gst || "").toLowerCase().includes(s) || (x.mobile || "").includes(s));
+      p = p.filter(x => x.name.toLowerCase().includes(s) || (x.gst || "").toLowerCase().includes(s) || (x.mobile || "").includes(s) || (x.city || "").toLowerCase().includes(s));
     }
     return p;
   }, [db.parties, isAdmin, currentUser, allowedTypes, type, search]);
 
-  const blank: Party = { id: "", name: "", type: allowedTypes[0], gst: "", address: "", contactPerson: "", mobile: "", email: "", paymentTerms: "30 days", creditLimit: 0, ownerId: currentUser!.id, createdAt: new Date().toISOString() };
+  const blank: Party = { id: "", name: "", type: allowedTypes[0], gst: "", address: "", city: "", contactPerson: "", mobile: "", email: "", paymentTerms: "30 days", creditLimit: 0, ownerId: currentUser!.id, createdAt: new Date().toISOString() };
   const [form, setForm] = useState<Party>(blank);
 
   const openNew = () => { setEdit(null); setForm({ ...blank, ownerId: currentUser!.id }); setOpen(true); };
@@ -57,8 +57,8 @@ export function Parties() {
 
   const exportCSV = () => {
     downloadCSV("parties.csv", [
-      ["Name", "Type", "GST", "Contact", "Mobile", "Email", "Address", "Payment Terms", "Credit Limit"],
-      ...parties.map(p => [p.name, p.type, p.gst || "", p.contactPerson || "", p.mobile || "", p.email || "", p.address || "", p.paymentTerms || "", p.creditLimit || 0])
+      ["Name", "Type", "GST", "Contact", "Mobile", "Email", "Address", "City", "Payment Terms", "Credit Limit"],
+      ...parties.map(p => [p.name, p.type, p.gst || "", p.contactPerson || "", p.mobile || "", p.email || "", p.address || "", p.city || "", p.paymentTerms || "", p.creditLimit || 0])
     ]);
   };
 
@@ -90,7 +90,7 @@ export function Parties() {
         </div>
         <Table>
           <thead>
-            <tr><Th>Name</Th><Th>Type</Th><Th>GST</Th><Th>Contact</Th><Th>Mobile</Th><Th>Owner</Th><Th>Actions</Th></tr>
+            <tr><Th>Name</Th><Th>Type</Th><Th>GST</Th><Th>Contact</Th><Th>City</Th><Th>Mobile</Th><Th>Owner</Th><Th>Actions</Th></tr>
           </thead>
           <tbody>
             {parties.map(p => (
@@ -99,6 +99,7 @@ export function Parties() {
                 <Td><Badge color={p.type === "customer" ? "blue" : p.type === "vendor" ? "purple" : "indigo"}>{p.type}</Badge></Td>
                 <Td className="font-mono text-xs">{p.gst}</Td>
                 <Td>{p.contactPerson}</Td>
+                <Td>{p.city || "—"}</Td>
                 <Td>{p.mobile}</Td>
                 <Td className="text-xs">{db.users.find(u => u.id === p.ownerId)?.name || "—"}</Td>
                 <Td>
@@ -126,6 +127,7 @@ export function Parties() {
           </div>
           <div><Label>GST Number</Label><Input value={form.gst} onChange={(e: any) => setForm({...form, gst: e.target.value})}/></div>
           <div className="sm:col-span-2"><Label>Address</Label><Input value={form.address} onChange={(e: any) => setForm({...form, address: e.target.value})}/></div>
+          <div><Label>City</Label><Input value={form.city || ""} onChange={(e: any) => setForm({...form, city: e.target.value})} placeholder="e.g. Jaipur" data-testid="party-city"/></div>
           <div><Label>Contact Person</Label><Input value={form.contactPerson} onChange={(e: any) => setForm({...form, contactPerson: e.target.value})}/></div>
           <div><Label>Mobile Number</Label><Input value={form.mobile} onChange={(e: any) => setForm({...form, mobile: e.target.value})}/></div>
           <div><Label>Email</Label><Input value={form.email} onChange={(e: any) => setForm({...form, email: e.target.value})}/></div>

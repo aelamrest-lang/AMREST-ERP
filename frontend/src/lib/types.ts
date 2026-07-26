@@ -23,6 +23,7 @@ export interface Party {
   type: "customer" | "vendor" | "supplier";
   gst?: string;
   address?: string;
+  city?: string;
   contactPerson?: string;
   mobile?: string;
   email?: string;
@@ -103,6 +104,14 @@ export interface Proforma {
   createdAt: string;
 }
 
+export interface DeliverySchedule {
+  id: string;
+  date: string;           // YYYY-MM-DD
+  qty: number;            // scheduled quantity for this slot
+  deliveredQty?: number;  // qty already delivered against this slot (default 0)
+  note?: string;
+}
+
 export interface SalesOrder {
   id: string;
   number: string;
@@ -111,6 +120,7 @@ export interface SalesOrder {
   proformaId?: string;
   items: { name: string; qty: number; rate: number; gst: number }[];
   deliveryDate?: string;
+  schedules?: DeliverySchedule[];
   status: "Pending" | "Confirmed" | "In Production" | "Dispatched" | "Delivered";
   ownerId: string;
   createdAt: string;

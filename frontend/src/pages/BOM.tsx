@@ -166,8 +166,8 @@ export function BOMPage() {
 
     const clonedMaterials = currentBom.materials.map(m => ({ ...m }));
     const newBom: BOM = existing
-      ? { ...existing, materials: clonedMaterials, name: target.name, productItemId: target.id }
-      : { id: uid(), name: target.name, productItemId: target.id, kva: extractKva(target.name), materials: clonedMaterials, createdAt: new Date().toISOString() };
+      ? buildBOM({ target, materials: clonedMaterials, existing })
+      : buildBOM({ target, materials: clonedMaterials });
 
     setDB(d => ({
       ...d,
@@ -376,4 +376,24 @@ export function BOMPage() {
 
 function extractKva(name: string) {
   return name.match(/\d+\s*KVA/i)?.[0]?.replace(/\s+/g, " ") || "";
+}
+
+/**
+ * Build a BOM in a type-safe way so the compiler catches any future missing required fields.
+ * Pass `existing` to update an existing BOM (id/createdAt preserved), omit it to create a new one.
+ */
+function buildBOM(params: {
+  target: { id: string; name: string };
+  materials: BOM["materials"];
+  existing?: BOM;
+}): BOM {
+  const { target, materials, existing } = params;
+  const base: BOM = existing
+    ? { ...existing }
+    : { id: uid(), createdAt: new Date().toISOString(), name: "", kva: "", productItemId: undefined, materials: [] };
+  base.name = target.name;
+  base.productItemId = target.id;
+  base.materials = materials;
+  base.kva = existing?.kva || extractKva(target.name);
+  return base;
 }
