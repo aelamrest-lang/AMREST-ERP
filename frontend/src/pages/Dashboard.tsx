@@ -1,5 +1,6 @@
+import { useState } from "react";
 import { useStore } from "../lib/store";
-import { Card, CardHeader, KPI, Badge, Empty } from "../components/ui";
+import { Card, CardHeader, KPI, Badge, Empty, Modal, Table, Th, Td, Button } from "../components/ui";
 import { BarChart, DonutChart } from "../components/charts";
 import { fmtINR } from "../lib/utils";
 import { roleDescriptions, roleLabels } from "../lib/permissions";
@@ -128,6 +129,8 @@ export function Dashboard() {
           </div>
         </Card>
       </div>
+
+      <SalesForecast salesOrders={salesOrders} db={db} />
 
       <DelayedDeliveries salesOrders={salesOrders} db={db} />
       <OverduePOs db={db} />
@@ -297,6 +300,207 @@ function OverduePOs({ db }: { db: any }) {
           })}
         </div>
       )}
+    </Card>
+  );
+}
+
+
+function SalesForecast({ salesOrders, db }: { salesOrders: any[]; db: any }) {
+  const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
+
+  // Build next 6 months keys starting from current month
+  const now = new Date();
+  const months: { key: string; label: string; short: string }[] = [];
+  for (let i = 0; i < 6; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    months.push({
+      key,
+      label: d.toLocaleString("en-IN", { month: "long", year: "numeric" }),
+      short: d.toLocaleString("en-IN", { month: "short", year: "2-digit" }),
+    });
+  }
+
+  // Aggregate qty + value per month from every SO's schedules
+  interface Row { key: string; label: string; short: string; qty: number; value: number; delivered: number; pending: number; slots: number; }
+  const rows: Row[] = months.map(m => ({ ...m, qty: 0, value: 0, delivered: 0, pending: 0, slots: 0 }));
+  const contributions: Record<string, { so: any; date: string; qty: number; delivered: number; pending: number; unitValue: number; value: number }[]> = {};
+  months.forEach(m => contributions[m.key] = []);
+
+  salesOrders.forEach((so: any) => {
+    if (!so.schedules || so.schedules.length === 0) return;
+    const orderQty = totalOrderQty(so);
+    if (!orderQty) return;
+    const orderValue = so.items.reduce((a: number, it: any) => a + (Number(it.qty) || 0) * (Number(it.rate) || 0), 0);
+    const unitValue = orderValue / orderQty;
+    so.schedules.forEach((s: any) => {
+      if (!s.date) return;
+      const m = s.date.slice(0, 7);
+      const row = rows.find(r => r.key === m);
+      if (!row) return;
+      const qty = Number(s.qty) || 0;
+      const delivered = Math.max(0, Number(s.deliveredQty) || 0);
+      const pending = Math.max(0, qty - delivered);
+      row.qty += qty;
+      row.value += qty * unitValue;
+      row.delivered += delivered;
+      row.pending += pending;
+      row.slots += 1;
+      contributions[m].push({ so, date: s.date, qty, delivered, pending, unitValue, value: qty * unitValue });
+    });
+  });
+
+  const totalQty = rows.reduce((a, r) => a + r.qty, 0);
+  const totalValue = rows.reduce((a, r) => a + r.value, 0);
+  const totalPending = rows.reduce((a, r) => a + r.pending, 0);
+  const selected = selectedMonth ? rows.find(r => r.key === selectedMonth) : null;
+
+  return (
+    <Card data-testid="dashboard-sales-forecast">
+      <CardHeader
+        title="Next 6 Months Sales Forecast"
+        right={
+          <div className="flex items-center gap-2">
+            <Badge color="indigo">{totalQty} Nos</Badge>
+            <Badge color="green">{fmtINR(totalValue)}</Badge>
+            {totalPending > 0 && <Badge color="amber">{totalPending} pending</Badge>}
+          </div>
+        }
+      />
+      <div className="p-4 grid lg:grid-cols-[1fr_1.1fr] gap-4">
+        <div>
+          <div className="text-xs text-slate-500 mb-2">Scheduled delivery quantity per month · click a bar to drill down</div>
+          {totalQty === 0 ? (
+            <Empty title="No delivery schedules found in the next 6 months" />
+          ) : (
+            <div className="grid grid-cols-6 items-end gap-2 h-56 px-1">
+              {rows.map(r => {
+                const max = Math.max(...rows.map(x => x.qty), 1);
+                const h = r.qty > 0 ? Math.max(6, (r.qty / max) * 180) : 4;
+                const active = selectedMonth === r.key;
+                return (
+                  <button
+                    key={r.key}
+                    type="button"
+                    onClick={() => r.qty > 0 && setSelectedMonth(r.key)}
+                    data-testid={`forecast-bar-${r.key}`}
+                    className="flex flex-col items-center gap-1 group focus:outline-none"
+                    disabled={r.qty === 0}
+                  >
+                    <div className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 h-4">{r.qty || ""}</div>
+                    <div
+                      style={{ height: h }}
+                      className={
+                        "w-full rounded-t-md transition-all cursor-pointer " +
+                        (r.qty === 0
+                          ? "bg-slate-200 dark:bg-slate-700 opacity-60 cursor-not-allowed"
+                          : active
+                            ? "bg-gradient-to-t from-indigo-600 to-violet-500 shadow-lg"
+                            : "bg-gradient-to-t from-indigo-500 to-indigo-400 hover:from-indigo-600 hover:to-violet-500")
+                      }
+                      title={`${r.label}: ${r.qty} Nos · ${fmtINR(r.value)}`}
+                    />
+                    <div className="text-[10px] text-slate-500 mt-1">{r.short}</div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        <div>
+          <div className="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700">
+            <Table>
+              <thead>
+                <tr><Th>Month</Th><Th className="text-right">Qty (Nos)</Th><Th className="text-right">Sales Amount</Th><Th className="text-right">Pending</Th><Th></Th></tr>
+              </thead>
+              <tbody>
+                {rows.map(r => (
+                  <tr
+                    key={r.key}
+                    onClick={() => r.qty > 0 && setSelectedMonth(r.key)}
+                    className={"cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50 " + (r.qty === 0 ? "opacity-60 cursor-not-allowed" : "")}
+                    data-testid={`forecast-row-${r.key}`}
+                  >
+                    <Td className="font-medium">{r.short}<div className="text-[10px] text-slate-500">{r.slots} slot{r.slots === 1 ? "" : "s"}</div></Td>
+                    <Td className="text-right font-semibold">{r.qty}</Td>
+                    <Td className="text-right">{fmtINR(r.value)}</Td>
+                    <Td className="text-right">
+                      {r.pending > 0 ? <Badge color="amber">{r.pending}</Badge> : <span className="text-slate-400">—</span>}
+                    </Td>
+                    <Td className="text-right">
+                      {r.qty > 0 && <button type="button" className="text-xs text-indigo-600 hover:underline">View</button>}
+                    </Td>
+                  </tr>
+                ))}
+                <tr className="bg-slate-100 dark:bg-slate-800/60 font-semibold">
+                  <Td>6-Month Total</Td>
+                  <Td className="text-right">{totalQty}</Td>
+                  <Td className="text-right">{fmtINR(totalValue)}</Td>
+                  <Td className="text-right">{totalPending}</Td>
+                  <Td></Td>
+                </tr>
+              </tbody>
+            </Table>
+          </div>
+          <div className="text-[11px] text-slate-500 mt-2">
+            Auto-computed from every Sales Order's Delivery Schedule. Updates instantly when a schedule is added, edited or a delivery is recorded.
+          </div>
+        </div>
+      </div>
+
+      <Modal open={!!selected} onClose={() => setSelectedMonth(null)} title={selected ? `Forecast · ${selected.label}` : "Forecast"} size="xl">
+        {selected && (
+          <div className="space-y-3">
+            <div className="grid grid-cols-3 gap-3">
+              <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
+                <div className="text-xs text-slate-500">Scheduled Qty</div>
+                <div className="text-xl font-bold">{selected.qty} Nos</div>
+              </div>
+              <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
+                <div className="text-xs text-slate-500">Sales Amount</div>
+                <div className="text-xl font-bold">{fmtINR(selected.value)}</div>
+              </div>
+              <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
+                <div className="text-xs text-slate-500">Delivered / Pending</div>
+                <div className="text-xl font-bold">
+                  <span className="text-emerald-600">{selected.delivered}</span>
+                  <span className="text-slate-400"> / </span>
+                  <span className="text-amber-600">{selected.pending}</span>
+                </div>
+              </div>
+            </div>
+            <div className="rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700">
+              <Table>
+                <thead>
+                  <tr><Th>SO #</Th><Th>Customer</Th><Th>Delivery Date</Th><Th className="text-right">Qty</Th><Th className="text-right">Delivered</Th><Th className="text-right">Pending</Th><Th className="text-right">Value</Th></tr>
+                </thead>
+                <tbody>
+                  {contributions[selected.key]
+                    .slice()
+                    .sort((a, b) => a.date.localeCompare(b.date))
+                    .map((c, i) => {
+                      const cust = db.parties.find((p: any) => p.id === c.so.customerId);
+                      return (
+                        <tr key={c.so.id + "-" + i} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                          <Td className="font-mono text-xs">{c.so.number}</Td>
+                          <Td>{cust?.name || "Unknown"}</Td>
+                          <Td>{c.date}</Td>
+                          <Td className="text-right font-semibold">{c.qty}</Td>
+                          <Td className="text-right text-emerald-600">{c.delivered}</Td>
+                          <Td className="text-right">{c.pending > 0 ? <span className="text-amber-600 font-semibold">{c.pending}</span> : "—"}</Td>
+                          <Td className="text-right">{fmtINR(c.value)}</Td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </Table>
+            </div>
+            <div className="flex justify-end">
+              <Button variant="outline" onClick={() => setSelectedMonth(null)}>Close</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </Card>
   );
 }
