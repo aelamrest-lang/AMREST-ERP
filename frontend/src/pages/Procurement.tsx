@@ -651,14 +651,21 @@ function POPreview({
         </div>
       )}
       <div
-        className="rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 bg-white"
-        style={{ maxHeight: "70vh", overflowY: "auto" }}
+        className="rounded-lg overflow-auto border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800/60 flex justify-center p-3"
+        style={{ maxHeight: "72vh" }}
       >
         <iframe
           title={`PO ${po.number} preview`}
           srcDoc={html}
-          className="w-full"
-          style={{ minHeight: "70vh", border: "none", background: "white" }}
+          className="border border-slate-300 dark:border-slate-700 bg-white shadow"
+          style={{
+            width: "210mm",
+            minWidth: "210mm",
+            height: "297mm",
+            minHeight: "297mm",
+            border: "1px solid #e2e8f0",
+            background: "white",
+          }}
         />
       </div>
     </div>
