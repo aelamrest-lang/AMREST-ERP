@@ -133,6 +133,7 @@ export interface PurchaseOrder {
   vendorId: string;
   items: { itemId: string; qty: number; rate: number; description?: string }[];
   terms?: string;
+  expectedDeliveryDate?: string;
   status: "Draft" | "Approved" | "Partially Received" | "Received" | "Completed" | "Cancelled";
   createdAt: string;
 }

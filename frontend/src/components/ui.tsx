@@ -65,6 +65,8 @@ export function Badge({ children, color = "slate", className }: { children: Reac
     blue: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
     purple: "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300",
     indigo: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300",
+    teal: "bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300",
+    orange: "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300",
   };
   return <span className={cn("inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium", colors[color] || colors.slate, className)}>{children}</span>;
 }

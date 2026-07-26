@@ -131,7 +131,7 @@ export function PurchaseOrders() {
 
   const blank = (): PurchaseOrder => ({
     id: "", number: nextNumber("PO", db.purchaseOrders), date: todayISO(), vendorId: vendors[0]?.id || "",
-    items: [], terms: getDefaultPurchaseTerms(db.settings), status: "Draft", createdAt: new Date().toISOString(),
+    items: [], terms: getDefaultPurchaseTerms(db.settings), expectedDeliveryDate: "", status: "Draft", createdAt: new Date().toISOString(),
   });
   const [form, setForm] = useState<PurchaseOrder>(blank());
 
@@ -227,7 +227,7 @@ export function PurchaseOrders() {
       </div>
       <Card>
         <Table>
-          <thead><tr><Th>#</Th><Th>Date</Th><Th>Vendor</Th><Th>Items</Th><Th>Total</Th><Th>Status</Th><Th></Th></tr></thead>
+          <thead><tr><Th>#</Th><Th>Date</Th><Th>Vendor</Th><Th>Items</Th><Th>Expected Delivery</Th><Th>Total</Th><Th>Status</Th><Th></Th></tr></thead>
           <tbody>
             {db.purchaseOrders.map(p => {
               const t = p.items.reduce((s, i) => s + i.qty * i.rate, 0);
@@ -237,6 +237,7 @@ export function PurchaseOrders() {
                   <Td>{p.date}</Td>
                   <Td>{db.parties.find(v => v.id === p.vendorId)?.name}</Td>
                   <Td>{p.items.length}</Td>
+                  <Td>{p.expectedDeliveryDate || <span className="text-slate-400">—</span>}</Td>
                   <Td className="font-semibold">{fmtINR(t)}</Td>
                   <Td>
                     <Select disabled={!canEdit && !canApprove} value={p.status} onChange={(e: any) => {
@@ -260,7 +261,7 @@ export function PurchaseOrders() {
       </Card>
 
       <Modal open={open} onClose={() => setOpen(false)} title={edit ? `Edit ${edit.number}` : "New Purchase Order"} size="xl">
-        <div className="grid sm:grid-cols-3 gap-3">
+        <div className="grid sm:grid-cols-4 gap-3">
           <div><Label>PO No.</Label><Input value={form.number} disabled/></div>
           <div><Label>Date</Label><Input type="date" value={form.date} onChange={(e: any) => setForm({...form, date: e.target.value})}/></div>
           <div><Label>Vendor</Label>
@@ -268,6 +269,15 @@ export function PurchaseOrders() {
               vendors={vendors}
               value={form.vendorId}
               onChange={(id) => setForm({...form, vendorId: id})}
+            />
+          </div>
+          <div>
+            <Label>Expected Delivery Date</Label>
+            <Input
+              type="date"
+              value={form.expectedDeliveryDate || ""}
+              onChange={(e: any) => setForm({...form, expectedDeliveryDate: e.target.value})}
+              data-testid="po-expected-delivery"
             />
           </div>
         </div>

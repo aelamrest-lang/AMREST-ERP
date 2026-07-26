@@ -64,10 +64,19 @@ export function TaxDashboard() {
   // Only *pending* qty (scheduled − delivered) of schedules falling in
   // the selected month contribute. Completed / cancelled / delivered
   // slots are excluded automatically because their pending qty is 0.
+  //
+  // AUTO-ROLL OVERDUE: when the selected month is the current month,
+  // any pending slot dated before this month is *also* rolled into
+  // this month's expected value so delayed orders never disappear.
   // ------------------------------------------------------------------
-  const expectedFor = (month: string): { total: number; contributions: { so: SalesOrder; pendingQty: number; unitValue: number; value: number; scheduledDate: string }[] } => {
-    const contributions: { so: SalesOrder; pendingQty: number; unitValue: number; value: number; scheduledDate: string }[] = [];
+  const monthStart = (month: string) => new Date(month + "-01T00:00:00");
+  const isCurrentMonth = (month: string) => month === currentMonthKey;
+
+  const expectedFor = (month: string): { total: number; contributions: { so: SalesOrder; pendingQty: number; unitValue: number; value: number; scheduledDate: string; overdueRolled: boolean }[] } => {
+    const contributions: { so: SalesOrder; pendingQty: number; unitValue: number; value: number; scheduledDate: string; overdueRolled: boolean }[] = [];
     let total = 0;
+    const mStart = monthStart(month);
+    const rollOverdue = isCurrentMonth(month);
     db.salesOrders.forEach(so => {
       if (!so.schedules || so.schedules.length === 0) return;
       const orderQty = totalOrderQty(so);
@@ -75,19 +84,70 @@ export function TaxDashboard() {
       const orderValue = so.items.reduce((a, it) => a + (Number(it.qty) || 0) * (Number(it.rate) || 0), 0);
       const unitValue = orderValue / orderQty;
       so.schedules.forEach(s => {
-        if (!s.date || s.date.slice(0, 7) !== month) return;
+        if (!s.date) return;
+        const slotMonth = s.date.slice(0, 7);
+        const slotDate = new Date(s.date + "T00:00:00");
+        const inMonth = slotMonth === month;
+        const isOverdueRollForward = rollOverdue && slotDate < mStart;
+        if (!inMonth && !isOverdueRollForward) return;
         const pending = Math.max(0, (Number(s.qty) || 0) - (Number(s.deliveredQty) || 0));
         if (pending <= 0) return;
         const value = pending * unitValue;
-        contributions.push({ so, pendingQty: pending, unitValue, value, scheduledDate: s.date });
+        contributions.push({ so, pendingQty: pending, unitValue, value, scheduledDate: s.date, overdueRolled: isOverdueRollForward });
         total += value;
       });
     });
     return { total, contributions };
   };
 
-  const expectedBreakdown = useMemo(() => expectedFor(monthKey), [db.salesOrders, monthKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const expectedBreakdown = useMemo(() => expectedFor(monthKey), [db.salesOrders, monthKey, currentMonthKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const expectedSales = expectedBreakdown.total;
+
+  // ------------------------------------------------------------------
+  // Expected Purchases — derived from PO expectedDeliveryDate.
+  // For each open PO (not Cancelled / not fully received), the remaining
+  // balance qty (per item) is what's still expected. If PO's expected
+  // delivery falls in the selected month → count in that month.
+  // Same auto-roll rule applies for overdue POs on the current month.
+  // ------------------------------------------------------------------
+  const expectedPurchaseFor = (month: string): { taxable: number; gst: number; contributions: { po: typeof db.purchaseOrders[number]; balanceQty: number; taxable: number; gst: number; date: string; overdueRolled: boolean }[] } => {
+    const contributions: { po: typeof db.purchaseOrders[number]; balanceQty: number; taxable: number; gst: number; date: string; overdueRolled: boolean }[] = [];
+    let taxable = 0, gst = 0;
+    const mStart = monthStart(month);
+    const rollOverdue = isCurrentMonth(month);
+    db.purchaseOrders.forEach(po => {
+      if (po.status === "Cancelled") return;
+      if (!po.expectedDeliveryDate) return;
+      const slotMonth = po.expectedDeliveryDate.slice(0, 7);
+      const slotDate = new Date(po.expectedDeliveryDate + "T00:00:00");
+      const inMonth = slotMonth === month;
+      const isOverdueRollForward = rollOverdue && slotDate < mStart;
+      if (!inMonth && !isOverdueRollForward) return;
+      // compute already received per item
+      const already: Record<string, number> = {};
+      db.grns.filter(g => g.poId === po.id).forEach(g => g.receivedItems.forEach(r => { already[r.itemId] = (already[r.itemId] || 0) + (r.qty || 0); }));
+      let poTaxable = 0, poGst = 0, poBalanceQty = 0;
+      po.items.forEach(line => {
+        const balance = Math.max(0, (line.qty || 0) - (already[line.itemId] || 0));
+        if (balance <= 0) return;
+        poBalanceQty += balance;
+        const item = db.items.find(x => x.id === line.itemId);
+        const rate = item?.gstRate ?? 18;
+        const lineTax = balance * (line.rate || 0);
+        poTaxable += lineTax;
+        poGst += lineTax * (rate / 100);
+      });
+      if (poTaxable <= 0) return;
+      taxable += poTaxable;
+      gst += poGst;
+      contributions.push({ po, balanceQty: poBalanceQty, taxable: poTaxable, gst: poGst, date: po.expectedDeliveryDate, overdueRolled: isOverdueRollForward });
+    });
+    return { taxable, gst, contributions };
+  };
+
+  const expectedPurchaseBreakdown = useMemo(() => expectedPurchaseFor(monthKey), [db.purchaseOrders, db.grns, db.items, monthKey, currentMonthKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const expectedPurchases = expectedPurchaseBreakdown.taxable;
+  const gstOnExpectedPurchases = expectedPurchaseBreakdown.gst;
 
   // ---- helpers to compute sales / purchases per proforma / PO ----
   const proformaTotals = (p: typeof db.proformas[number]) => {
@@ -150,7 +210,7 @@ export function TaxDashboard() {
   // ---- computed KPI values ----
   const avgGstOnSalesPct = current.sales > 0 ? (current.outputGst / current.sales) * 100 : 18;
   const gstOnExpected = expectedSales * (avgGstOnSalesPct / 100);
-  const estimatedNetGst = Math.max(0, (current.outputGst + gstOnExpected) - current.inputGst);
+  const estimatedNetGst = Math.max(0, (current.outputGst + gstOnExpected) - (current.inputGst + gstOnExpectedPurchases));
   const achievementPct = expectedSales > 0 ? Math.min(999, (current.sales / expectedSales) * 100) : 0;
   const remainingTarget = Math.max(0, expectedSales - current.sales);
 
@@ -180,6 +240,8 @@ export function TaxDashboard() {
       ["GST on Sales (Output GST)", current.outputGst],
       ["GST on Purchases (Input GST)", current.inputGst],
       ["GST on Expected Sales", gstOnExpected],
+      ["Expected Purchases", expectedPurchases],
+      ["GST on Expected Purchases", gstOnExpectedPurchases],
       ["Estimated Net GST Payable", estimatedNetGst],
       ["Sales Target Achievement (%)", Number(achievementPct.toFixed(2))],
       ["Remaining Sales Target", remainingTarget],
@@ -211,6 +273,8 @@ export function TaxDashboard() {
           <tr><td>GST on Sales (Output GST)</td><td style="text-align:right">${fmtINR(current.outputGst)}</td></tr>
           <tr><td>GST on Purchases (Input GST)</td><td style="text-align:right">${fmtINR(current.inputGst)}</td></tr>
           <tr><td>GST on Expected Sales</td><td style="text-align:right">${fmtINR(gstOnExpected)}</td></tr>
+          <tr><td>Expected Purchases</td><td style="text-align:right">${fmtINR(expectedPurchases)}</td></tr>
+          <tr><td>GST on Expected Purchases</td><td style="text-align:right">${fmtINR(gstOnExpectedPurchases)}</td></tr>
           <tr><td><b>Estimated Net GST Payable</b></td><td style="text-align:right"><b>${fmtINR(estimatedNetGst)}</b></td></tr>
           <tr><td>Sales Target Achievement</td><td style="text-align:right">${achievementPct.toFixed(2)}%</td></tr>
           <tr><td>Remaining Sales Target</td><td style="text-align:right">${fmtINR(remainingTarget)}</td></tr>
@@ -287,11 +351,15 @@ export function TaxDashboard() {
             <p className="text-xs text-slate-500 mt-1">
               Computed from every Sales Order's delivery schedule falling in {current.label}. Only the <b>pending</b> qty per slot
               (scheduled − delivered) contributes, so completed / cancelled deliveries are excluded automatically.
+              {isCurrentMonth(monthKey) && <> Overdue pending slots from earlier months are <b>auto-rolled</b> into this month.</>}
             </p>
             {expectedBreakdown.contributions.length > 0 ? (
               <div className="mt-3 rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
-                <div className="px-3 py-1.5 text-[11px] uppercase tracking-wide text-slate-500 bg-slate-50 dark:bg-slate-800/40 border-b border-slate-200 dark:border-slate-700">
-                  Slot breakdown ({expectedBreakdown.contributions.length})
+                <div className="px-3 py-1.5 text-[11px] uppercase tracking-wide text-slate-500 bg-slate-50 dark:bg-slate-800/40 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+                  <span>Slot breakdown ({expectedBreakdown.contributions.length})</span>
+                  {expectedBreakdown.contributions.some(c => c.overdueRolled) && (
+                    <Badge color="amber">{expectedBreakdown.contributions.filter(c => c.overdueRolled).length} overdue rolled</Badge>
+                  )}
                 </div>
                 <div className="max-h-40 overflow-y-auto">
                   {expectedBreakdown.contributions.map((c, i) => {
@@ -299,9 +367,10 @@ export function TaxDashboard() {
                     return (
                       <div key={c.so.id + "-" + i} className="flex items-center justify-between text-xs px-3 py-1.5 border-b last:border-b-0 border-slate-100 dark:border-slate-800">
                         <div className="min-w-0">
-                          <div className="font-medium text-slate-700 dark:text-slate-200 truncate">
-                            <span className="font-mono text-[10px] text-slate-500 mr-2">{c.so.number}</span>
-                            {cust?.name || "Unknown Customer"}
+                          <div className="font-medium text-slate-700 dark:text-slate-200 truncate flex items-center gap-1.5">
+                            <span className="font-mono text-[10px] text-slate-500">{c.so.number}</span>
+                            <span className="truncate">{cust?.name || "Unknown Customer"}</span>
+                            {c.overdueRolled && <Badge color="amber">Overdue</Badge>}
                           </div>
                           <div className="text-[11px] text-slate-500">
                             {c.scheduledDate} · {c.pendingQty} Nos × {fmtINR(c.unitValue)}
@@ -326,6 +395,64 @@ export function TaxDashboard() {
         </div>
       </Card>
 
+      {/* Expected Purchases — auto-derived from PO Expected Delivery Dates */}
+      <Card>
+        <div className="p-5">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Label className="!mb-0">Expected Purchases &amp; Input GST — {current.label}</Label>
+            <Badge color="teal">Auto from PO Expected Delivery</Badge>
+          </div>
+          <div className="mt-2 grid sm:grid-cols-2 gap-4">
+            <div>
+              <div className="text-xs uppercase text-slate-500">Expected Purchases</div>
+              <div className="text-2xl font-bold text-slate-800 dark:text-slate-100" data-testid="tax-expected-purchases">{fmtINR(expectedPurchases)}</div>
+            </div>
+            <div>
+              <div className="text-xs uppercase text-slate-500">GST on Expected Purchases (Input GST)</div>
+              <div className="text-2xl font-bold text-slate-800 dark:text-slate-100" data-testid="tax-expected-input-gst">{fmtINR(gstOnExpectedPurchases)}</div>
+            </div>
+          </div>
+          <p className="text-xs text-slate-500 mt-2">
+            Only the <b>balance qty</b> (ordered − already received) of open POs contributes; cancelled and fully-received POs are excluded.
+            {isCurrentMonth(monthKey) && <> Overdue open POs from earlier months are <b>auto-rolled</b> into this month.</>}
+          </p>
+          {expectedPurchaseBreakdown.contributions.length > 0 ? (
+            <div className="mt-3 rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
+              <div className="px-3 py-1.5 text-[11px] uppercase tracking-wide text-slate-500 bg-slate-50 dark:bg-slate-800/40 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+                <span>PO breakdown ({expectedPurchaseBreakdown.contributions.length})</span>
+                {expectedPurchaseBreakdown.contributions.some(c => c.overdueRolled) && (
+                  <Badge color="amber">{expectedPurchaseBreakdown.contributions.filter(c => c.overdueRolled).length} overdue rolled</Badge>
+                )}
+              </div>
+              <div className="max-h-40 overflow-y-auto">
+                {expectedPurchaseBreakdown.contributions.map((c, i) => {
+                  const vendor = db.parties.find(p => p.id === c.po.vendorId);
+                  return (
+                    <div key={c.po.id + "-" + i} className="flex items-center justify-between text-xs px-3 py-1.5 border-b last:border-b-0 border-slate-100 dark:border-slate-800">
+                      <div className="min-w-0">
+                        <div className="font-medium text-slate-700 dark:text-slate-200 truncate flex items-center gap-1.5">
+                          <span className="font-mono text-[10px] text-slate-500">{c.po.number}</span>
+                          <span className="truncate">{vendor?.name || "Unknown Vendor"}</span>
+                          {c.overdueRolled && <Badge color="amber">Overdue</Badge>}
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          {c.date} · balance {c.balanceQty} units · taxable {fmtINR(c.taxable)}
+                        </div>
+                      </div>
+                      <div className="font-semibold text-slate-800 dark:text-slate-100 ml-3 shrink-0">GST {fmtINR(c.gst)}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <div className="mt-3 text-xs text-slate-500 rounded-lg border border-dashed border-slate-300 dark:border-slate-700 px-3 py-2">
+              No open POs with an Expected Delivery Date in {current.label}. Set the Expected Delivery Date on Purchase Orders to include them here.
+            </div>
+          )}
+        </div>
+      </Card>
+
       {/* KPI cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3" data-testid="tax-kpis">
         <KpiCard label="Sales Till Date" value={fmtINR(current.sales)} accent="from-indigo-500 to-violet-600" testid="kpi-sales-tilldate"/>
@@ -333,6 +460,8 @@ export function TaxDashboard() {
         <KpiCard label="GST on Sales (Output)" value={fmtINR(current.outputGst)} accent="from-rose-500 to-pink-600" testid="kpi-output-gst"/>
         <KpiCard label="GST on Purchases (Input)" value={fmtINR(current.inputGst)} accent="from-emerald-500 to-teal-600" testid="kpi-input-gst"/>
         <KpiCard label="GST on Expected Sales" value={fmtINR(gstOnExpected)} accent="from-sky-500 to-blue-600" testid="kpi-expected-gst"/>
+        <KpiCard label="Expected Purchases" value={fmtINR(expectedPurchases)} accent="from-orange-500 to-amber-600" testid="kpi-expected-purchases"/>
+        <KpiCard label="GST on Expected Purchases" value={fmtINR(gstOnExpectedPurchases)} accent="from-teal-500 to-cyan-600" testid="kpi-expected-input-gst"/>
         <KpiCard label="Estimated Net GST Payable" value={fmtINR(estimatedNetGst)} accent="from-fuchsia-500 to-purple-600" testid="kpi-net-payable" highlight/>
         <KpiCard label="Sales Target Achievement" value={`${achievementPct.toFixed(1)}%`} accent="from-lime-500 to-emerald-600" testid="kpi-achievement"
           extra={
