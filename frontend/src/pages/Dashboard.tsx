@@ -5,6 +5,7 @@ import { fmtINR } from "../lib/utils";
 import { roleDescriptions, roleLabels } from "../lib/permissions";
 import { IconShop, IconFile, IconBox, IconFactory, IconCart, IconChart } from "../components/icons";
 import { orderDelayInfo, totalDeliveredQty, totalScheduledQty, totalOrderQty } from "../lib/delivery";
+import { overdueSummary } from "./Procurement";
 
 export function Dashboard() {
   const { db, currentUser } = useStore();
@@ -129,6 +130,7 @@ export function Dashboard() {
       </div>
 
       <DelayedDeliveries salesOrders={salesOrders} db={db} />
+      <OverduePOs db={db} />
 
       <div className="grid lg:grid-cols-2 gap-5">
         <Card>
@@ -254,3 +256,48 @@ function DelayedDeliveries({ salesOrders, db }: { salesOrders: any[]; db: any })
     </Card>
   );
 }
+
+function OverduePOs({ db }: { db: any }) {
+  const rows = db.purchaseOrders
+    .map((po: any) => ({ po, summary: overdueSummary(po, db.grns) }))
+    .filter((r: any) => r.summary.delayDays > 0 && !r.summary.fullyReceived && r.po.status !== "Cancelled")
+    .sort((a: any, b: any) => b.summary.delayDays - a.summary.delayDays);
+
+  return (
+    <Card data-testid="dashboard-overdue-pos">
+      <CardHeader
+        title="Overdue Purchase Orders"
+        right={<Badge color={rows.length ? "red" : "green"}>{rows.length}</Badge>}
+      />
+      {rows.length === 0 ? (
+        <div className="p-4"><Empty title="No overdue Purchase Orders" /></div>
+      ) : (
+        <div className="p-4 space-y-2 max-h-80 overflow-y-auto">
+          {rows.map(({ po, summary }: any) => {
+            const vendor = db.parties.find((p: any) => p.id === po.vendorId);
+            return (
+              <div key={po.id} className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2">
+                <div className="min-w-0">
+                  <div className="font-medium text-slate-700 dark:text-slate-200 truncate flex items-center gap-1.5">
+                    <span aria-hidden>🔴</span>
+                    <span className="font-mono text-xs mr-1 text-slate-500">{po.number}</span>
+                    <span className="truncate">{vendor?.name || "Unknown Vendor"}</span>
+                  </div>
+                  <div className="text-xs text-slate-500 mt-0.5">
+                    Received {summary.received} / Pending {summary.pending} of {summary.ordered}
+                    {po.expectedDeliveryDate ? ` · Expected ${po.expectedDeliveryDate}` : ""}
+                  </div>
+                </div>
+                <div className="text-right shrink-0 ml-3">
+                  <Badge color="red">{summary.delayDays} {summary.delayDays === 1 ? "Day" : "Days"} Delayed</Badge>
+                  <div className="text-[11px] text-slate-500 mt-1">Status: <b>{po.status}</b></div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+  );
+}
+

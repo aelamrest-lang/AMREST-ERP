@@ -116,6 +116,44 @@ function getDefaultPurchaseTerms(settings: any) {
   return terms.length ? terms.map((t: any, i: number) => `${i + 1}. ${t.text}`).join("\n") : DEFAULT_PO_TERMS;
 }
 
+function addDaysISO(iso: string, days: number): string {
+  if (!iso) return "";
+  const d = new Date(iso + "T00:00:00");
+  if (isNaN(d.getTime())) return "";
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+const DEFAULT_LEAD_TIME_DAYS = 10;
+
+function poReceivedTotals(po: PurchaseOrder, grns: GRN[]): { received: number; ordered: number; pending: number; fullyReceived: boolean } {
+  const ordered = po.items.reduce((s, i) => s + (Number(i.qty) || 0), 0);
+  const already: Record<string, number> = {};
+  grns.filter(g => g.poId === po.id).forEach(g => g.receivedItems.forEach(r => { already[r.itemId] = (already[r.itemId] || 0) + (r.qty || 0); }));
+  const received = po.items.reduce((s, i) => s + Math.min(i.qty, already[i.itemId] || 0), 0);
+  const pending = Math.max(0, ordered - received);
+  const fullyReceived = po.items.length > 0 && po.items.every(i => (already[i.itemId] || 0) >= i.qty);
+  return { received, ordered, pending, fullyReceived };
+}
+
+export function poDelayDays(po: PurchaseOrder, grns: GRN[], now: Date = new Date()): number {
+  if (po.status === "Cancelled") return 0;
+  const { fullyReceived } = poReceivedTotals(po, grns);
+  if (fullyReceived) return 0;
+  if (!po.expectedDeliveryDate) return 0;
+  const due = new Date(po.expectedDeliveryDate + "T23:59:59");
+  if (isNaN(due.getTime()) || now <= due) return 0;
+  return Math.max(1, Math.floor((now.getTime() - due.getTime()) / (24 * 60 * 60 * 1000)));
+}
+
+export function isPOOverdue(po: PurchaseOrder, grns: GRN[], now: Date = new Date()): boolean {
+  return poDelayDays(po, grns, now) > 0;
+}
+
+export function overdueSummary(po: PurchaseOrder, grns: GRN[], now: Date = new Date()) {
+  const totals = poReceivedTotals(po, grns);
+  return { ...totals, delayDays: poDelayDays(po, grns, now) };
+}
+
 export function PurchaseOrders() {
   const { db, setDB, log, currentUser } = useStore();
   const canCreate = userCan(currentUser, "purchase", "create");
@@ -129,10 +167,15 @@ export function PurchaseOrders() {
 
   const vendors = db.parties.filter(p => p.type === "vendor" || p.type === "supplier");
 
-  const blank = (): PurchaseOrder => ({
-    id: "", number: nextNumber("PO", db.purchaseOrders), date: todayISO(), vendorId: vendors[0]?.id || "",
-    items: [], terms: getDefaultPurchaseTerms(db.settings), expectedDeliveryDate: "", status: "Draft", createdAt: new Date().toISOString(),
-  });
+  const blank = (): PurchaseOrder => {
+    const d = todayISO();
+    return {
+      id: "", number: nextNumber("PO", db.purchaseOrders), date: d, vendorId: vendors[0]?.id || "",
+      items: [], terms: getDefaultPurchaseTerms(db.settings),
+      expectedDeliveryDate: addDaysISO(d, DEFAULT_LEAD_TIME_DAYS),
+      status: "Draft", createdAt: new Date().toISOString(),
+    };
+  };
   const [form, setForm] = useState<PurchaseOrder>(blank());
 
   const openNew = () => { setEdit(null); setForm(blank()); setItemSearch({}); setOpen(true); };
@@ -227,25 +270,49 @@ export function PurchaseOrders() {
       </div>
       <Card>
         <Table>
-          <thead><tr><Th>#</Th><Th>Date</Th><Th>Vendor</Th><Th>Items</Th><Th>Expected Delivery</Th><Th>Total</Th><Th>Status</Th><Th></Th></tr></thead>
+          <thead><tr><Th>#</Th><Th>Date</Th><Th>Vendor</Th><Th>Items</Th><Th>Expected Delivery</Th><Th>Received / Pending</Th><Th>Total</Th><Th>Status</Th><Th></Th></tr></thead>
           <tbody>
             {db.purchaseOrders.map(p => {
               const t = p.items.reduce((s, i) => s + i.qty * i.rate, 0);
+              const summary = overdueSummary(p, db.grns);
+              const showDelay = summary.delayDays > 0 && !summary.fullyReceived && p.status !== "Cancelled";
+              const derivedStatus: PurchaseOrder["status"] = summary.fullyReceived
+                ? (p.status === "Cancelled" ? p.status : "Completed")
+                : p.status;
               return (
-                <tr key={p.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                <tr key={p.id} className={"hover:bg-slate-50 dark:hover:bg-slate-800/50 " + (showDelay ? "bg-rose-50/60 dark:bg-rose-900/10" : "")}>
                   <Td className="font-mono text-xs">{p.number}</Td>
                   <Td>{p.date}</Td>
                   <Td>{db.parties.find(v => v.id === p.vendorId)?.name}</Td>
                   <Td>{p.items.length}</Td>
-                  <Td>{p.expectedDeliveryDate || <span className="text-slate-400">—</span>}</Td>
+                  <Td>
+                    <div>{p.expectedDeliveryDate || <span className="text-slate-400">—</span>}</div>
+                    {showDelay && (
+                      <div className="text-[11px] font-semibold text-rose-600 flex items-center gap-1" data-testid={`po-delay-${p.number}`}>
+                        <span aria-hidden>🔴</span>
+                        {summary.delayDays} {summary.delayDays === 1 ? "Day" : "Days"} Delayed
+                      </div>
+                    )}
+                  </Td>
+                  <Td>
+                    <div className="text-xs">
+                      <span className="font-semibold">{summary.received}</span>
+                      <span className="text-slate-400"> / </span>
+                      <span className={summary.pending > 0 ? "text-amber-600 font-semibold" : "text-emerald-600 font-semibold"}>{summary.pending}</span>
+                      <span className="text-slate-400"> of {summary.ordered}</span>
+                    </div>
+                  </Td>
                   <Td className="font-semibold">{fmtINR(t)}</Td>
                   <Td>
-                    <Select disabled={!canEdit && !canApprove} value={p.status} onChange={(e: any) => {
+                    <Select disabled={!canEdit && !canApprove} value={derivedStatus} onChange={(e: any) => {
                       setDB(d => ({...d, purchaseOrders: d.purchaseOrders.map(x => x.id === p.id ? {...x, status: e.target.value} : x)}));
                       log(`PO ${p.number} → ${e.target.value}`, "Purchase");
                     }} className="text-xs py-1">
                       <option>Draft</option><option>Approved</option><option>Partially Received</option><option>Completed</option><option>Received</option><option>Cancelled</option>
                     </Select>
+                    {summary.fullyReceived && p.status !== "Completed" && p.status !== "Cancelled" && (
+                      <div className="text-[10px] text-emerald-600 mt-0.5">Auto-completed via GRN</div>
+                    )}
                   </Td>
                   <Td><div className="flex gap-1">
                     {canEdit && <Button size="sm" variant="ghost" onClick={() => openEdit(p)}><IconEdit size={14}/></Button>}
@@ -263,7 +330,19 @@ export function PurchaseOrders() {
       <Modal open={open} onClose={() => setOpen(false)} title={edit ? `Edit ${edit.number}` : "New Purchase Order"} size="xl">
         <div className="grid sm:grid-cols-4 gap-3">
           <div><Label>PO No.</Label><Input value={form.number} disabled/></div>
-          <div><Label>Date</Label><Input type="date" value={form.date} onChange={(e: any) => setForm({...form, date: e.target.value})}/></div>
+          <div><Label>Date</Label><Input type="date" value={form.date} onChange={(e: any) => {
+            const newDate: string = e.target.value;
+            // Auto-shift the Expected Delivery when it hasn't been customised
+            // (i.e. it's still exactly Date + 10 days, or empty). If the user
+            // set it manually, we don't touch it.
+            const currentOffsetDefault = addDaysISO(form.date, DEFAULT_LEAD_TIME_DAYS);
+            const isStillDefault = !form.expectedDeliveryDate || form.expectedDeliveryDate === currentOffsetDefault;
+            setForm({
+              ...form,
+              date: newDate,
+              expectedDeliveryDate: isStillDefault ? addDaysISO(newDate, DEFAULT_LEAD_TIME_DAYS) : form.expectedDeliveryDate,
+            });
+          }}/></div>
           <div><Label>Vendor</Label>
             <VendorCombobox
               vendors={vendors}
@@ -279,6 +358,20 @@ export function PurchaseOrders() {
               onChange={(e: any) => setForm({...form, expectedDeliveryDate: e.target.value})}
               data-testid="po-expected-delivery"
             />
+            <p className="text-[11px] text-slate-500 mt-1">
+              Defaults to PO Date + {DEFAULT_LEAD_TIME_DAYS} days.
+              {form.date && form.expectedDeliveryDate !== addDaysISO(form.date, DEFAULT_LEAD_TIME_DAYS) && (
+                <>
+                  {" "}
+                  <button
+                    type="button"
+                    className="underline text-indigo-500 hover:text-indigo-700"
+                    onClick={() => setForm({ ...form, expectedDeliveryDate: addDaysISO(form.date, DEFAULT_LEAD_TIME_DAYS) })}
+                    data-testid="po-reset-expected"
+                  >Reset to default</button>
+                </>
+              )}
+            </p>
           </div>
         </div>
         <div className="mt-3 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
