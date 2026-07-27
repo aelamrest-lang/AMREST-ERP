@@ -20,6 +20,28 @@ export function Dashboard() {
   const pendingQuotations = quotations.filter(q => q.status === "Quotation Sent" || q.status === "Negotiation").length;
   const lowStock = db.items.filter(i => i.currentStock <= i.minStock);
 
+  const [drill, setDrill] = useState<{ type: "sales" | "production" | "customer"; monthKey?: string; monthLabel?: string; customerId?: string } | null>(null);
+
+  // Financial Year selector (April → March) — declared FIRST so every filter below can use isInFy.
+  const now = new Date();
+  const currentFyStartYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+  const [fyStartYear, setFyStartYear] = useState<number>(currentFyStartYear);
+  const fyOptions = [currentFyStartYear + 1, currentFyStartYear, currentFyStartYear - 1, currentFyStartYear - 2].sort((a, b) => b - a);
+  const fyLabel = (y: number) => `FY ${y}-${String((y + 1) % 100).padStart(2, "0")}`;
+
+  // 12 FY month buckets in Financial-Year order (Apr → Mar)
+  const monthBuckets: { key: string; label: string; date: Date }[] = [];
+  for (let i = 0; i < 12; i++) {
+    const d = new Date(fyStartYear, 3 + i, 1);
+    monthBuckets.push({
+      key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+      label: d.toLocaleString("en-US", { month: "short" }) + " " + String(d.getFullYear()).slice(2),
+      date: d,
+    });
+  }
+  const fyMonthKeys = monthBuckets.map(m => m.key);
+  const isInFy = (dateStr: string | undefined) => !!dateStr && fyMonthKeys.includes(dateStr.slice(0, 7));
+
   // Shortage analysis from pending Job Cards (Open / In Progress).
   // Each JC's `reservedItems` is already the BOM × qty snapshot at JC creation.
   interface ShortageJC { jc: any; qty: number }
@@ -58,28 +80,6 @@ export function Dashboard() {
   shortages.sort((a, b) => b.shortage - a.shortage);
   const [shortageDrill, setShortageDrill] = useState<Shortage | null>(null);
   const productionInProg = db.jobCards.filter(j => j.status === "In Progress").length;
-
-  const [drill, setDrill] = useState<{ type: "sales" | "production" | "customer"; monthKey?: string; monthLabel?: string; customerId?: string } | null>(null);
-
-  // Financial Year selector (April → March)
-  const now = new Date();
-  const currentFyStartYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
-  const [fyStartYear, setFyStartYear] = useState<number>(currentFyStartYear);
-  const fyOptions = [currentFyStartYear + 1, currentFyStartYear, currentFyStartYear - 1, currentFyStartYear - 2].sort((a, b) => b - a);
-  const fyLabel = (y: number) => `FY ${y}-${String((y + 1) % 100).padStart(2, "0")}`;
-
-  // 12 FY month buckets in Financial-Year order (Apr → Mar)
-  const monthBuckets: { key: string; label: string; date: Date }[] = [];
-  for (let i = 0; i < 12; i++) {
-    const d = new Date(fyStartYear, 3 + i, 1);
-    monthBuckets.push({
-      key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
-      label: d.toLocaleString("en-US", { month: "short" }) + " " + String(d.getFullYear()).slice(2),
-      date: d,
-    });
-  }
-  const fyMonthKeys = monthBuckets.map(m => m.key);
-  const isInFy = (dateStr: string | undefined) => !!dateStr && fyMonthKeys.includes(dateStr.slice(0, 7));
 
   // ---- Monthly Sales from Delivery Challans ----
   const soValue = (soId: string): { qty: number; value: number } => {
