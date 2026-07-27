@@ -508,6 +508,7 @@ function OverduePOs({ db }: { db: any }) {
 
 function SalesForecast({ salesOrders, db }: { salesOrders: any[]; db: any }) {
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
+  const [productFilter, setProductFilter] = useState<string | null>(null);
 
   // Build next 6 months keys starting from current month
   const now = new Date();
@@ -736,7 +737,7 @@ function SalesForecast({ salesOrders, db }: { salesOrders: any[]; db: any }) {
         </div>
       </div>
 
-      <Modal open={!!selected} onClose={() => setSelectedMonth(null)} title={selected ? `Forecast · ${selected.label}` : "Forecast"} size="xl">
+      <Modal open={!!selected} onClose={() => { setSelectedMonth(null); setProductFilter(null); }} title={selected ? `Forecast · ${selected.label}` : "Forecast"} size="xl">
         {selected && (
           <div className="space-y-3">
             <div className="grid grid-cols-3 gap-3">
@@ -758,23 +759,94 @@ function SalesForecast({ salesOrders, db }: { salesOrders: any[]; db: any }) {
               </div>
             </div>
 
-            {/* Product-wise summary for this month */}
-            <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
-              <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-2">Products this month</div>
-              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
-                {Object.entries(
-                  contributions[selected.key].reduce<Record<string, number>>((acc, c) => {
-                    acc[c.productName] = (acc[c.productName] || 0) + c.qty; return acc;
-                  }, {})
-                ).sort((a, b) => b[1] - a[1]).map(([name, q]) => (
-                  <span key={name} className="inline-flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded-sm" style={{ background: productColor[name] || OTHER_COLOR }} />
-                    <span className="font-medium text-slate-700 dark:text-slate-200 truncate max-w-[280px]">{name}</span>
-                    <span className="text-slate-500">— {Math.round(q)} Nos</span>
-                  </span>
-                ))}
-              </div>
-            </div>
+            {/* Product Mix — donut chart + filterable legend */}
+            {(() => {
+              const monthProducts = Object.entries(
+                contributions[selected.key].reduce<Record<string, { qty: number; value: number }>>((acc, c) => {
+                  const cur = acc[c.productName] || { qty: 0, value: 0 };
+                  cur.qty += c.qty; cur.value += c.value;
+                  acc[c.productName] = cur;
+                  return acc;
+                }, {})
+              ).map(([name, v]) => ({ name, ...v })).sort((a, b) => b.qty - a.qty);
+
+              const total = monthProducts.reduce((a, p) => a + p.qty, 0);
+              if (total === 0) return null;
+
+              const R = 62, r = 34, C = 80;
+              let cursor = 0;
+              const arcs = monthProducts.map(p => {
+                const frac = p.qty / total;
+                const startAngle = cursor * 2 * Math.PI - Math.PI / 2;
+                cursor += frac;
+                const endAngle = cursor * 2 * Math.PI - Math.PI / 2;
+                const largeArc = frac > 0.5 ? 1 : 0;
+                const x1 = C + R * Math.cos(startAngle), y1 = C + R * Math.sin(startAngle);
+                const x2 = C + R * Math.cos(endAngle), y2 = C + R * Math.sin(endAngle);
+                const x3 = C + r * Math.cos(endAngle), y3 = C + r * Math.sin(endAngle);
+                const x4 = C + r * Math.cos(startAngle), y4 = C + r * Math.sin(startAngle);
+                const d = `M ${x1} ${y1} A ${R} ${R} 0 ${largeArc} 1 ${x2} ${y2} L ${x3} ${y3} A ${r} ${r} 0 ${largeArc} 0 ${x4} ${y4} Z`;
+                return { name: p.name, qty: p.qty, value: p.value, pct: frac * 100, d, color: productColor[p.name] || OTHER_COLOR };
+              });
+
+              return (
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-4" data-testid="forecast-product-mix">
+                  <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-3">Products This Month · Product Mix</div>
+                  <div className="grid md:grid-cols-[160px_1fr] gap-4 items-center">
+                    <div className="relative">
+                      <svg viewBox="0 0 160 160" width="100%" style={{ maxWidth: 160 }}>
+                        {arcs.map((a, i) => {
+                          const active = productFilter === a.name;
+                          const dim = productFilter && !active;
+                          return (
+                            <path
+                              key={a.name + i}
+                              d={a.d}
+                              fill={a.color}
+                              opacity={dim ? 0.25 : 1}
+                              style={{ cursor: "pointer", transition: "opacity 120ms, transform 120ms", transformOrigin: "80px 80px" }}
+                              transform={active ? "scale(1.04)" : undefined}
+                              onClick={() => setProductFilter(active ? null : a.name)}
+                              data-testid={`mix-slice-${i}`}
+                            >
+                              <title>{`${a.name} · ${Math.round(a.qty)} Nos · ${a.pct.toFixed(1)}% · ${fmtINR(a.value)}`}</title>
+                            </path>
+                          );
+                        })}
+                        <text x="80" y="76" textAnchor="middle" fontSize="10" fill="currentColor" className="fill-slate-500">Total</text>
+                        <text x="80" y="94" textAnchor="middle" fontSize="18" fontWeight="700" fill="currentColor" className="fill-slate-800 dark:fill-slate-100">{Math.round(total)}</text>
+                      </svg>
+                    </div>
+                    <div className="space-y-1 max-h-52 overflow-y-auto pr-1">
+                      {arcs.map((a, i) => {
+                        const active = productFilter === a.name;
+                        return (
+                          <button
+                            type="button"
+                            key={a.name + "-legend-" + i}
+                            onClick={() => setProductFilter(active ? null : a.name)}
+                            className={"w-full flex items-center gap-2 text-left rounded px-2 py-1 text-xs transition " + (active ? "bg-indigo-50 dark:bg-indigo-900/30" : "hover:bg-slate-50 dark:hover:bg-slate-800/50")}
+                            data-testid={`mix-legend-${i}`}
+                          >
+                            <span className="w-3 h-3 rounded-sm shrink-0" style={{ background: a.color }} />
+                            <span className="font-medium text-slate-700 dark:text-slate-200 truncate flex-1" title={a.name}>{a.name}</span>
+                            <span className="text-slate-500 shrink-0">{Math.round(a.qty)} Nos</span>
+                            <span className="text-slate-400 shrink-0 w-12 text-right">{a.pct.toFixed(1)}%</span>
+                            <span className="text-slate-500 shrink-0 w-24 text-right">{fmtINR(a.value)}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  {productFilter && (
+                    <div className="mt-3 flex items-center justify-between text-xs bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-800 rounded px-3 py-1.5">
+                      <span>Filtered by <b>{productFilter}</b> — showing only that product's sales orders</span>
+                      <button type="button" onClick={() => setProductFilter(null)} className="text-indigo-600 hover:underline" data-testid="mix-clear-filter">Clear filter</button>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             <div className="rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 max-h-[52vh] overflow-y-auto">
               <Table>
@@ -787,6 +859,7 @@ function SalesForecast({ salesOrders, db }: { salesOrders: any[]; db: any }) {
                 <tbody>
                   {contributions[selected.key]
                     .slice()
+                    .filter(c => !productFilter || c.productName === productFilter)
                     .sort((a, b) => a.date.localeCompare(b.date) || a.so.number.localeCompare(b.so.number))
                     .map((c, i) => {
                       const cust = db.parties.find((p: any) => p.id === c.so.customerId);
@@ -813,7 +886,7 @@ function SalesForecast({ salesOrders, db }: { salesOrders: any[]; db: any }) {
               </Table>
             </div>
             <div className="flex justify-end">
-              <Button variant="outline" onClick={() => setSelectedMonth(null)}>Close</Button>
+              <Button variant="outline" onClick={() => { setSelectedMonth(null); setProductFilter(null); }}>Close</Button>
             </div>
           </div>
         )}
