@@ -38,6 +38,7 @@ export function SalesOrders() {
   });
   const [form, setForm] = useState<SalesOrder>(blank());
 
+  const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>({});
   const canManage = canManageSchedule(form, currentUser);
 
   const openNew = () => { setEdit(null); setForm(blank()); setOpen(true); };
@@ -150,7 +151,7 @@ export function SalesOrders() {
 
       <Card>
         <Table>
-          <thead><tr><Th>#</Th><Th>Date</Th><Th>Customer</Th><Th>Items</Th><Th>Delivery</Th><Th>Schedule</Th><Th>Total</Th><Th>Status</Th><Th></Th></tr></thead>
+          <thead><tr><Th>#</Th><Th>Date</Th><Th>Customer</Th><Th>Product(s) &amp; Qty</Th><Th>Delivery</Th><Th>Schedule</Th><Th>Total</Th><Th>Status</Th><Th></Th></tr></thead>
           <tbody>
             {list.map(o => {
               const t = calcDocTotals(o.items);
@@ -158,12 +159,53 @@ export function SalesOrders() {
               const sq = totalScheduledQty(o);
               const dq = totalDeliveredQty(o);
               const delay = orderDelayInfo(o);
+              const expanded = !!expandedItems[o.id];
+              const firstItem = o.items[0];
+              const extra = o.items.length - 1;
               return (
-                <tr key={o.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                <tr key={o.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 align-top">
                   <Td className="font-mono text-xs">{o.number}</Td>
                   <Td>{o.date}</Td>
                   <Td>{db.parties.find(x => x.id === o.customerId)?.name}</Td>
-                  <Td>{o.items.length}</Td>
+                  <Td>
+                    {firstItem ? (
+                      <div className="text-xs" data-testid={`so-items-${o.number}`}>
+                        {!expanded ? (
+                          <>
+                            <div className="font-medium text-slate-700 dark:text-slate-200 truncate max-w-[240px]" title={firstItem.name}>
+                              {firstItem.name}
+                            </div>
+                            <div className="text-[11px] text-slate-500">Qty: <b className="text-slate-700 dark:text-slate-200">{firstItem.qty}</b></div>
+                            {extra > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => setExpandedItems(prev => ({ ...prev, [o.id]: true }))}
+                                className="mt-1 text-[11px] text-indigo-600 hover:underline"
+                                data-testid={`so-items-expand-${o.number}`}
+                              >+{extra} more</button>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <ol className="space-y-0.5 list-decimal list-inside">
+                              {o.items.map((it, i) => (
+                                <li key={i} className="text-slate-700 dark:text-slate-200">
+                                  <span className="font-medium">{it.name}</span>
+                                  <span className="text-slate-500"> — Qty <b>{it.qty}</b></span>
+                                </li>
+                              ))}
+                            </ol>
+                            <button
+                              type="button"
+                              onClick={() => setExpandedItems(prev => ({ ...prev, [o.id]: false }))}
+                              className="mt-1 text-[11px] text-indigo-600 hover:underline"
+                              data-testid={`so-items-collapse-${o.number}`}
+                            >Show less</button>
+                          </>
+                        )}
+                      </div>
+                    ) : <span className="text-slate-400">—</span>}
+                  </Td>
                   <Td>{o.deliveryDate || "—"}</Td>
                   <Td>
                     <div className="text-xs">
