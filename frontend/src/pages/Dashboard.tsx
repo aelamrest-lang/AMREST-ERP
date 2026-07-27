@@ -515,20 +515,26 @@ function OverduePOs({ db }: { db: any }) {
 }
 
 
-function SalesForecast({ salesOrders, db, fyStartYear, fyLabel }: { salesOrders: any[]; db: any; fyStartYear: number; fyLabel: (y: number) => string }) {
+function SalesForecast({ salesOrders, db, fyStartYear: defaultFyStartYear, fyLabel }: { salesOrders: any[]; db: any; fyStartYear: number; fyLabel: (y: number) => string }) {
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
   const [productFilter, setProductFilter] = useState<Set<string>>(new Set());
+  const [fyStartYear, setFyStartYear] = useState<number>(defaultFyStartYear);
+  const [periodMonths, setPeriodMonths] = useState<3 | 6 | 9 | 12>(6);
+  const fyOptions = [defaultFyStartYear + 1, defaultFyStartYear, defaultFyStartYear - 1, defaultFyStartYear - 2].sort((a, b) => b - a);
 
-  // Rolling next-6 months constrained to selected Financial Year (Apr → Mar).
+  // Selected FY window (Apr 1 → Mar 31 of next year)
   const now = new Date();
   const fyStart = new Date(fyStartYear, 3, 1);
   const fyEnd = new Date(fyStartYear + 1, 2, 31);
+
+  // Period buckets: start at current month if inside FY, else at Apr; then N months forward,
+  // clamped to the FY end so slots never leak into a different FY.
   const startMonth = now >= fyStart && now <= fyEnd
     ? new Date(now.getFullYear(), now.getMonth(), 1)
     : fyStart;
   const months: { key: string; label: string; short: string }[] = [];
   const cursor = new Date(startMonth);
-  while (cursor <= fyEnd && months.length < 6) {
+  while (cursor <= fyEnd && months.length < periodMonths) {
     const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
     months.push({
       key,
@@ -537,7 +543,6 @@ function SalesForecast({ salesOrders, db, fyStartYear, fyLabel }: { salesOrders:
     });
     cursor.setMonth(cursor.getMonth() + 1);
   }
-  void fyLabel;
 
   // Palette for products (max 10 distinct + Other)
   const PALETTE = ["#6366f1", "#f59e0b", "#10b981", "#ec4899", "#0ea5e9", "#f97316", "#8b5cf6", "#14b8a6", "#ef4444", "#84cc16"];
@@ -640,9 +645,32 @@ function SalesForecast({ salesOrders, db, fyStartYear, fyLabel }: { salesOrders:
   return (
     <Card data-testid="dashboard-sales-forecast">
       <CardHeader
-        title="Next 6 Months Sales Forecast"
+        title="Sales Forecast"
         right={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={fyStartYear}
+              onChange={e => setFyStartYear(Number(e.target.value))}
+              className="bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 rounded-md px-2 py-1 text-xs border border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              data-testid="forecast-fy-select"
+              title="Select Financial Year"
+            >
+              {fyOptions.map(y => (
+                <option key={y} value={y}>{fyLabel(y)}</option>
+              ))}
+            </select>
+            <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 rounded-md p-0.5" data-testid="forecast-period-toggle">
+              {[3, 6, 9, 12].map(n => (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => setPeriodMonths(n as 3 | 6 | 9 | 12)}
+                  className={"px-2.5 py-0.5 text-[11px] rounded transition " + (periodMonths === n ? "bg-white dark:bg-slate-900 text-indigo-600 shadow font-semibold" : "text-slate-600 dark:text-slate-300 hover:text-slate-900")}
+                  data-testid={`forecast-period-${n}m`}
+                  title={n === 12 ? "Full Financial Year" : `${n} months`}
+                >{n}M</button>
+              ))}
+            </div>
             <Badge color="indigo">{Math.round(totalQty)} Nos</Badge>
             <Badge color="green">{fmtINR(totalValue)}</Badge>
             {totalPending > 0.5 && <Badge color="amber">{Math.round(totalPending)} pending</Badge>}
@@ -651,12 +679,12 @@ function SalesForecast({ salesOrders, db, fyStartYear, fyLabel }: { salesOrders:
       />
       <div className="p-4 grid lg:grid-cols-[1fr_1.1fr] gap-4">
         <div>
-          <div className="text-xs text-slate-500 mb-2">Product-wise scheduled qty per month · hover a segment for details · click a bar for the drill-down</div>
+          <div className="text-xs text-slate-500 mb-2">Product-wise scheduled qty · {fyLabel(fyStartYear)} · {periodMonths}-month view · hover for details, click a bar to drill down</div>
           {totalQty === 0 ? (
-            <Empty title="No delivery schedules found in the next 6 months" />
+            <Empty title={`No delivery schedules found in the selected ${periodMonths}-month window`} />
           ) : (
             <>
-              <div className="grid grid-cols-6 items-end gap-3 h-56 px-1">
+              <div className="grid items-end gap-3 h-56 px-1" style={{ gridTemplateColumns: `repeat(${months.length}, minmax(0, 1fr))` }}>
                 {rows.map(r => {
                   const active = selectedMonth === r.key;
                   const barPct = r.qty > 0 ? Math.max(4, (r.qty / maxMonthQty) * 100) : 3;
@@ -738,7 +766,7 @@ function SalesForecast({ salesOrders, db, fyStartYear, fyLabel }: { salesOrders:
                   </tr>
                 ))}
                 <tr className="bg-slate-100 dark:bg-slate-800/60 font-semibold">
-                  <Td>6-Month Total</Td>
+                  <Td>{periodMonths}-Month Total</Td>
                   <Td className="text-right">{Math.round(totalQty)}</Td>
                   <Td className="text-right">{fmtINR(totalValue)}</Td>
                   <Td className="text-right">{Math.round(totalPending)}</Td>
