@@ -91,6 +91,7 @@ def seed_state() -> dict:
     today = datetime.now(timezone.utc).isoformat()
     users = [
         {"id": "u-admin", "name": "Admin User", "email": "admin@amrest.in", "username": "admin", "password": "admin123", "role": "admin", "active": True, "createdAt": today},
+        {"id": "u-admin-anwar", "name": "Anwar (Admin)", "email": "aaa@amrest.in", "username": "aaa@amrest.in", "password": "anwar@123", "role": "admin", "active": True, "createdAt": today},
         {"id": "u-sales1", "name": "Rohit Sharma", "email": "rohit@amrest.in", "username": "rohit", "password": "sales123", "role": "sales", "active": True, "createdAt": today},
         {"id": "u-sales2", "name": "Priya Mehta", "email": "priya@amrest.in", "username": "priya", "password": "sales123", "role": "sales", "active": True, "createdAt": today},
         {"id": "u-production", "name": "Vikram Production", "email": "production@amrest.in", "username": "production", "password": "prod123", "role": "production", "active": True, "createdAt": today},
@@ -297,6 +298,30 @@ async def _startup_storage():
             logger.info("Emergent object storage initialized")
     except Exception as e:
         logger.error(f"Storage init failed: {e}")
+
+    # Ensure the aaa@amrest.in admin exists in the current state (idempotent)
+    try:
+        doc = await db.erp_state.find_one({"_id": STATE_ID}, {"_id": 0})
+        if doc and doc.get("data"):
+            state = doc["data"]
+            users = state.get("users", [])
+            has_new_admin = any((u.get("username", "").lower() == "aaa@amrest.in") for u in users)
+            if not has_new_admin:
+                users.append({
+                    "id": "u-admin-anwar",
+                    "name": "Anwar (Admin)",
+                    "email": "aaa@amrest.in",
+                    "username": "aaa@amrest.in",
+                    "password": "anwar@123",
+                    "role": "admin",
+                    "active": True,
+                    "createdAt": datetime.now(timezone.utc).isoformat(),
+                })
+                state["users"] = users
+                await db.erp_state.replace_one({"_id": STATE_ID}, {"_id": STATE_ID, "data": state}, upsert=True)
+                logger.info("Injected aaa@amrest.in admin into existing state")
+    except Exception as e:
+        logger.error(f"Admin migration failed: {e}")
 
 
 async def get_current_user_from_any(

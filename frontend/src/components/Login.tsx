@@ -12,7 +12,7 @@ export function Login() {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     const r = await login(u, p);
-    if (!r.ok) setErr(r.msg || "Login failed");
+    if (!r.ok) setErr("Invalid Username or Password");
   };
 
   return (
