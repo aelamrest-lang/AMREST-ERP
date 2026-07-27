@@ -679,65 +679,41 @@ function SalesForecast({ salesOrders, db, fyStartYear: defaultFyStartYear, fyLab
       />
       <div className="p-4 grid lg:grid-cols-[1fr_1.1fr] gap-4">
         <div>
-          <div className="text-xs text-slate-500 mb-2">Product-wise scheduled qty · {fyLabel(fyStartYear)} · {periodMonths}-month view · hover for details, click a bar to drill down</div>
+          <div className="text-xs text-slate-500 mb-2">Scheduled qty per month · {fyLabel(fyStartYear)} · {periodMonths}-month view · click a bar to see the product-wise breakdown</div>
           {totalQty === 0 ? (
             <Empty title={`No delivery schedules found in the selected ${periodMonths}-month window`} />
           ) : (
-            <>
-              <div className="grid items-end gap-3 h-56 px-1" style={{ gridTemplateColumns: `repeat(${months.length}, minmax(0, 1fr))` }}>
-                {rows.map(r => {
-                  const active = selectedMonth === r.key;
-                  const barPct = r.qty > 0 ? Math.max(4, (r.qty / maxMonthQty) * 100) : 3;
-                  const stacks = monthStacks[r.key] || [];
-                  return (
-                    <button
-                      key={r.key}
-                      type="button"
-                      onClick={() => r.qty > 0 && setSelectedMonth(r.key)}
-                      data-testid={`forecast-bar-${r.key}`}
-                      className="flex flex-col items-center gap-1 group focus:outline-none h-full justify-end"
-                      disabled={r.qty === 0}
-                    >
-                      <div className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 h-4">{r.qty > 0 ? Math.round(r.qty) : ""}</div>
-                      <div
-                        className={"w-full rounded-t-md overflow-hidden flex flex-col-reverse " + (r.qty === 0 ? "bg-slate-200 dark:bg-slate-700 opacity-60" : active ? "ring-2 ring-indigo-500" : "")}
-                        style={{ height: `${barPct}%` }}
-                      >
-                        {stacks.length === 0 && r.qty === 0 && <div className="h-1" />}
-                        {stacks.map((st, i) => {
-                          const pct = (st.qty / r.qty) * 100;
-                          return (
-                            <div
-                              key={st.name + "-" + i}
-                              style={{ height: `${pct}%`, background: st.color }}
-                              title={`${st.name}: ${Math.round(st.qty)} Nos in ${r.label}`}
-                              className="transition-all cursor-pointer hover:brightness-110"
-                            />
-                          );
-                        })}
-                      </div>
-                      <div className="text-[10px] text-slate-500 mt-1">{r.short}</div>
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
-                {topProducts.map(p => (
-                  <span key={p.name} className="inline-flex items-center gap-1.5 text-slate-600 dark:text-slate-300">
-                    <span className="w-3 h-3 rounded-sm shrink-0" style={{ background: productColor[p.name] }} />
-                    <span className="truncate max-w-[180px]" title={p.name}>{p.name}</span>
-                    <span className="text-slate-400">· {Math.round(p.totalQty)}</span>
-                  </span>
-                ))}
-                {otherProducts.length > 0 && (
-                  <span className="inline-flex items-center gap-1.5 text-slate-600 dark:text-slate-300">
-                    <span className="w-3 h-3 rounded-sm" style={{ background: OTHER_COLOR }} />
-                    Other · {Math.round(otherProducts.reduce((a, p) => a + p.totalQty, 0))}
-                  </span>
-                )}
-              </div>
-            </>
+            <div className="grid items-end gap-3 h-56 px-1" style={{ gridTemplateColumns: `repeat(${months.length}, minmax(0, 1fr))` }}>
+              {rows.map(r => {
+                const active = selectedMonth === r.key;
+                const barPct = r.qty > 0 ? Math.max(4, (r.qty / maxMonthQty) * 100) : 3;
+                return (
+                  <button
+                    key={r.key}
+                    type="button"
+                    onClick={() => r.qty > 0 && setSelectedMonth(r.key)}
+                    data-testid={`forecast-bar-${r.key}`}
+                    className="flex flex-col items-center gap-1 group focus:outline-none h-full justify-end"
+                    disabled={r.qty === 0}
+                    title={r.qty > 0 ? `${r.label}: ${Math.round(r.qty)} Nos · click for product breakdown` : ""}
+                  >
+                    <div className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 h-4">{r.qty > 0 ? Math.round(r.qty) : ""}</div>
+                    <div
+                      className={
+                        "w-full rounded-t-md transition-all " +
+                        (r.qty === 0
+                          ? "bg-slate-200 dark:bg-slate-700 opacity-60"
+                          : active
+                            ? "bg-indigo-600 shadow-lg ring-2 ring-indigo-500"
+                            : "bg-indigo-500 hover:bg-indigo-600 cursor-pointer")
+                      }
+                      style={{ height: `${barPct}%` }}
+                    />
+                    <div className="text-[10px] text-slate-500 mt-1">{r.short}</div>
+                  </button>
+                );
+              })}
+            </div>
           )}
         </div>
         <div>
@@ -776,7 +752,7 @@ function SalesForecast({ salesOrders, db, fyStartYear: defaultFyStartYear, fyLab
             </Table>
           </div>
           <div className="text-[11px] text-slate-500 mt-2">
-            Auto-computed from every Sales Order's Delivery Schedule. Colours in the chart represent products; the drill-down shows a row per product per SO.
+            Auto-computed from every Sales Order's Delivery Schedule. Click a month in the chart or a row here for the product-wise breakdown.
           </div>
         </div>
       </div>
