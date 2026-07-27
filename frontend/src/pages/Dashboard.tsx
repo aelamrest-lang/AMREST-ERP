@@ -522,39 +522,103 @@ function SalesForecast({ salesOrders, db }: { salesOrders: any[]; db: any }) {
     });
   }
 
-  // Aggregate qty + value per month from every SO's schedules
-  interface Row { key: string; label: string; short: string; qty: number; value: number; delivered: number; pending: number; slots: number; }
-  const rows: Row[] = months.map(m => ({ ...m, qty: 0, value: 0, delivered: 0, pending: 0, slots: 0 }));
-  const contributions: Record<string, { so: any; date: string; qty: number; delivered: number; pending: number; unitValue: number; value: number }[]> = {};
+  // Palette for products (max 10 distinct + Other)
+  const PALETTE = ["#6366f1", "#f59e0b", "#10b981", "#ec4899", "#0ea5e9", "#f97316", "#8b5cf6", "#14b8a6", "#ef4444", "#84cc16"];
+  const OTHER_COLOR = "#94a3b8";
+
+  // Per-slot contributions, but expanded per PRODUCT (item) within each SO
+  interface ProductContribution {
+    so: any;
+    productName: string;
+    date: string;
+    qty: number;           // pro-rated slot qty for this product
+    delivered: number;
+    pending: number;
+    unitRate: number;
+    value: number;
+  }
+  const contributions: Record<string, ProductContribution[]> = {};
   months.forEach(m => contributions[m.key] = []);
+
+  // Row totals + per-product per-month tallies
+  interface Row { key: string; label: string; short: string; qty: number; value: number; delivered: number; pending: number; slots: number }
+  const rows: Row[] = months.map(m => ({ ...m, qty: 0, value: 0, delivered: 0, pending: 0, slots: 0 }));
+  const productTotals = new Map<string, { name: string; totalQty: number; totalValue: number; monthQty: Record<string, number> }>();
 
   salesOrders.forEach((so: any) => {
     if (!so.schedules || so.schedules.length === 0) return;
     const orderQty = totalOrderQty(so);
     if (!orderQty) return;
-    const orderValue = so.items.reduce((a: number, it: any) => a + (Number(it.qty) || 0) * (Number(it.rate) || 0), 0);
-    const unitValue = orderValue / orderQty;
     so.schedules.forEach((s: any) => {
       if (!s.date) return;
       const m = s.date.slice(0, 7);
       const row = rows.find(r => r.key === m);
       if (!row) return;
-      const qty = Number(s.qty) || 0;
-      const delivered = Math.max(0, Number(s.deliveredQty) || 0);
-      const pending = Math.max(0, qty - delivered);
-      row.qty += qty;
-      row.value += qty * unitValue;
-      row.delivered += delivered;
-      row.pending += pending;
+      const slotQty = Number(s.qty) || 0;
+      const slotDelivered = Math.max(0, Number(s.deliveredQty) || 0);
+      const slotPending = Math.max(0, slotQty - slotDelivered);
+      if (slotQty <= 0) return;
       row.slots += 1;
-      contributions[m].push({ so, date: s.date, qty, delivered, pending, unitValue, value: qty * unitValue });
+      // Split slot across the SO's line items, weighted by item qty
+      so.items.forEach((it: any) => {
+        const itQty = Number(it.qty) || 0;
+        if (itQty <= 0) return;
+        const share = itQty / orderQty;
+        const pQty = slotQty * share;
+        const pDelivered = slotDelivered * share;
+        const pPending = slotPending * share;
+        const pValue = pQty * (Number(it.rate) || 0);
+        row.qty += pQty;
+        row.value += pValue;
+        row.delivered += pDelivered;
+        row.pending += pPending;
+        const key = String(it.name || "Product").trim() || "Product";
+        const p = productTotals.get(key) || { name: key, totalQty: 0, totalValue: 0, monthQty: {} };
+        p.totalQty += pQty;
+        p.totalValue += pValue;
+        p.monthQty[m] = (p.monthQty[m] || 0) + pQty;
+        productTotals.set(key, p);
+        contributions[m].push({
+          so,
+          productName: key,
+          date: s.date,
+          qty: pQty,
+          delivered: pDelivered,
+          pending: pPending,
+          unitRate: Number(it.rate) || 0,
+          value: pValue,
+        });
+      });
     });
+  });
+
+  // Top products by total qty, others grouped
+  const sortedProducts = Array.from(productTotals.values()).sort((a, b) => b.totalQty - a.totalQty);
+  const topProducts = sortedProducts.slice(0, PALETTE.length);
+  const otherProducts = sortedProducts.slice(PALETTE.length);
+  const productColor: Record<string, string> = {};
+  topProducts.forEach((p, idx) => { productColor[p.name] = PALETTE[idx]; });
+  otherProducts.forEach(p => { productColor[p.name] = OTHER_COLOR; });
+
+  // Precompute stacks per month
+  interface Stack { name: string; qty: number; color: string }
+  const monthStacks: Record<string, Stack[]> = {};
+  rows.forEach(r => {
+    const stacks: Stack[] = [];
+    topProducts.forEach(p => {
+      const q = p.monthQty[r.key] || 0;
+      if (q > 0.001) stacks.push({ name: p.name, qty: q, color: productColor[p.name] });
+    });
+    const otherQty = otherProducts.reduce((a, p) => a + (p.monthQty[r.key] || 0), 0);
+    if (otherQty > 0.001) stacks.push({ name: "Other", qty: otherQty, color: OTHER_COLOR });
+    monthStacks[r.key] = stacks;
   });
 
   const totalQty = rows.reduce((a, r) => a + r.qty, 0);
   const totalValue = rows.reduce((a, r) => a + r.value, 0);
   const totalPending = rows.reduce((a, r) => a + r.pending, 0);
   const selected = selectedMonth ? rows.find(r => r.key === selectedMonth) : null;
+  const maxMonthQty = Math.max(...rows.map(r => r.qty), 1);
 
   return (
     <Card data-testid="dashboard-sales-forecast">
@@ -562,50 +626,73 @@ function SalesForecast({ salesOrders, db }: { salesOrders: any[]; db: any }) {
         title="Next 6 Months Sales Forecast"
         right={
           <div className="flex items-center gap-2">
-            <Badge color="indigo">{totalQty} Nos</Badge>
+            <Badge color="indigo">{Math.round(totalQty)} Nos</Badge>
             <Badge color="green">{fmtINR(totalValue)}</Badge>
-            {totalPending > 0 && <Badge color="amber">{totalPending} pending</Badge>}
+            {totalPending > 0.5 && <Badge color="amber">{Math.round(totalPending)} pending</Badge>}
           </div>
         }
       />
       <div className="p-4 grid lg:grid-cols-[1fr_1.1fr] gap-4">
         <div>
-          <div className="text-xs text-slate-500 mb-2">Scheduled delivery quantity per month · click a bar to drill down</div>
+          <div className="text-xs text-slate-500 mb-2">Product-wise scheduled qty per month · hover a segment for details · click a bar for the drill-down</div>
           {totalQty === 0 ? (
             <Empty title="No delivery schedules found in the next 6 months" />
           ) : (
-            <div className="grid grid-cols-6 items-end gap-2 h-56 px-1">
-              {rows.map(r => {
-                const max = Math.max(...rows.map(x => x.qty), 1);
-                const h = r.qty > 0 ? Math.max(6, (r.qty / max) * 180) : 4;
-                const active = selectedMonth === r.key;
-                return (
-                  <button
-                    key={r.key}
-                    type="button"
-                    onClick={() => r.qty > 0 && setSelectedMonth(r.key)}
-                    data-testid={`forecast-bar-${r.key}`}
-                    className="flex flex-col items-center gap-1 group focus:outline-none"
-                    disabled={r.qty === 0}
-                  >
-                    <div className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 h-4">{r.qty || ""}</div>
-                    <div
-                      style={{ height: h }}
-                      className={
-                        "w-full rounded-t-md transition-all cursor-pointer " +
-                        (r.qty === 0
-                          ? "bg-slate-200 dark:bg-slate-700 opacity-60 cursor-not-allowed"
-                          : active
-                            ? "bg-gradient-to-t from-indigo-600 to-violet-500 shadow-lg"
-                            : "bg-gradient-to-t from-indigo-500 to-indigo-400 hover:from-indigo-600 hover:to-violet-500")
-                      }
-                      title={`${r.label}: ${r.qty} Nos · ${fmtINR(r.value)}`}
-                    />
-                    <div className="text-[10px] text-slate-500 mt-1">{r.short}</div>
-                  </button>
-                );
-              })}
-            </div>
+            <>
+              <div className="grid grid-cols-6 items-end gap-3 h-56 px-1">
+                {rows.map(r => {
+                  const active = selectedMonth === r.key;
+                  const barPct = r.qty > 0 ? Math.max(4, (r.qty / maxMonthQty) * 100) : 3;
+                  const stacks = monthStacks[r.key] || [];
+                  return (
+                    <button
+                      key={r.key}
+                      type="button"
+                      onClick={() => r.qty > 0 && setSelectedMonth(r.key)}
+                      data-testid={`forecast-bar-${r.key}`}
+                      className="flex flex-col items-center gap-1 group focus:outline-none h-full justify-end"
+                      disabled={r.qty === 0}
+                    >
+                      <div className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 h-4">{r.qty > 0 ? Math.round(r.qty) : ""}</div>
+                      <div
+                        className={"w-full rounded-t-md overflow-hidden flex flex-col-reverse " + (r.qty === 0 ? "bg-slate-200 dark:bg-slate-700 opacity-60" : active ? "ring-2 ring-indigo-500" : "")}
+                        style={{ height: `${barPct}%` }}
+                      >
+                        {stacks.length === 0 && r.qty === 0 && <div className="h-1" />}
+                        {stacks.map((st, i) => {
+                          const pct = (st.qty / r.qty) * 100;
+                          return (
+                            <div
+                              key={st.name + "-" + i}
+                              style={{ height: `${pct}%`, background: st.color }}
+                              title={`${st.name}: ${Math.round(st.qty)} Nos in ${r.label}`}
+                              className="transition-all cursor-pointer hover:brightness-110"
+                            />
+                          );
+                        })}
+                      </div>
+                      <div className="text-[10px] text-slate-500 mt-1">{r.short}</div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
+                {topProducts.map(p => (
+                  <span key={p.name} className="inline-flex items-center gap-1.5 text-slate-600 dark:text-slate-300">
+                    <span className="w-3 h-3 rounded-sm shrink-0" style={{ background: productColor[p.name] }} />
+                    <span className="truncate max-w-[180px]" title={p.name}>{p.name}</span>
+                    <span className="text-slate-400">· {Math.round(p.totalQty)}</span>
+                  </span>
+                ))}
+                {otherProducts.length > 0 && (
+                  <span className="inline-flex items-center gap-1.5 text-slate-600 dark:text-slate-300">
+                    <span className="w-3 h-3 rounded-sm" style={{ background: OTHER_COLOR }} />
+                    Other · {Math.round(otherProducts.reduce((a, p) => a + p.totalQty, 0))}
+                  </span>
+                )}
+              </div>
+            </>
           )}
         </div>
         <div>
@@ -623,10 +710,10 @@ function SalesForecast({ salesOrders, db }: { salesOrders: any[]; db: any }) {
                     data-testid={`forecast-row-${r.key}`}
                   >
                     <Td className="font-medium">{r.short}<div className="text-[10px] text-slate-500">{r.slots} slot{r.slots === 1 ? "" : "s"}</div></Td>
-                    <Td className="text-right font-semibold">{r.qty}</Td>
+                    <Td className="text-right font-semibold">{Math.round(r.qty)}</Td>
                     <Td className="text-right">{fmtINR(r.value)}</Td>
                     <Td className="text-right">
-                      {r.pending > 0 ? <Badge color="amber">{r.pending}</Badge> : <span className="text-slate-400">—</span>}
+                      {r.pending > 0.5 ? <Badge color="amber">{Math.round(r.pending)}</Badge> : <span className="text-slate-400">—</span>}
                     </Td>
                     <Td className="text-right">
                       {r.qty > 0 && <button type="button" className="text-xs text-indigo-600 hover:underline">View</button>}
@@ -635,16 +722,16 @@ function SalesForecast({ salesOrders, db }: { salesOrders: any[]; db: any }) {
                 ))}
                 <tr className="bg-slate-100 dark:bg-slate-800/60 font-semibold">
                   <Td>6-Month Total</Td>
-                  <Td className="text-right">{totalQty}</Td>
+                  <Td className="text-right">{Math.round(totalQty)}</Td>
                   <Td className="text-right">{fmtINR(totalValue)}</Td>
-                  <Td className="text-right">{totalPending}</Td>
+                  <Td className="text-right">{Math.round(totalPending)}</Td>
                   <Td></Td>
                 </tr>
               </tbody>
             </Table>
           </div>
           <div className="text-[11px] text-slate-500 mt-2">
-            Auto-computed from every Sales Order's Delivery Schedule. Updates instantly when a schedule is added, edited or a delivery is recorded.
+            Auto-computed from every Sales Order's Delivery Schedule. Colours in the chart represent products; the drill-down shows a row per product per SO.
           </div>
         </div>
       </div>
@@ -655,7 +742,7 @@ function SalesForecast({ salesOrders, db }: { salesOrders: any[]; db: any }) {
             <div className="grid grid-cols-3 gap-3">
               <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
                 <div className="text-xs text-slate-500">Scheduled Qty</div>
-                <div className="text-xl font-bold">{selected.qty} Nos</div>
+                <div className="text-xl font-bold">{Math.round(selected.qty)} Nos</div>
               </div>
               <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
                 <div className="text-xs text-slate-500">Sales Amount</div>
@@ -664,31 +751,60 @@ function SalesForecast({ salesOrders, db }: { salesOrders: any[]; db: any }) {
               <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
                 <div className="text-xs text-slate-500">Delivered / Pending</div>
                 <div className="text-xl font-bold">
-                  <span className="text-emerald-600">{selected.delivered}</span>
+                  <span className="text-emerald-600">{Math.round(selected.delivered)}</span>
                   <span className="text-slate-400"> / </span>
-                  <span className="text-amber-600">{selected.pending}</span>
+                  <span className="text-amber-600">{Math.round(selected.pending)}</span>
                 </div>
               </div>
             </div>
-            <div className="rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700">
+
+            {/* Product-wise summary for this month */}
+            <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
+              <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-2">Products this month</div>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                {Object.entries(
+                  contributions[selected.key].reduce<Record<string, number>>((acc, c) => {
+                    acc[c.productName] = (acc[c.productName] || 0) + c.qty; return acc;
+                  }, {})
+                ).sort((a, b) => b[1] - a[1]).map(([name, q]) => (
+                  <span key={name} className="inline-flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-sm" style={{ background: productColor[name] || OTHER_COLOR }} />
+                    <span className="font-medium text-slate-700 dark:text-slate-200 truncate max-w-[280px]">{name}</span>
+                    <span className="text-slate-500">— {Math.round(q)} Nos</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 max-h-[52vh] overflow-y-auto">
               <Table>
                 <thead>
-                  <tr><Th>SO #</Th><Th>Customer</Th><Th>Delivery Date</Th><Th className="text-right">Qty</Th><Th className="text-right">Delivered</Th><Th className="text-right">Pending</Th><Th className="text-right">Value</Th></tr>
+                  <tr>
+                    <Th>SO #</Th><Th>Customer</Th><Th>Product</Th><Th>Delivery Date</Th>
+                    <Th className="text-right">Sched. Qty</Th><Th className="text-right">Delivered</Th><Th className="text-right">Pending</Th><Th className="text-right">Sales Value</Th>
+                  </tr>
                 </thead>
                 <tbody>
                   {contributions[selected.key]
                     .slice()
-                    .sort((a, b) => a.date.localeCompare(b.date))
+                    .sort((a, b) => a.date.localeCompare(b.date) || a.so.number.localeCompare(b.so.number))
                     .map((c, i) => {
                       const cust = db.parties.find((p: any) => p.id === c.so.customerId);
+                      const color = productColor[c.productName] || OTHER_COLOR;
                       return (
-                        <tr key={c.so.id + "-" + i} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                        <tr key={c.so.id + "-" + c.productName + "-" + i} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                           <Td className="font-mono text-xs">{c.so.number}</Td>
                           <Td>{cust?.name || "Unknown"}</Td>
+                          <Td>
+                            <span className="inline-flex items-center gap-1.5">
+                              <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: color }} />
+                              <span className="truncate max-w-[220px]" title={c.productName}>{c.productName}</span>
+                            </span>
+                          </Td>
                           <Td>{c.date}</Td>
-                          <Td className="text-right font-semibold">{c.qty}</Td>
-                          <Td className="text-right text-emerald-600">{c.delivered}</Td>
-                          <Td className="text-right">{c.pending > 0 ? <span className="text-amber-600 font-semibold">{c.pending}</span> : "—"}</Td>
+                          <Td className="text-right font-semibold">{Math.round(c.qty)}</Td>
+                          <Td className="text-right text-emerald-600">{Math.round(c.delivered)}</Td>
+                          <Td className="text-right">{c.pending > 0.5 ? <span className="text-amber-600 font-semibold">{Math.round(c.pending)}</span> : "—"}</Td>
                           <Td className="text-right">{fmtINR(c.value)}</Td>
                         </tr>
                       );
