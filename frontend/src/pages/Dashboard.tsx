@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useStore } from "../lib/store";
 import { Card, CardHeader, KPI, Badge, Empty, Modal, Table, Th, Td, Button } from "../components/ui";
 import { BarChart, DonutChart } from "../components/charts";
-import { fmtINR } from "../lib/utils";
+import { fmtINR, fmt2 } from "../lib/utils";
 import { roleDescriptions, roleLabels } from "../lib/permissions";
 import { IconShop, IconFile, IconBox, IconFactory, IconCart, IconChart } from "../components/icons";
 import { orderDelayInfo, totalDeliveredQty, totalScheduledQty, totalOrderQty } from "../lib/delivery";
@@ -251,11 +251,11 @@ export function Dashboard() {
                   <div className="font-medium text-slate-700 dark:text-slate-200 truncate">{s.itemName}</div>
                   <div className="text-[11px] text-slate-500 truncate">{s.itemCode} · {s.jobCards.length} JC{s.jobCards.length === 1 ? "" : "s"} affected</div>
                   <div className="text-[11px] text-slate-500 mt-0.5">
-                    Req <b className="text-slate-700 dark:text-slate-200">{s.required}</b> · Avail <b className="text-slate-700 dark:text-slate-200">{s.available}</b>
+                    Req <b className="text-slate-700 dark:text-slate-200">{fmt2(s.required)}</b> · Avail <b className="text-slate-700 dark:text-slate-200">{fmt2(s.available)}</b>
                   </div>
                 </div>
                 <div className="text-right shrink-0">
-                  <div className="text-base font-bold text-rose-600">-{s.shortage}</div>
+                  <div className="text-base font-bold text-rose-600">-{fmt2(s.shortage)}</div>
                   <div className="text-[10px] text-rose-500 uppercase tracking-wide">Shortage</div>
                   <div className="text-[10px] text-slate-500 mt-0.5">{s.unit}</div>
                 </div>
@@ -326,19 +326,19 @@ export function Dashboard() {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
                 <div className="text-xs text-slate-500">Required</div>
-                <div className="text-xl font-bold">{shortageDrill.required} <span className="text-xs text-slate-500">{shortageDrill.unit}</span></div>
+                <div className="text-xl font-bold">{fmt2(shortageDrill.required)} <span className="text-xs text-slate-500">{shortageDrill.unit}</span></div>
               </div>
               <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
                 <div className="text-xs text-slate-500">Available Stock</div>
-                <div className="text-xl font-bold">{shortageDrill.available} <span className="text-xs text-slate-500">{shortageDrill.unit}</span></div>
+                <div className="text-xl font-bold">{fmt2(shortageDrill.available)} <span className="text-xs text-slate-500">{shortageDrill.unit}</span></div>
               </div>
               <div className="rounded-lg border border-rose-200 dark:border-rose-800 bg-rose-50/50 dark:bg-rose-900/20 p-3">
                 <div className="text-xs text-rose-600">Shortage</div>
-                <div className="text-xl font-bold text-rose-600">{shortageDrill.shortage} <span className="text-xs">{shortageDrill.unit}</span></div>
+                <div className="text-xl font-bold text-rose-600">{fmt2(shortageDrill.shortage)} <span className="text-xs">{shortageDrill.unit}</span></div>
               </div>
               <div className="rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50/50 dark:bg-indigo-900/20 p-3">
                 <div className="text-xs text-indigo-600">To Purchase</div>
-                <div className="text-xl font-bold text-indigo-700 dark:text-indigo-300">{shortageDrill.shortage} <span className="text-xs">{shortageDrill.unit}</span></div>
+                <div className="text-xl font-bold text-indigo-700 dark:text-indigo-300">{fmt2(shortageDrill.shortage)} <span className="text-xs">{shortageDrill.unit}</span></div>
               </div>
             </div>
             <div className="text-xs text-slate-500">
@@ -364,22 +364,22 @@ export function Dashboard() {
                       <Td>{jc.date}</Td>
                       <Td>{jc.product}</Td>
                       <Td><Badge color={jc.status === "In Progress" ? "blue" : "amber"}>{jc.status}</Badge></Td>
-                      <Td className="text-right font-semibold">{qty} <span className="text-slate-400 text-[10px]">{shortageDrill.unit}</span></Td>
-                      <Td className="text-right text-slate-500">{shortageDrill.available}</Td>
-                      <Td className="text-right"><span className="font-bold text-rose-600">{Math.max(0, qty)}</span></Td>
+                      <Td className="text-right font-semibold">{fmt2(qty)} <span className="text-slate-400 text-[10px]">{shortageDrill.unit}</span></Td>
+                      <Td className="text-right text-slate-500">{fmt2(shortageDrill.available)}</Td>
+                      <Td className="text-right"><span className="font-bold text-rose-600">{fmt2(Math.max(0, qty))}</span></Td>
                     </tr>
                   ))}
                   <tr className="bg-slate-100 dark:bg-slate-800/60 font-semibold">
                     <Td colSpan={4}>Total Required · Total Shortage</Td>
-                    <Td className="text-right">{shortageDrill.required}</Td>
-                    <Td className="text-right">{shortageDrill.available}</Td>
-                    <Td className="text-right text-rose-600">{shortageDrill.shortage}</Td>
+                    <Td className="text-right">{fmt2(shortageDrill.required)}</Td>
+                    <Td className="text-right">{fmt2(shortageDrill.available)}</Td>
+                    <Td className="text-right text-rose-600">{fmt2(shortageDrill.shortage)}</Td>
                   </tr>
                 </tbody>
               </Table>
             </div>
             <div className="flex items-center justify-between flex-wrap gap-2 text-xs text-slate-500">
-              <div>Total quantity to be purchased to clear this shortage: <b className="text-rose-600">{shortageDrill.shortage} {shortageDrill.unit}</b></div>
+              <div>Total quantity to be purchased to clear this shortage: <b className="text-rose-600">{fmt2(shortageDrill.shortage)} {shortageDrill.unit}</b></div>
               <Button variant="outline" onClick={() => setShortageDrill(null)}>Close</Button>
             </div>
           </div>
@@ -671,9 +671,9 @@ function SalesForecast({ salesOrders, db, fyStartYear: defaultFyStartYear, fyLab
                 >{n}M</button>
               ))}
             </div>
-            <Badge color="indigo">{Math.round(totalQty)} Nos</Badge>
+            <Badge color="indigo">{fmt2(totalQty)} Nos</Badge>
             <Badge color="green">{fmtINR(totalValue)}</Badge>
-            {totalPending > 0.5 && <Badge color="amber">{Math.round(totalPending)} pending</Badge>}
+            {totalPending > 0.5 && <Badge color="amber">{fmt2(totalPending)} pending</Badge>}
           </div>
         }
       />
@@ -695,9 +695,9 @@ function SalesForecast({ salesOrders, db, fyStartYear: defaultFyStartYear, fyLab
                     data-testid={`forecast-bar-${r.key}`}
                     className="flex flex-col items-center gap-1 group focus:outline-none h-full justify-end"
                     disabled={r.qty === 0}
-                    title={r.qty > 0 ? `${r.label}: ${Math.round(r.qty)} Nos · click for product breakdown` : ""}
+                    title={r.qty > 0 ? `${r.label}: ${fmt2(r.qty)} Nos · click for product breakdown` : ""}
                   >
-                    <div className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 h-4">{r.qty > 0 ? Math.round(r.qty) : ""}</div>
+                    <div className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 h-4">{r.qty > 0 ? fmt2(r.qty) : ""}</div>
                     <div
                       className={
                         "w-full rounded-t-md transition-all " +
@@ -731,10 +731,10 @@ function SalesForecast({ salesOrders, db, fyStartYear: defaultFyStartYear, fyLab
                     data-testid={`forecast-row-${r.key}`}
                   >
                     <Td className="font-medium">{r.short}<div className="text-[10px] text-slate-500">{r.slots} slot{r.slots === 1 ? "" : "s"}</div></Td>
-                    <Td className="text-right font-semibold">{Math.round(r.qty)}</Td>
+                    <Td className="text-right font-semibold">{fmt2(r.qty)}</Td>
                     <Td className="text-right">{fmtINR(r.value)}</Td>
                     <Td className="text-right">
-                      {r.pending > 0.5 ? <Badge color="amber">{Math.round(r.pending)}</Badge> : <span className="text-slate-400">—</span>}
+                      {r.pending > 0.5 ? <Badge color="amber">{fmt2(r.pending)}</Badge> : <span className="text-slate-400">—</span>}
                     </Td>
                     <Td className="text-right">
                       {r.qty > 0 && <button type="button" className="text-xs text-indigo-600 hover:underline">View</button>}
@@ -743,9 +743,9 @@ function SalesForecast({ salesOrders, db, fyStartYear: defaultFyStartYear, fyLab
                 ))}
                 <tr className="bg-slate-100 dark:bg-slate-800/60 font-semibold">
                   <Td>{periodMonths}-Month Total</Td>
-                  <Td className="text-right">{Math.round(totalQty)}</Td>
+                  <Td className="text-right">{fmt2(totalQty)}</Td>
                   <Td className="text-right">{fmtINR(totalValue)}</Td>
-                  <Td className="text-right">{Math.round(totalPending)}</Td>
+                  <Td className="text-right">{fmt2(totalPending)}</Td>
                   <Td></Td>
                 </tr>
               </tbody>
@@ -763,7 +763,7 @@ function SalesForecast({ salesOrders, db, fyStartYear: defaultFyStartYear, fyLab
             <div className="grid grid-cols-3 gap-3">
               <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
                 <div className="text-xs text-slate-500">Scheduled Qty</div>
-                <div className="text-xl font-bold">{Math.round(selected.qty)} Nos</div>
+                <div className="text-xl font-bold">{fmt2(selected.qty)} Nos</div>
               </div>
               <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
                 <div className="text-xs text-slate-500">Sales Amount</div>
@@ -772,9 +772,9 @@ function SalesForecast({ salesOrders, db, fyStartYear: defaultFyStartYear, fyLab
               <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
                 <div className="text-xs text-slate-500">Delivered / Pending</div>
                 <div className="text-xl font-bold">
-                  <span className="text-emerald-600">{Math.round(selected.delivered)}</span>
+                  <span className="text-emerald-600">{fmt2(selected.delivered)}</span>
                   <span className="text-slate-400"> / </span>
-                  <span className="text-amber-600">{Math.round(selected.pending)}</span>
+                  <span className="text-amber-600">{fmt2(selected.pending)}</span>
                 </div>
               </div>
             </div>
@@ -840,12 +840,12 @@ function SalesForecast({ salesOrders, db, fyStartYear: defaultFyStartYear, fyLab
                               }}
                               data-testid={`mix-slice-${i}`}
                             >
-                              <title>{`${a.name} · ${Math.round(a.qty)} Nos · ${a.pct.toFixed(1)}% · ${fmtINR(a.value)} (Ctrl-click to multi-select)`}</title>
+                              <title>{`${a.name} · ${fmt2(a.qty)} Nos · ${a.pct.toFixed(1)}% · ${fmtINR(a.value)} (Ctrl-click to multi-select)`}</title>
                             </path>
                           );
                         })}
                         <text x="80" y="76" textAnchor="middle" fontSize="10" fill="currentColor" className="fill-slate-500">Total</text>
-                        <text x="80" y="94" textAnchor="middle" fontSize="18" fontWeight="700" fill="currentColor" className="fill-slate-800 dark:fill-slate-100">{Math.round(total)}</text>
+                        <text x="80" y="94" textAnchor="middle" fontSize="18" fontWeight="700" fill="currentColor" className="fill-slate-800 dark:fill-slate-100">{fmt2(total)}</text>
                       </svg>
                     </div>
                     <div className="space-y-1 max-h-52 overflow-y-auto pr-1">
@@ -873,7 +873,7 @@ function SalesForecast({ salesOrders, db, fyStartYear: defaultFyStartYear, fyLab
                           >
                             <span className="w-3 h-3 rounded-sm shrink-0" style={{ background: a.color }} />
                             <span className="font-medium text-slate-700 dark:text-slate-200 truncate flex-1" title={a.name}>{a.name}</span>
-                            <span className="text-slate-500 shrink-0">{Math.round(a.qty)} Nos</span>
+                            <span className="text-slate-500 shrink-0">{fmt2(a.qty)} Nos</span>
                             <span className="text-slate-400 shrink-0 w-12 text-right">{a.pct.toFixed(1)}%</span>
                             <span className="text-slate-500 shrink-0 w-24 text-right">{fmtINR(a.value)}</span>
                           </button>
@@ -922,9 +922,9 @@ function SalesForecast({ salesOrders, db, fyStartYear: defaultFyStartYear, fyLab
                             </span>
                           </Td>
                           <Td>{c.date}</Td>
-                          <Td className="text-right font-semibold">{Math.round(c.qty)}</Td>
-                          <Td className="text-right text-emerald-600">{Math.round(c.delivered)}</Td>
-                          <Td className="text-right">{c.pending > 0.5 ? <span className="text-amber-600 font-semibold">{Math.round(c.pending)}</span> : "—"}</Td>
+                          <Td className="text-right font-semibold">{fmt2(c.qty)}</Td>
+                          <Td className="text-right text-emerald-600">{fmt2(c.delivered)}</Td>
+                          <Td className="text-right">{c.pending > 0.5 ? <span className="text-amber-600 font-semibold">{fmt2(c.pending)}</span> : "—"}</Td>
                           <Td className="text-right">{fmtINR(c.value)}</Td>
                         </tr>
                       );

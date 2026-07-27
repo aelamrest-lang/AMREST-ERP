@@ -8,6 +8,12 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+export function fmt2(n: number | string | null | undefined): string {
+  const v = Number(n);
+  if (!isFinite(v)) return "0.00";
+  return v.toFixed(2);
+}
+
 export function fmtINR(n: number) {
   if (isNaN(n)) return "₹0.00";
   return "₹" + n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });

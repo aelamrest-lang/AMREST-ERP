@@ -356,7 +356,8 @@ export function PurchaseOrders() {
       </div>`;
   };
 
-  const buildPOHtml = (p: PurchaseOrder): string => {
+  const buildPOHtml = (p: PurchaseOrder, opts?: { includeApprovalHistory?: boolean }): string => {
+    const includeHistory = opts?.includeApprovalHistory !== false;
     const v = db.parties.find(x => x.id === p.vendorId);
     const t = p.items.reduce((s, i) => s + i.qty * i.rate, 0);
     const historyRows = (p.approvalHistory || []).map(e => `<tr><td>${new Date(e.timestamp).toLocaleString("en-IN")}</td><td>${e.userName}</td><td>${e.action}</td><td>${e.reason || ""}</td></tr>`).join("");
@@ -368,13 +369,15 @@ export function PurchaseOrders() {
       <tbody>${p.items.map((i, idx) => { const it = db.items.find(x => x.id === i.itemId); return `<tr><td>${idx+1}</td><td><b>${it?.name || "-"} (${it?.code || ""})</b>${i.description ? `<br/><span class="muted">${i.description}</span>` : ""}</td><td class="right">${i.qty}</td><td class="right">${fmtINR(i.rate)}</td><td class="right">${fmtINR(i.qty*i.rate)}</td></tr>`; }).join("")}</tbody></table>
       <div class="totals"><div class="grand"><span>Total</span><b>${fmtINR(t)}</b></div></div>
       <div class="box"><div class="section-title">Terms &amp; Conditions</div><pre style="white-space:pre-wrap;font-family:inherit;font-size:12px;margin:6px 0">${p.terms || getDefaultPurchaseTerms(db.settings)}</pre></div>
-      ${historyRows ? `<div class="box"><div class="section-title">Approval History</div><table><thead><tr><th>Date &amp; Time</th><th>User</th><th>Action</th><th>Reason</th></tr></thead><tbody>${historyRows}</tbody></table></div>` : ""}
+      ${includeHistory && historyRows ? `<div class="box"><div class="section-title">Approval History</div><table><thead><tr><th>Date &amp; Time</th><th>User</th><th>Action</th><th>Reason</th></tr></thead><tbody>${historyRows}</tbody></table></div>` : ""}
     `;
     return professionalDocument(db.settings, { title: "Purchase Order", number: p.number, date: p.date, body, accent: "#ea580c", skipFormatTerms: true });
   };
 
   const printPO = (p: PurchaseOrder) => {
-    printArea(buildPOHtml(p), p.number);
+    // Approval history is deliberately excluded from the downloaded/printed PDF —
+    // it remains available in the on-screen preview only.
+    printArea(buildPOHtml(p, { includeApprovalHistory: false }), p.number);
   };
 
   return (
