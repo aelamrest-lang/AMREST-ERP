@@ -33,7 +33,7 @@ export function Dashboard() {
     shortage: number;
     jobCards: ShortageJC[];
   }
-  const pendingJobCards = db.jobCards.filter((j: any) => j.status !== "Completed");
+  const pendingJobCards = db.jobCards.filter((j: any) => j.status !== "Completed" && isInFy(j.date));
   const requiredByItem = new Map<string, ShortageJC[]>();
   pendingJobCards.forEach((jc: any) => {
     (jc.reservedItems || []).forEach((r: { itemId: string; qty: number }) => {
@@ -60,19 +60,26 @@ export function Dashboard() {
   const productionInProg = db.jobCards.filter(j => j.status === "In Progress").length;
 
   const [drill, setDrill] = useState<{ type: "sales" | "production" | "customer"; monthKey?: string; monthLabel?: string; customerId?: string } | null>(null);
-  const [rangeMonths, setRangeMonths] = useState<3 | 6 | 12>(6);
 
-  // Monthly buckets (last N months, incl. current)
-  const monthBuckets: { key: string; label: string; date: Date }[] = [];
+  // Financial Year selector (April → March)
   const now = new Date();
-  for (let i = rangeMonths - 1; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+  const currentFyStartYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+  const [fyStartYear, setFyStartYear] = useState<number>(currentFyStartYear);
+  const fyOptions = [currentFyStartYear + 1, currentFyStartYear, currentFyStartYear - 1, currentFyStartYear - 2].sort((a, b) => b - a);
+  const fyLabel = (y: number) => `FY ${y}-${String((y + 1) % 100).padStart(2, "0")}`;
+
+  // 12 FY month buckets in Financial-Year order (Apr → Mar)
+  const monthBuckets: { key: string; label: string; date: Date }[] = [];
+  for (let i = 0; i < 12; i++) {
+    const d = new Date(fyStartYear, 3 + i, 1);
     monthBuckets.push({
       key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
-      label: d.toLocaleString("en-US", { month: "short" }) + (rangeMonths === 12 ? ` ${String(d.getFullYear()).slice(2)}` : ""),
+      label: d.toLocaleString("en-US", { month: "short" }) + " " + String(d.getFullYear()).slice(2),
       date: d,
     });
   }
+  const fyMonthKeys = monthBuckets.map(m => m.key);
+  const isInFy = (dateStr: string | undefined) => !!dateStr && fyMonthKeys.includes(dateStr.slice(0, 7));
 
   // ---- Monthly Sales from Delivery Challans ----
   const soValue = (soId: string): { qty: number; value: number } => {
@@ -108,10 +115,10 @@ export function Dashboard() {
     color: ["#6366f1", "#f59e0b", "#10b981"][i],
   }));
 
-  // ---- Top Customers from Sales Order Total Value ----
+  // ---- Top Customers from Sales Order Total Value (within FY) ----
   interface CustomerAgg { customerId: string; name: string; totalQty: number; totalValue: number; orders: number }
   const customerAggMap = new Map<string, CustomerAgg>();
-  salesOrders.forEach(o => {
+  salesOrders.filter(o => isInFy(o.date)).forEach(o => {
     const totQty = o.items.reduce((a, b) => a + (Number(b.qty) || 0), 0);
     const totVal = o.items.reduce((a, b) => a + (Number(b.qty) || 0) * (Number(b.rate) || 0), 0);
     const existing = customerAggMap.get(o.customerId);
@@ -141,16 +148,18 @@ export function Dashboard() {
           <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100">Dashboard</h1>
           <p className="text-sm text-slate-500 dark:text-slate-400">Live overview of operations, sales, production and inventory.</p>
         </div>
-        <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 rounded-lg p-1" data-testid="dashboard-range-toggle">
-          {[3, 6, 12].map(n => (
-            <button
-              key={n}
-              type="button"
-              onClick={() => setRangeMonths(n as 3 | 6 | 12)}
-              className={"px-3 py-1 text-xs rounded-md transition " + (rangeMonths === n ? "bg-white dark:bg-slate-900 text-indigo-600 shadow font-semibold" : "text-slate-600 dark:text-slate-300 hover:text-slate-900")}
-              data-testid={`dashboard-range-${n}m`}
-            >{n}M</button>
-          ))}
+        <div className="flex items-center gap-2 bg-slate-100 dark:bg-slate-800 rounded-lg p-1" data-testid="dashboard-fy-selector">
+          <span className="text-[11px] uppercase tracking-wide text-slate-500 pl-2">Financial Year</span>
+          <select
+            value={fyStartYear}
+            onChange={e => setFyStartYear(Number(e.target.value))}
+            className="bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 rounded-md px-2 py-1 text-xs border border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            data-testid="dashboard-fy-select"
+          >
+            {fyOptions.map(y => (
+              <option key={y} value={y}>{fyLabel(y)}</option>
+            ))}
+          </select>
         </div>
       </div>
 
@@ -163,7 +172,7 @@ export function Dashboard() {
 
       <div className="grid lg:grid-cols-2 gap-5">
         <Card>
-          <CardHeader title="Monthly Sales (₹ thousands)" subtitle={`Value of Delivery Challans · last ${rangeMonths} months · click a month for the DC list`} />
+          <CardHeader title="Monthly Sales (₹ thousands)" subtitle={`Value of Delivery Challans · ${fyLabel(fyStartYear)} · click a month for the DC list`} />
           <div className="p-4">
             <BarChart
               data={months}
@@ -175,7 +184,7 @@ export function Dashboard() {
         <Card>
           <div className="p-5">
             <h3 className="text-lg font-bold uppercase tracking-wide text-slate-900 dark:text-slate-100">Monthly Production</h3>
-            <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">Total Completed Job Cards · last {rangeMonths} months · click a month to view completed job cards</p>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">Total Completed Job Cards · {fyLabel(fyStartYear)} · click a month to view completed job cards</p>
             <div className="mt-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 p-5">
               <ProductionBarChart
                 data={monthlyProduction}
@@ -256,7 +265,7 @@ export function Dashboard() {
         </Card>
       </div>
 
-      <SalesForecast salesOrders={salesOrders} db={db} />
+      <SalesForecast salesOrders={salesOrders} db={db} fyStartYear={fyStartYear} fyLabel={fyLabel} />
 
       <DelayedDeliveries salesOrders={salesOrders} db={db} />
       <OverduePOs db={db} />
@@ -506,22 +515,29 @@ function OverduePOs({ db }: { db: any }) {
 }
 
 
-function SalesForecast({ salesOrders, db }: { salesOrders: any[]; db: any }) {
+function SalesForecast({ salesOrders, db, fyStartYear, fyLabel }: { salesOrders: any[]; db: any; fyStartYear: number; fyLabel: (y: number) => string }) {
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
-  const [productFilter, setProductFilter] = useState<string | null>(null);
+  const [productFilter, setProductFilter] = useState<Set<string>>(new Set());
 
-  // Build next 6 months keys starting from current month
+  // Rolling next-6 months constrained to selected Financial Year (Apr → Mar).
   const now = new Date();
+  const fyStart = new Date(fyStartYear, 3, 1);
+  const fyEnd = new Date(fyStartYear + 1, 2, 31);
+  const startMonth = now >= fyStart && now <= fyEnd
+    ? new Date(now.getFullYear(), now.getMonth(), 1)
+    : fyStart;
   const months: { key: string; label: string; short: string }[] = [];
-  for (let i = 0; i < 6; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  const cursor = new Date(startMonth);
+  while (cursor <= fyEnd && months.length < 6) {
+    const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
     months.push({
       key,
-      label: d.toLocaleString("en-IN", { month: "long", year: "numeric" }),
-      short: d.toLocaleString("en-IN", { month: "short", year: "2-digit" }),
+      label: cursor.toLocaleString("en-IN", { month: "long", year: "numeric" }),
+      short: cursor.toLocaleString("en-IN", { month: "short", year: "2-digit" }),
     });
+    cursor.setMonth(cursor.getMonth() + 1);
   }
+  void fyLabel;
 
   // Palette for products (max 10 distinct + Other)
   const PALETTE = ["#6366f1", "#f59e0b", "#10b981", "#ec4899", "#0ea5e9", "#f97316", "#8b5cf6", "#14b8a6", "#ef4444", "#84cc16"];
@@ -737,7 +753,7 @@ function SalesForecast({ salesOrders, db }: { salesOrders: any[]; db: any }) {
         </div>
       </div>
 
-      <Modal open={!!selected} onClose={() => { setSelectedMonth(null); setProductFilter(null); }} title={selected ? `Forecast · ${selected.label}` : "Forecast"} size="xl">
+      <Modal open={!!selected} onClose={() => { setSelectedMonth(null); setProductFilter(new Set()); }} title={selected ? `Forecast · ${selected.label}` : "Forecast"} size="xl">
         {selected && (
           <div className="space-y-3">
             <div className="grid grid-cols-3 gap-3">
@@ -796,8 +812,8 @@ function SalesForecast({ salesOrders, db }: { salesOrders: any[]; db: any }) {
                     <div className="relative">
                       <svg viewBox="0 0 160 160" width="100%" style={{ maxWidth: 160 }}>
                         {arcs.map((a, i) => {
-                          const active = productFilter === a.name;
-                          const dim = productFilter && !active;
+                          const active = productFilter.has(a.name);
+                          const dim = productFilter.size > 0 && !active;
                           return (
                             <path
                               key={a.name + i}
@@ -806,10 +822,21 @@ function SalesForecast({ salesOrders, db }: { salesOrders: any[]; db: any }) {
                               opacity={dim ? 0.25 : 1}
                               style={{ cursor: "pointer", transition: "opacity 120ms, transform 120ms", transformOrigin: "80px 80px" }}
                               transform={active ? "scale(1.04)" : undefined}
-                              onClick={() => setProductFilter(active ? null : a.name)}
+                              onClick={(e) => {
+                                setProductFilter(prev => {
+                                  const next = new Set(prev);
+                                  const isMulti = e.ctrlKey || e.metaKey || e.shiftKey;
+                                  if (isMulti) {
+                                    if (next.has(a.name)) next.delete(a.name); else next.add(a.name);
+                                    return next;
+                                  }
+                                  if (next.size === 1 && next.has(a.name)) return new Set();
+                                  return new Set([a.name]);
+                                });
+                              }}
                               data-testid={`mix-slice-${i}`}
                             >
-                              <title>{`${a.name} · ${Math.round(a.qty)} Nos · ${a.pct.toFixed(1)}% · ${fmtINR(a.value)}`}</title>
+                              <title>{`${a.name} · ${Math.round(a.qty)} Nos · ${a.pct.toFixed(1)}% · ${fmtINR(a.value)} (Ctrl-click to multi-select)`}</title>
                             </path>
                           );
                         })}
@@ -819,14 +846,26 @@ function SalesForecast({ salesOrders, db }: { salesOrders: any[]; db: any }) {
                     </div>
                     <div className="space-y-1 max-h-52 overflow-y-auto pr-1">
                       {arcs.map((a, i) => {
-                        const active = productFilter === a.name;
+                        const active = productFilter.has(a.name);
                         return (
                           <button
                             type="button"
                             key={a.name + "-legend-" + i}
-                            onClick={() => setProductFilter(active ? null : a.name)}
-                            className={"w-full flex items-center gap-2 text-left rounded px-2 py-1 text-xs transition " + (active ? "bg-indigo-50 dark:bg-indigo-900/30" : "hover:bg-slate-50 dark:hover:bg-slate-800/50")}
+                            onClick={(e) => {
+                              setProductFilter(prev => {
+                                const next = new Set(prev);
+                                const isMulti = e.ctrlKey || e.metaKey || e.shiftKey;
+                                if (isMulti) {
+                                  if (next.has(a.name)) next.delete(a.name); else next.add(a.name);
+                                  return next;
+                                }
+                                if (next.size === 1 && next.has(a.name)) return new Set();
+                                return new Set([a.name]);
+                              });
+                            }}
+                            className={"w-full flex items-center gap-2 text-left rounded px-2 py-1 text-xs transition " + (active ? "bg-indigo-50 dark:bg-indigo-900/30 ring-1 ring-indigo-200 dark:ring-indigo-800" : "hover:bg-slate-50 dark:hover:bg-slate-800/50")}
                             data-testid={`mix-legend-${i}`}
+                            title="Click to filter · Ctrl-click for multi-select"
                           >
                             <span className="w-3 h-3 rounded-sm shrink-0" style={{ background: a.color }} />
                             <span className="font-medium text-slate-700 dark:text-slate-200 truncate flex-1" title={a.name}>{a.name}</span>
@@ -838,10 +877,14 @@ function SalesForecast({ salesOrders, db }: { salesOrders: any[]; db: any }) {
                       })}
                     </div>
                   </div>
-                  {productFilter && (
+                  {productFilter.size > 0 && (
                     <div className="mt-3 flex items-center justify-between text-xs bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-800 rounded px-3 py-1.5">
-                      <span>Filtered by <b>{productFilter}</b> — showing only that product's sales orders</span>
-                      <button type="button" onClick={() => setProductFilter(null)} className="text-indigo-600 hover:underline" data-testid="mix-clear-filter">Clear filter</button>
+                      <span>
+                        Filtered by <b>{Array.from(productFilter).join(", ")}</b>
+                        {productFilter.size > 1 ? ` — ${productFilter.size} products selected` : " — showing only that product's sales orders"}
+                        <span className="text-slate-400 ml-2">· Ctrl-click to add / remove</span>
+                      </span>
+                      <button type="button" onClick={() => setProductFilter(new Set())} className="text-indigo-600 hover:underline" data-testid="mix-clear-filter">Clear filter</button>
                     </div>
                   )}
                 </div>
@@ -859,7 +902,7 @@ function SalesForecast({ salesOrders, db }: { salesOrders: any[]; db: any }) {
                 <tbody>
                   {contributions[selected.key]
                     .slice()
-                    .filter(c => !productFilter || c.productName === productFilter)
+                    .filter(c => productFilter.size === 0 || productFilter.has(c.productName))
                     .sort((a, b) => a.date.localeCompare(b.date) || a.so.number.localeCompare(b.so.number))
                     .map((c, i) => {
                       const cust = db.parties.find((p: any) => p.id === c.so.customerId);
@@ -886,7 +929,7 @@ function SalesForecast({ salesOrders, db }: { salesOrders: any[]; db: any }) {
               </Table>
             </div>
             <div className="flex justify-end">
-              <Button variant="outline" onClick={() => { setSelectedMonth(null); setProductFilter(null); }}>Close</Button>
+              <Button variant="outline" onClick={() => { setSelectedMonth(null); setProductFilter(new Set()); }}>Close</Button>
             </div>
           </div>
         )}
