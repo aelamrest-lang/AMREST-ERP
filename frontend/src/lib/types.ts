@@ -314,7 +314,10 @@ export interface DeliveryChallan {
   number: string;
   date: string;
   salesOrderId: string;
+  jobCardId?: string;
   customerId: string;
+  items?: { name: string; qty: number; rate: number; gst: number }[];
+  freight?: number;
   vehicle?: string;
   driver?: string;
   transport?: string;
