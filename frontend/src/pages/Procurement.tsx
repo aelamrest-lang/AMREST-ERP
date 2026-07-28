@@ -167,8 +167,18 @@ export function PurchaseOrders() {
   const [preview, setPreview] = useState<PurchaseOrder | null>(null);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState("");
+  const [vendorQuery, setVendorQuery] = useState("");
 
   const vendors = db.parties.filter(p => p.type === "vendor" || p.type === "supplier");
+
+  const filteredPOs = useMemo(() => {
+    const q = vendorQuery.trim().toLowerCase();
+    if (!q) return db.purchaseOrders;
+    return db.purchaseOrders.filter(p => {
+      const vendorName = db.parties.find(v => v.id === p.vendorId)?.name || "";
+      return vendorName.toLowerCase().includes(q) || p.number.toLowerCase().includes(q);
+    });
+  }, [db.purchaseOrders, db.parties, vendorQuery]);
 
   const blank = (): PurchaseOrder => {
     const d = todayISO();
@@ -387,10 +397,22 @@ export function PurchaseOrders() {
         {canCreate && <Button onClick={openNew}><IconPlus size={14}/> New PO</Button>}
       </div>
       <Card>
+        <div className="p-3 border-b border-slate-200 dark:border-slate-800">
+          <div className="relative max-w-sm">
+            <IconSearch size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"/>
+            <Input
+              value={vendorQuery}
+              onChange={(e: any) => setVendorQuery(e.target.value)}
+              placeholder="Search by vendor name or PO number..."
+              className="pl-9"
+              data-testid="po-vendor-search"
+            />
+          </div>
+        </div>
         <Table>
           <thead><tr><Th>#</Th><Th>Date</Th><Th>Vendor</Th><Th>Items</Th><Th>Expected Delivery</Th><Th>Received / Pending</Th><Th>Total</Th><Th>Status</Th><Th></Th></tr></thead>
           <tbody>
-            {db.purchaseOrders.map(p => {
+            {filteredPOs.map(p => {
               const t = p.items.reduce((s, i) => s + i.qty * i.rate, 0);
               const summary = overdueSummary(p, db.grns);
               const showDelay = summary.delayDays > 0 && !summary.fullyReceived && p.status !== "Cancelled";
@@ -464,6 +486,11 @@ export function PurchaseOrders() {
           </tbody>
         </Table>
         {db.purchaseOrders.length === 0 && <Empty/>}
+        {db.purchaseOrders.length > 0 && filteredPOs.length === 0 && (
+          <div className="p-6 text-center text-sm text-slate-500" data-testid="po-no-vendor-match">
+            No purchase orders match “{vendorQuery}”.
+          </div>
+        )}
       </Card>
 
       <Modal open={open} onClose={() => setOpen(false)} title={edit ? `Edit ${edit.number}` : "New Purchase Order"} size="xl">

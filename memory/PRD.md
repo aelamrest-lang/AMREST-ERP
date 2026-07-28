@@ -1,45 +1,30 @@
-# Transformer Manufacturing ERP & CRM — PRD
+# AMREST ERP & Sales CRM — PRD
 
 ## Original Problem Statement
-Build a cloud-based Transformer Manufacturing ERP & CRM similar to the attached reference (AMREST Electricals). Maintain the same workflow, UI, modules and business logic while improving performance and UX. Include modules for Sales CRM, Quotation, Costing Sheet, BOM, Sales Order, Job Card, Inventory, Raw Material Hold & Issue, Purchase, Production, QC Testing, Delivery Challan, Invoice, Reports, User Roles & Permissions, Dashboard, and PDF generation. Real-time inventory updates, job-card-wise production tracking, multi-stage production, SKU management, bulk import/export, and a cloud DB. Modern React + TypeScript, responsive, secure, scalable.
+Cloud-based Transformer Manufacturing ERP & CRM with modules for Sales CRM, Quotation, Costing Sheet, BOM, Sales Order, Job Card, Inventory, Raw Material Hold & Issue, Purchase, Production, QC Testing, Delivery Challan, Invoice, Reports, User Roles & Permissions, Dashboard, and PDF generation.
 
-## Architecture
-- **Backend**: FastAPI + MongoDB with JWT auth. Single-document `erp_state` collection storing the full ERP DB as JSON (mirrors the reference's Supabase single-JSONB approach). Endpoints: `/api/auth/login`, `/api/erp/state` (GET/PUT), `/api/erp/version`.
-- **Frontend**: React 19 + TypeScript (CRA/craco), Tailwind v3. All state hydrated on login, saved with 400ms debounce, polling `/api/erp/version` every 15s picks up remote changes.
-- **PDF**: jsPDF + html2canvas client-side.
-- **Realtime**: Version polling (no websocket needed given single-writer + light polling).
+## Stack
+- Frontend: React + TypeScript + TailwindCSS
+- Backend: FastAPI + MongoDB (Motor)
+- Auth: JWT (localStorage)
+- Storage: Emergent File & Media integration
 
-## Modules Implemented (v1)
-Dashboard, Leads & Inquiry, Party Master, Item Master, Quotations, Proforma Invoices, Sales Orders, Purchase Orders, GRN, Inventory, Raw Material Issue, BOM, Job Cards, Production, QC Testing, Delivery Challans, Reports, Users, Company Settings, Document Format Settings, Activity Logs, Profile.
+## Implemented (highlights)
+- Sales CRM, Quotation, Proforma, Sales Orders (with delivery schedules, inline product view)
+- BOM (with copy feature), Job Cards (auto-BOM append)
+- Procurement: PO with approval workflow, PDF gen, searchable vendor/PO comboboxes, partial GRN, lead-time defaults, overdue tracking
+- **NEW (28-Jul-2026):** Vendor/PO number search in Purchase Orders list (top of list, live filter)
+- Inventory, Raw Material Issue, Production, QC Testing, Delivery Challan
+- Dashboards: Main (FY filter, drill-downs, product-mix donut, forecast bars, low-stock), Tax Dashboard
+- Utilities: Global fmt2() 2-decimal formatting, A4 WYSIWYG print
+- Users & Permissions with department-scoped access
 
-## User Personas
-- Admin: full access + user administration
-- Sales: leads/parties/quotations/proforma/SO (own records)
-- Production: BOM/job cards/production stages/testing
-- Purchase: vendors/PO/GRN
-- Testing: QC workflow
-- Store: item master, inventory, GRN, issue, challans
+## Admin Login
+- Email: aaa@amrest.in
+- Password: anwar@123
+- Role: Admin
 
-## Core Requirements (static)
-- Role-based permission matrix per module × action (view/create/edit/delete/approve/print/export)
-- Real-time inventory decrement on material issue
-- Multi-stage production tracking with serial-wise job cards
-- Multi-format PDF generation for all documents
-- Bulk CSV export on key modules
-
-## What's Been Implemented (2026-02-15)
-- Full FastAPI backend (auth + state) with seed users
-- 22 pages, 6 roles, full permission matrix
-- Debounced auto-save + 15s version polling for near-realtime sync
-- Client-side PDF & CSV export utilities
-- Dark/light theme toggle
-- Test credentials saved at `/app/memory/test_credentials.md`
-
-## Prioritized Backlog
-- P1: Add PBAC-based backend enforcement (currently trust client)
-- P1: Server-side password hashing (bcrypt) — currently plain (matches reference for demo)
-- P1: WebSocket-based realtime instead of 15s polling
-- P2: Backend PDF generation fallback
-- P2: Optimistic concurrency / conflict resolution on state save
-- P2: File-storage integration for signatures, logos, QC attachments
-- P2: Backup/restore export of full erp_state
+## Backlog / Upcoming
+- P0: Login Session Fix & UI Polish (spinner, blue→green button transition, dashboard redirect, refresh persistence)
+- P2: Refactor Dashboard.tsx and Procurement.tsx (1000+ lines each)
+- P2: Advanced filters (date range) on PO list
