@@ -1,11 +1,11 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Item } from "../lib/types";
 import { Input } from "./ui";
 import { IconSearch } from "./icons";
 
 interface Props {
   items: Item[];
-  value: string; // selected item name (kept as name to stay backward-compatible with line-item schema)
+  value: string;
   onPick: (item: Item) => void;
   placeholder?: string;
   testId?: string;
@@ -16,6 +16,7 @@ export function FinishedGoodCombobox({ items, value, onPick, placeholder = "Sear
   const [query, setQuery] = useState("");
   const [highlight, setHighlight] = useState(0);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const [popupPos, setPopupPos] = useState<{ top: number; left: number; width: number }>({ top: 0, left: 0, width: 0 });
   const displayText = open ? query : (value || "");
 
   const filtered = useMemo(() => {
@@ -27,6 +28,29 @@ export function FinishedGoodCombobox({ items, value, onPick, placeholder = "Sear
       (it.hsn || "").toLowerCase().includes(q),
     );
   }, [items, query]);
+
+  const recomputePos = () => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setPopupPos({ top: r.bottom + 4, left: r.left, width: r.width });
+  };
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    recomputePos();
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onScrollOrResize = () => recomputePos();
+    window.addEventListener("scroll", onScrollOrResize, true);
+    window.addEventListener("resize", onScrollOrResize);
+    return () => {
+      window.removeEventListener("scroll", onScrollOrResize, true);
+      window.removeEventListener("resize", onScrollOrResize);
+    };
+  }, [open]);
 
   const pick = (it: Item) => {
     onPick(it);
@@ -65,7 +89,10 @@ export function FinishedGoodCombobox({ items, value, onPick, placeholder = "Sear
         />
       </div>
       {open && (
-        <div className="absolute z-30 mt-1 w-full max-h-72 overflow-auto rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg">
+        <div
+          className="fixed z-[100] max-h-72 overflow-auto rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg"
+          style={{ top: popupPos.top, left: popupPos.left, width: popupPos.width }}
+        >
           {filtered.length === 0 && <div className="p-3 text-sm text-slate-500">No finished goods match “{query}”.</div>}
           {filtered.map((it, idx) => (
             <button
