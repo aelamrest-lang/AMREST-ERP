@@ -32,7 +32,7 @@ export function SalesOrders() {
 
   const blank = (): SalesOrder => ({
     id: "", number: nextNumber("SO", db.salesOrders), date: todayISO(), customerId: customers[0]?.id || "",
-    items: [{ name: "Transformer", qty: 1, rate: 100000, gst: 18 }],
+    items: [{ name: "", qty: 1, rate: 0, gst: 18 }],
     deliveryDate: "", schedules: [], status: "Confirmed",
     ownerId: currentUser!.id, createdAt: new Date().toISOString(),
   });
@@ -73,6 +73,19 @@ export function SalesOrders() {
   };
 
   const updateItem = (i: number, key: string, val: any) => setForm(f => ({...f, items: f.items.map((it, idx) => idx === i ? {...it, [key]: key === "name" ? val : Number(val)} : it)}));
+  const selectFinishedGood = (i: number, itemId: string) => {
+    const fg = db.items.find(it => it.id === itemId);
+    if (!fg) return;
+    setForm(f => ({
+      ...f,
+      items: f.items.map((it, idx) => idx === i ? {
+        ...it,
+        name: fg.name,
+        rate: it.rate || fg.saleRate || 0,
+        gst: fg.gstRate || it.gst,
+      } : it),
+    }));
+  };
   const addItem = () => setForm(f => ({...f, items: [...f.items, { name: "", qty: 1, rate: 0, gst: 18 }]}));
   const delItem = (i: number) => setForm(f => ({...f, items: f.items.filter((_, idx) => idx !== i)}));
   const totals = calcDocTotals(form.items);
@@ -260,16 +273,31 @@ export function SalesOrders() {
         <div className="mt-3 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
           <Table>
             <thead><tr><Th>Item</Th><Th>Qty</Th><Th>Rate</Th><Th>GST%</Th><Th>Amount</Th><Th></Th></tr></thead>
-            <tbody>{form.items.map((it, i) => (
+            <tbody>{form.items.map((it, i) => {
+              const finishedGoods = db.items.filter(x => x.category === "Finished Goods");
+              const matchedFG = finishedGoods.find(x => x.name === it.name);
+              return (
               <tr key={i}>
-                <Td><Input value={it.name} onChange={(e: any) => updateItem(i, "name", e.target.value)}/></Td>
+                <Td>
+                  <Select
+                    value={matchedFG?.id || ""}
+                    onChange={(e: any) => selectFinishedGood(i, e.target.value)}
+                    data-testid={`so-item-select-${i}`}
+                  >
+                    <option value="">-- Select Finished Good --</option>
+                    {finishedGoods.map(fg => (
+                      <option key={fg.id} value={fg.id}>{fg.name}{fg.code ? ` (${fg.code})` : ""}</option>
+                    ))}
+                  </Select>
+                </Td>
                 <Td><Input type="number" value={it.qty} onChange={(e: any) => updateItem(i, "qty", e.target.value)}/></Td>
                 <Td><Input type="number" value={it.rate} onChange={(e: any) => updateItem(i, "rate", e.target.value)}/></Td>
                 <Td><Select value={it.gst} onChange={(e: any) => updateItem(i, "gst", e.target.value)}>{GST_OPTIONS.map(rate => <option key={rate} value={rate}>{rate}%</option>)}</Select></Td>
                 <Td>{fmtINR(it.qty * it.rate)}</Td>
                 <Td><Button size="sm" variant="ghost" onClick={() => delItem(i)}><IconTrash size={14}/></Button></Td>
               </tr>
-            ))}</tbody>
+              );
+            })}</tbody>
           </Table>
         </div>
         <div className="mt-2"><Button size="sm" variant="outline" onClick={addItem}><IconPlus size={14}/> Add Item</Button></div>
