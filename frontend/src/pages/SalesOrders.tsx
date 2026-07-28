@@ -8,7 +8,8 @@ import { calcDocTotals, fmtINR, nextNumber, printArea, professionalDocument, tod
 import { userCan } from "../lib/permissions";
 import {
   totalOrderQty, totalScheduledQty, totalDeliveredQty, unscheduledBalance,
-  scheduleStatus, orderDelayInfo, canManageSchedule, isScheduleBalanced,
+  scheduleStatus, orderDelayInfo, canManageSchedule,
+  orderQtyForItem, scheduledQtyForItem, deliveredQtyForItem, unscheduledBalanceForItem, schedulesForItem,
 } from "../lib/delivery";
 
 const SO_STATUSES: SalesOrder["status"][] = ["Pending", "Confirmed", "In Production", "Dispatched", "Delivered"];
@@ -45,21 +46,37 @@ export function SalesOrders() {
   const openNew = () => { setEdit(null); setForm(blank()); setOpen(true); };
   const openEdit = (o: SalesOrder) => {
     setEdit(o);
-    setForm({
-      ...o,
-      items: o.items.map(i => ({...i})),
-      schedules: (o.schedules || []).map(s => ({...s})),
-    });
+    // Migrate legacy schedules: if SO has 2+ items and any schedule lacks itemName,
+    // auto-assign that slot to the first item so it appears in an item-scoped section.
+    const items = o.items.map(i => ({ ...i }));
+    const firstName = items[0]?.name || "";
+    const schedules = (o.schedules || []).map(s => ({
+      ...s,
+      itemName: items.length > 1 && !s.itemName && firstName ? firstName : s.itemName,
+    }));
+    setForm({ ...o, items, schedules });
     setOpen(true);
   };
 
   const save = () => {
-    // Validate schedules don't exceed order qty
-    const orderQty = totalOrderQty(form);
-    const scheduled = totalScheduledQty(form);
-    if (scheduled > orderQty) {
-      alert(`Scheduled quantity (${scheduled}) cannot exceed total order quantity (${orderQty}). Please adjust.`);
-      return;
+    // Validate schedules don't exceed order qty (per-item when multi-item)
+    if (form.items.length > 1) {
+      for (const it of form.items) {
+        if (!it.name) continue;
+        const ordered = orderQtyForItem(form, it.name);
+        const sched = scheduledQtyForItem(form, it.name);
+        if (sched > ordered) {
+          alert(`"${it.name}": Scheduled qty (${sched}) cannot exceed ordered qty (${ordered}). Please adjust.`);
+          return;
+        }
+      }
+    } else {
+      const orderQty = totalOrderQty(form);
+      const scheduled = totalScheduledQty(form);
+      if (scheduled > orderQty) {
+        alert(`Scheduled quantity (${scheduled}) cannot exceed total order quantity (${orderQty}). Please adjust.`);
+        return;
+      }
     }
     if (edit) setDB(d => ({...d, salesOrders: d.salesOrders.map(x => x.id === edit.id ? form : x)}));
     else setDB(d => ({...d, salesOrders: [{...form, id: uid()}, ...d.salesOrders]}));
@@ -92,12 +109,14 @@ export function SalesOrders() {
   const grandTotal = totals.total + freight;
 
   // --- Schedule handlers ---
-  const addSchedule = () => {
-    const remaining = unscheduledBalance(form);
-    if (remaining <= 0) return alert("All order quantity is already scheduled.");
+  const addSchedule = (itemName?: string) => {
+    const remaining = itemName
+      ? unscheduledBalanceForItem(form, itemName)
+      : unscheduledBalance(form);
+    if (remaining <= 0) return alert(itemName ? `All qty for "${itemName}" is already scheduled.` : "All order quantity is already scheduled.");
     setForm(f => ({
       ...f,
-      schedules: [...(f.schedules || []), { id: uid(), date: "", qty: remaining, deliveredQty: 0 }],
+      schedules: [...(f.schedules || []), { id: uid(), date: "", qty: remaining, deliveredQty: 0, ...(itemName ? { itemName } : {}) }],
     }));
   };
   const updateSchedule = (id: string, patch: Partial<DeliverySchedule>) => {
@@ -109,24 +128,30 @@ export function SalesOrders() {
   const removeSchedule = (id: string) => setForm(f => ({
     ...f, schedules: (f.schedules || []).filter(s => s.id !== id),
   }));
-  const splitEvenly = (n: number) => {
-    const orderQty = totalOrderQty(form);
-    if (!orderQty) return alert("Add order items first.");
+  const splitEvenly = (n: number, itemName?: string) => {
+    const itemQty = itemName ? orderQtyForItem(form, itemName) : totalOrderQty(form);
+    if (!itemQty) return alert("Add order items first.");
     if (n < 1) return;
-    const perSlot = Math.floor(orderQty / n);
-    const remainder = orderQty - perSlot * n;
+    const perSlot = Math.floor(itemQty / n);
+    const remainder = itemQty - perSlot * n;
     const today = new Date();
-    const schedules: DeliverySchedule[] = [];
+    const newSlots: DeliverySchedule[] = [];
     for (let i = 0; i < n; i++) {
       const d = new Date(today.getFullYear(), today.getMonth() + i, 15);
-      schedules.push({
+      newSlots.push({
         id: uid(),
         date: d.toISOString().slice(0, 10),
         qty: perSlot + (i === n - 1 ? remainder : 0),
         deliveredQty: 0,
+        ...(itemName ? { itemName } : {}),
       });
     }
-    setForm(f => ({ ...f, schedules }));
+    setForm(f => {
+      const others = itemName
+        ? (f.schedules || []).filter(s => (s.itemName || "") !== itemName)
+        : [];
+      return { ...f, schedules: [...others, ...newSlots] };
+    });
   };
 
   const printSO = (o: SalesOrder) => {
@@ -308,14 +333,32 @@ export function SalesOrders() {
         </div>
         <div className="mt-2"><Button size="sm" variant="outline" onClick={addItem}><IconPlus size={14}/> Add Item</Button></div>
 
-        <ScheduleSection
-          form={form}
-          canManage={canManage}
-          onAdd={addSchedule}
-          onUpdate={updateSchedule}
-          onRemove={removeSchedule}
-          onSplit={splitEvenly}
-        />
+        {form.items.length > 1 ? (
+          <div className="space-y-4 mt-5" data-testid="so-schedule-multi">
+            <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Item-wise Delivery Planning</div>
+            {form.items.filter(it => it.name).map((it, idx) => (
+              <ScheduleSection
+                key={`${it.name}-${idx}`}
+                form={form}
+                canManage={canManage}
+                itemName={it.name}
+                onAdd={() => addSchedule(it.name)}
+                onUpdate={updateSchedule}
+                onRemove={removeSchedule}
+                onSplit={(n) => splitEvenly(n, it.name)}
+              />
+            ))}
+          </div>
+        ) : (
+          <ScheduleSection
+            form={form}
+            canManage={canManage}
+            onAdd={() => addSchedule()}
+            onUpdate={updateSchedule}
+            onRemove={removeSchedule}
+            onSplit={(n) => splitEvenly(n)}
+          />
+        )}
 
         <div className="rounded-lg border p-3 bg-slate-50 dark:bg-slate-800/40 dark:border-slate-700 text-sm mt-3 max-w-sm ml-auto space-y-1">
           <div className="flex justify-between"><span>Sub Total</span><b>{fmtINR(totals.sub)}</b></div>
@@ -341,7 +384,7 @@ export function SalesOrders() {
 }
 
 function ScheduleSection({
-  form, canManage, onAdd, onUpdate, onRemove, onSplit,
+  form, canManage, onAdd, onUpdate, onRemove, onSplit, itemName,
 }: {
   form: SalesOrder;
   canManage: boolean;
@@ -349,21 +392,28 @@ function ScheduleSection({
   onUpdate: (id: string, patch: Partial<DeliverySchedule>) => void;
   onRemove: (id: string) => void;
   onSplit: (n: number) => void;
+  itemName?: string;
 }) {
-  const orderQty = totalOrderQty(form);
-  const scheduled = totalScheduledQty(form);
-  const delivered = totalDeliveredQty(form);
+  const orderQty = itemName ? orderQtyForItem(form, itemName) : totalOrderQty(form);
+  const scheduled = itemName ? scheduledQtyForItem(form, itemName) : totalScheduledQty(form);
+  const delivered = itemName ? deliveredQtyForItem(form, itemName) : totalDeliveredQty(form);
   const remaining = Math.max(0, orderQty - scheduled);
-  const balanced = isScheduleBalanced(form);
+  const balanced = scheduled === orderQty;
   const overScheduled = scheduled > orderQty;
+  const slots = itemName ? schedulesForItem(form, itemName) : (form.schedules || []);
+  const testIdSuffix = itemName ? `-${itemName.replace(/\s+/g, "-").toLowerCase()}` : "";
 
   return (
-    <div className="mt-5 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden" data-testid="so-schedule-section">
+    <div className="rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden" data-testid={`so-schedule-section${testIdSuffix}`}>
       <div className="px-4 py-3 flex items-center justify-between bg-slate-50 dark:bg-slate-800/40 border-b border-slate-200 dark:border-slate-700">
         <div>
-          <div className="font-semibold text-slate-800 dark:text-slate-100">Delivery Schedule</div>
+          <div className="font-semibold text-slate-800 dark:text-slate-100">
+            {itemName ? <>Delivery Schedule — <span className="text-indigo-600 dark:text-indigo-400">{itemName}</span></> : "Delivery Schedule"}
+          </div>
           <div className="text-xs text-slate-500">
-            Split the order quantity into planned deliveries. Total must equal order quantity.
+            {itemName
+              ? `Plan deliveries for this line item. Ordered ${orderQty}.`
+              : "Split the order quantity into planned deliveries. Total must equal order quantity."}
             {!canManage && <span className="ml-1 text-amber-600">(Read-only — only the order creator or Admin can edit.)</span>}
           </div>
         </div>
@@ -372,17 +422,17 @@ function ScheduleSection({
             <div className="hidden sm:flex items-center gap-1 text-xs">
               <span className="text-slate-500">Split into</span>
               {[2, 3, 4].map(n => (
-                <Button key={n} size="sm" variant="outline" onClick={() => onSplit(n)} data-testid={`so-split-${n}`}>{n}</Button>
+                <Button key={n} size="sm" variant="outline" onClick={() => onSplit(n)} data-testid={`so-split-${n}${testIdSuffix}`}>{n}</Button>
               ))}
             </div>
-            <Button size="sm" variant="outline" onClick={onAdd} data-testid="so-add-schedule"><IconPlus size={14}/> Add Slot</Button>
+            <Button size="sm" variant="outline" onClick={onAdd} data-testid={`so-add-schedule${testIdSuffix}`}><IconPlus size={14}/> Add Slot</Button>
           </div>
         )}
       </div>
 
-      {(form.schedules || []).length === 0 ? (
+      {slots.length === 0 ? (
         <div className="p-6 text-center text-sm text-slate-500">
-          No delivery slots yet.{canManage && ` Click "Add Slot" or split the order into ${orderQty > 1 ? "multiple parts" : "a slot"}.`}
+          No delivery slots yet.{canManage && ` Click "Add Slot" or split into parts.`}
         </div>
       ) : (
         <Table>
@@ -392,7 +442,7 @@ function ScheduleSection({
             </tr>
           </thead>
           <tbody>
-            {(form.schedules || []).map(s => {
+            {slots.map(s => {
               const st = scheduleStatus(s);
               return (
                 <tr key={s.id}>
@@ -458,7 +508,7 @@ function ScheduleSection({
 
       <div className="px-4 py-2 flex flex-wrap gap-3 justify-between items-center bg-slate-50/60 dark:bg-slate-800/30 text-xs">
         <div className="flex flex-wrap gap-3">
-          <span>Total Order Qty: <b>{orderQty}</b></span>
+          <span>{itemName ? "Item Qty" : "Total Order Qty"}: <b>{orderQty}</b></span>
           <span>Scheduled: <b>{scheduled}</b></span>
           <span>Delivered: <b>{delivered}</b></span>
           <span>Unscheduled Balance: <b className={remaining > 0 ? "text-amber-600" : "text-emerald-600"}>{remaining}</b></span>

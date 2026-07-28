@@ -16,6 +16,32 @@ export function unscheduledBalance(so: SalesOrder): number {
   return Math.max(0, totalOrderQty(so) - totalScheduledQty(so));
 }
 
+// --- Per-item variants ---
+// A schedule slot with no itemName is treated as belonging to no specific item.
+// When an SO has a single item, we may omit itemName; helpers below accept undefined too.
+export function schedulesForItem(so: SalesOrder, itemName?: string): DeliverySchedule[] {
+  const all = so.schedules || [];
+  if (itemName === undefined) return all;
+  return all.filter(s => (s.itemName || "") === itemName);
+}
+
+export function orderQtyForItem(so: SalesOrder, itemName: string): number {
+  const it = (so.items || []).find(i => i.name === itemName);
+  return Number(it?.qty) || 0;
+}
+
+export function scheduledQtyForItem(so: SalesOrder, itemName: string): number {
+  return schedulesForItem(so, itemName).reduce((a, s) => a + (Number(s.qty) || 0), 0);
+}
+
+export function deliveredQtyForItem(so: SalesOrder, itemName: string): number {
+  return schedulesForItem(so, itemName).reduce((a, s) => a + (Number(s.deliveredQty) || 0), 0);
+}
+
+export function unscheduledBalanceForItem(so: SalesOrder, itemName: string): number {
+  return Math.max(0, orderQtyForItem(so, itemName) - scheduledQtyForItem(so, itemName));
+}
+
 export interface ScheduleStatus {
   pending: number;       // scheduled - delivered (>=0)
   balance: number;       // alias for pending (order-level balance = pending)

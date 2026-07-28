@@ -110,6 +110,7 @@ export interface DeliverySchedule {
   qty: number;            // scheduled quantity for this slot
   deliveredQty?: number;  // qty already delivered against this slot (default 0)
   note?: string;
+  itemName?: string;      // when SO has multiple products, which line item this slot belongs to
 }
 
 export interface SalesOrder {
