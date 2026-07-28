@@ -581,11 +581,21 @@ function SalesForecast({ salesOrders, db, fyStartYear: defaultFyStartYear, fyLab
       const slotPending = Math.max(0, slotQty - slotDelivered);
       if (slotQty <= 0) return;
       row.slots += 1;
-      // Split slot across the SO's line items, weighted by item qty
-      so.items.forEach((it: any) => {
+
+      // Determine which items receive this slot's qty.
+      // If the slot has an itemName (item-wise schedule), attribute 100% to that item.
+      // Otherwise (legacy schedule), split proportionally across all items by qty.
+      const targetItems = s.itemName
+        ? so.items.filter((it: any) => it.name === s.itemName)
+        : so.items;
+
+      const targetQtyTotal = targetItems.reduce((a: number, it: any) => a + (Number(it.qty) || 0), 0);
+      if (targetQtyTotal <= 0) return;
+
+      targetItems.forEach((it: any) => {
         const itQty = Number(it.qty) || 0;
         if (itQty <= 0) return;
-        const share = itQty / orderQty;
+        const share = s.itemName ? 1 : (itQty / targetQtyTotal);
         const pQty = slotQty * share;
         const pDelivered = slotDelivered * share;
         const pPending = slotPending * share;
