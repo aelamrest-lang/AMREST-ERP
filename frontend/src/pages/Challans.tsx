@@ -3,7 +3,7 @@ import { useStore, uid } from "../lib/store";
 import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Badge, Empty } from "../components/ui";
 import type { DeliveryChallan, SalesOrder } from "../lib/types";
 import { IconPlus, IconEdit, IconTrash, IconPrint } from "../components/icons";
-import { calcDocTotals, fmtINR, nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
+import { calcDocTotalsWithFreight, fmtINR, nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
 import { userCan } from "../lib/permissions";
 
 interface DispatchRow {
@@ -66,10 +66,9 @@ export function Challans() {
 
   const totals = useMemo(() => {
     const items = rows.map(r => ({ qty: r.currentQty, rate: r.rate, gst: r.gst }));
-    return calcDocTotals(items);
-  }, [rows]);
-  const freight = Number(form.freight) || 0;
-  const grandTotal = totals.total + freight;
+    return calcDocTotalsWithFreight(items, Number(form.freight) || 0);
+  }, [rows, form.freight]);
+  const grandTotal = totals.total;
 
   const openNew = () => {
     setEdit(null);
@@ -152,9 +151,9 @@ export function Challans() {
     const so = db.salesOrders.find(s => s.id === c.salesOrderId);
     const cust = db.parties.find(p => p.id === c.customerId);
     const dItems = c.items || [];
-    const t = calcDocTotals(dItems.map(i => ({ qty: i.qty, rate: i.rate, gst: i.gst })));
-    const fr = Number(c.freight) || 0;
-    const grand = t.total + fr;
+    const t = calcDocTotalsWithFreight(dItems.map(i => ({ qty: i.qty, rate: i.rate, gst: i.gst })), Number(c.freight) || 0);
+    const fr = t.freight;
+    const grand = t.total;
     const rowsHtml = dItems.map((i, idx) => {
       const ordered = so?.items.find(x => x.name === i.name)?.qty ?? 0;
       const otherDispatched = sumDispatched(db.challans, c.salesOrderId, i.name, c.id);
@@ -210,8 +209,8 @@ export function Challans() {
           <thead><tr><Th>#</Th><Th>Date</Th><Th>SO</Th><Th>Customer</Th><Th>Items</Th><Th>Total</Th><Th>Vehicle</Th><Th>Ack</Th><Th></Th></tr></thead>
           <tbody>
             {db.challans.map(c => {
-              const totalsC = calcDocTotals((c.items || []).map(i => ({ qty: i.qty, rate: i.rate, gst: i.gst })));
-              const grandC = totalsC.total + (Number(c.freight) || 0);
+              const totalsC = calcDocTotalsWithFreight((c.items || []).map(i => ({ qty: i.qty, rate: i.rate, gst: i.gst })), Number(c.freight) || 0);
+              const grandC = totalsC.total;
               const totalUnits = (c.items || []).reduce((s, i) => s + i.qty, 0);
               return (
                 <tr key={c.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">

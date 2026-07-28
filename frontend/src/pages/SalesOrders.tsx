@@ -4,7 +4,7 @@ import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Badge, Empty 
 import { FinishedGoodCombobox } from "../components/FinishedGoodCombobox";
 import type { SalesOrder, DeliverySchedule } from "../lib/types";
 import { IconPlus, IconEdit, IconTrash, IconPrint, IconCheck } from "../components/icons";
-import { calcDocTotals, fmtINR, nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
+import { calcDocTotalsWithFreight, fmtINR, nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
 import { userCan } from "../lib/permissions";
 import {
   totalOrderQty, totalScheduledQty, totalDeliveredQty, unscheduledBalance,
@@ -104,9 +104,8 @@ export function SalesOrders() {
   };
   const addItem = () => setForm(f => ({...f, items: [...f.items, { name: "", qty: 1, rate: 0, gst: 18 }]}));
   const delItem = (i: number) => setForm(f => ({...f, items: f.items.filter((_, idx) => idx !== i)}));
-  const totals = calcDocTotals(form.items);
-  const freight = Number(form.freight) || 0;
-  const grandTotal = totals.total + freight;
+  const totals = calcDocTotalsWithFreight(form.items, Number(form.freight) || 0);
+  const grandTotal = totals.total;
 
   // --- Schedule handlers ---
   const addSchedule = (itemName?: string) => {
@@ -156,9 +155,9 @@ export function SalesOrders() {
 
   const printSO = (o: SalesOrder) => {
     const cust = db.parties.find(x => x.id === o.customerId);
-    const t = calcDocTotals(o.items);
-    const fr = Number(o.freight) || 0;
-    const grand = t.total + fr;
+    const t = calcDocTotalsWithFreight(o.items, Number(o.freight) || 0);
+    const fr = t.freight;
+    const grand = t.total;
     const scheduleRows = (o.schedules || []).map(s => {
       const st = scheduleStatus(s);
       return `<tr>
@@ -202,8 +201,8 @@ export function SalesOrders() {
           <thead><tr><Th>#</Th><Th>Date</Th><Th>Customer</Th><Th>Product(s) &amp; Qty</Th><Th>Delivery</Th><Th>Schedule</Th><Th>Total</Th><Th>Status</Th><Th></Th></tr></thead>
           <tbody>
             {list.map(o => {
-              const t = calcDocTotals(o.items);
-              const totalWithFreight = t.total + (Number(o.freight) || 0);
+              const t = calcDocTotalsWithFreight(o.items, Number(o.freight) || 0);
+              const totalWithFreight = t.total;
               const oq = totalOrderQty(o);
               const sq = totalScheduledQty(o);
               const dq = totalDeliveredQty(o);

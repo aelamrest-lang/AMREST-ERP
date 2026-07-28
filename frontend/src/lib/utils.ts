@@ -63,6 +63,30 @@ export function calcDocTotals(items: { qty: number; rate: number; gst: number }[
   return { sub, gst, total: sub + gst };
 }
 
+// Freight is distributed across line items in proportion to their amount
+// so GST applies to (item amount + item's share of freight) per line.
+// If sub-total is 0, freight is taxed at the weighted GST of items (or 0 if no items).
+export function calcDocTotalsWithFreight(
+  items: { qty: number; rate: number; gst: number }[],
+  freight: number,
+) {
+  const fr = Number(freight) || 0;
+  let sub = 0;
+  const amts: number[] = [];
+  for (const it of items) {
+    const amt = (Number(it.qty) || 0) * (Number(it.rate) || 0);
+    amts.push(amt);
+    sub += amt;
+  }
+  let gst = 0;
+  for (let i = 0; i < items.length; i++) {
+    const share = sub > 0 ? (amts[i] / sub) * fr : (fr / items.length);
+    const taxable = amts[i] + share;
+    gst += taxable * ((Number(items[i].gst) || 0) / 100);
+  }
+  return { sub, freight: fr, gst, total: sub + fr + gst };
+}
+
 // A4 in points at 96 dpi = 210mm × 297mm ≈ 794 × 1123 px. We use 794 for width so
 // html2canvas gives us a canvas that jsPDF can render 1:1 into an A4 page.
 const A4_WIDTH_PX = 794;   // 210mm @ 96dpi
