@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { useStore, uid } from "../lib/store";
 import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Empty } from "../components/ui";
+import { FinishedGoodCombobox } from "../components/FinishedGoodCombobox";
 import type { Proforma } from "../lib/types";
 import { IconPlus, IconEdit, IconTrash, IconPrint } from "../components/icons";
 import { calcDocTotals, fmtINR, nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
@@ -59,6 +60,17 @@ export function Proformas() {
   };
 
   const updateItem = (i: number, key: string, val: any) => setForm(f => ({...f, items: f.items.map((it, idx) => idx === i ? {...it, [key]: key === "name" ? val : Number(val)} : it)}));
+  const pickFinishedGood = (i: number, fg: { name: string; saleRate: number; gstRate: number }) => {
+    setForm(f => ({
+      ...f,
+      items: f.items.map((it, idx) => idx === i ? {
+        ...it,
+        name: fg.name,
+        rate: fg.saleRate || it.rate || 0,
+        gst: fg.gstRate ?? it.gst,
+      } : it),
+    }));
+  };
   const addItem = () => setForm(f => ({...f, items: [...f.items, { name: "", qty: 1, rate: 0, gst: 18 }]}));
   const delItem = (i: number) => setForm(f => ({...f, items: f.items.filter((_, idx) => idx !== i)}));
   const totals = calcDocTotals(form.items);
@@ -122,19 +134,29 @@ export function Proformas() {
             </Select>
           </div>
         </div>
-        <div className="mt-3 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
+        <div className="mt-3 border border-slate-200 dark:border-slate-700 rounded-lg overflow-visible">
           <Table>
             <thead><tr><Th>Item</Th><Th>Qty</Th><Th>Rate</Th><Th>GST%</Th><Th>Amount</Th><Th></Th></tr></thead>
-            <tbody>{form.items.map((it, i) => (
+            <tbody>{form.items.map((it, i) => {
+              const finishedGoods = db.items.filter(x => x.category === "Finished Goods");
+              return (
               <tr key={i}>
-                <Td><Input value={it.name} onChange={(e: any) => updateItem(i, "name", e.target.value)}/></Td>
+                <Td className="min-w-[260px]">
+                  <FinishedGoodCombobox
+                    items={finishedGoods}
+                    value={it.name}
+                    onPick={(fg) => pickFinishedGood(i, fg)}
+                    testId={`pf-item-combo-${i}`}
+                  />
+                </Td>
                 <Td><Input type="number" value={it.qty} onChange={(e: any) => updateItem(i, "qty", e.target.value)}/></Td>
                 <Td><Input type="number" value={it.rate} onChange={(e: any) => updateItem(i, "rate", e.target.value)}/></Td>
                 <Td><Select value={it.gst} onChange={(e: any) => updateItem(i, "gst", e.target.value)}>{GST_OPTIONS.map(rate => <option key={rate} value={rate}>{rate}%</option>)}</Select></Td>
                 <Td>{fmtINR(it.qty * it.rate)}</Td>
                 <Td><Button size="sm" variant="ghost" onClick={() => delItem(i)}><IconTrash size={14}/></Button></Td>
               </tr>
-            ))}</tbody>
+              );
+            })}</tbody>
           </Table>
         </div>
         <div className="mt-2"><Button size="sm" variant="outline" onClick={addItem}><IconPlus size={14}/> Add Item</Button></div>

@@ -119,6 +119,7 @@ export interface SalesOrder {
   customerId: string;
   proformaId?: string;
   items: { name: string; qty: number; rate: number; gst: number }[];
+  freight?: number;
   deliveryDate?: string;
   schedules?: DeliverySchedule[];
   status: "Pending" | "Confirmed" | "In Production" | "Dispatched" | "Delivered";

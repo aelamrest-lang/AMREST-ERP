@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { useStore, uid } from "../lib/store";
 import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Badge, Empty } from "../components/ui";
+import { FinishedGoodCombobox } from "../components/FinishedGoodCombobox";
 import type { SalesOrder, DeliverySchedule } from "../lib/types";
 import { IconPlus, IconEdit, IconTrash, IconPrint, IconCheck } from "../components/icons";
 import { calcDocTotals, fmtINR, nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
@@ -73,22 +74,22 @@ export function SalesOrders() {
   };
 
   const updateItem = (i: number, key: string, val: any) => setForm(f => ({...f, items: f.items.map((it, idx) => idx === i ? {...it, [key]: key === "name" ? val : Number(val)} : it)}));
-  const selectFinishedGood = (i: number, itemId: string) => {
-    const fg = db.items.find(it => it.id === itemId);
-    if (!fg) return;
+  const pickFinishedGood = (i: number, fg: { name: string; saleRate: number; gstRate: number }) => {
     setForm(f => ({
       ...f,
       items: f.items.map((it, idx) => idx === i ? {
         ...it,
         name: fg.name,
-        rate: it.rate || fg.saleRate || 0,
-        gst: fg.gstRate || it.gst,
+        rate: fg.saleRate || it.rate || 0,
+        gst: fg.gstRate ?? it.gst,
       } : it),
     }));
   };
   const addItem = () => setForm(f => ({...f, items: [...f.items, { name: "", qty: 1, rate: 0, gst: 18 }]}));
   const delItem = (i: number) => setForm(f => ({...f, items: f.items.filter((_, idx) => idx !== i)}));
   const totals = calcDocTotals(form.items);
+  const freight = Number(form.freight) || 0;
+  const grandTotal = totals.total + freight;
 
   // --- Schedule handlers ---
   const addSchedule = () => {
@@ -130,6 +131,9 @@ export function SalesOrders() {
 
   const printSO = (o: SalesOrder) => {
     const cust = db.parties.find(x => x.id === o.customerId);
+    const t = calcDocTotals(o.items);
+    const fr = Number(o.freight) || 0;
+    const grand = t.total + fr;
     const scheduleRows = (o.schedules || []).map(s => {
       const st = scheduleStatus(s);
       return `<tr>
@@ -145,6 +149,12 @@ export function SalesOrders() {
       <div class="box"><span class="badge">${o.status}</span> &nbsp; <b>Delivery Date:</b> ${o.deliveryDate || "TBD"}</div>
       <table><thead><tr><th>Item</th><th style="text-align:right">Qty</th><th style="text-align:right">Rate</th><th style="text-align:right">GST%</th><th style="text-align:right">Amount</th></tr></thead>
       <tbody>${o.items.map(i => `<tr><td>${i.name}</td><td style="text-align:right">${i.qty}</td><td style="text-align:right">${fmtINR(i.rate)}</td><td style="text-align:right">${i.gst}%</td><td style="text-align:right">${fmtINR(i.qty * i.rate)}</td></tr>`).join("")}</tbody></table>
+      <table style="margin-top:8px;max-width:340px;margin-left:auto">
+        <tr><td>Sub Total</td><td style="text-align:right">${fmtINR(t.sub)}</td></tr>
+        <tr><td>Freight</td><td style="text-align:right">${fmtINR(fr)}</td></tr>
+        <tr><td>GST</td><td style="text-align:right">${fmtINR(t.gst)}</td></tr>
+        <tr><td><b>Total</b></td><td style="text-align:right"><b>${fmtINR(grand)}</b></td></tr>
+      </table>
       ${scheduleRows ? `<div class="section-title" style="margin-top:14px">Delivery Schedule</div>
         <table>
           <thead><tr><th>Date</th><th style="text-align:right">Scheduled</th><th style="text-align:right">Delivered</th><th style="text-align:right">Pending</th><th>Status</th></tr></thead>
@@ -168,6 +178,7 @@ export function SalesOrders() {
           <tbody>
             {list.map(o => {
               const t = calcDocTotals(o.items);
+              const totalWithFreight = t.total + (Number(o.freight) || 0);
               const oq = totalOrderQty(o);
               const sq = totalScheduledQty(o);
               const dq = totalDeliveredQty(o);
@@ -232,7 +243,7 @@ export function SalesOrders() {
                       {sq === 0 && <span className="text-slate-400">No schedule</span>}
                     </div>
                   </Td>
-                  <Td className="font-semibold">{fmtINR(t.total)}</Td>
+                  <Td className="font-semibold">{fmtINR(totalWithFreight)}</Td>
                   <Td>
                     <Select disabled={!canEdit} value={o.status} onChange={(e: any) => {
                       setDB(d => ({...d, salesOrders: d.salesOrders.map(x => x.id === o.id ? {...x, status: e.target.value} : x)}));
@@ -270,25 +281,20 @@ export function SalesOrders() {
             </Select>
           </div>
         </div>
-        <div className="mt-3 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
+        <div className="mt-3 border border-slate-200 dark:border-slate-700 rounded-lg overflow-visible">
           <Table>
             <thead><tr><Th>Item</Th><Th>Qty</Th><Th>Rate</Th><Th>GST%</Th><Th>Amount</Th><Th></Th></tr></thead>
             <tbody>{form.items.map((it, i) => {
               const finishedGoods = db.items.filter(x => x.category === "Finished Goods");
-              const matchedFG = finishedGoods.find(x => x.name === it.name);
               return (
               <tr key={i}>
-                <Td>
-                  <Select
-                    value={matchedFG?.id || ""}
-                    onChange={(e: any) => selectFinishedGood(i, e.target.value)}
-                    data-testid={`so-item-select-${i}`}
-                  >
-                    <option value="">-- Select Finished Good --</option>
-                    {finishedGoods.map(fg => (
-                      <option key={fg.id} value={fg.id}>{fg.name}{fg.code ? ` (${fg.code})` : ""}</option>
-                    ))}
-                  </Select>
+                <Td className="min-w-[260px]">
+                  <FinishedGoodCombobox
+                    items={finishedGoods}
+                    value={it.name}
+                    onPick={(fg) => pickFinishedGood(i, fg)}
+                    testId={`so-item-combo-${i}`}
+                  />
                 </Td>
                 <Td><Input type="number" value={it.qty} onChange={(e: any) => updateItem(i, "qty", e.target.value)}/></Td>
                 <Td><Input type="number" value={it.rate} onChange={(e: any) => updateItem(i, "rate", e.target.value)}/></Td>
@@ -311,10 +317,20 @@ export function SalesOrders() {
           onSplit={splitEvenly}
         />
 
-        <div className="rounded-lg border p-3 bg-slate-50 dark:bg-slate-800/40 dark:border-slate-700 text-sm mt-3 max-w-sm ml-auto">
+        <div className="rounded-lg border p-3 bg-slate-50 dark:bg-slate-800/40 dark:border-slate-700 text-sm mt-3 max-w-sm ml-auto space-y-1">
           <div className="flex justify-between"><span>Sub Total</span><b>{fmtINR(totals.sub)}</b></div>
+          <div className="flex justify-between items-center gap-2">
+            <span>Freight</span>
+            <Input
+              type="number"
+              value={form.freight ?? 0}
+              onChange={(e: any) => setForm({ ...form, freight: Number(e.target.value) || 0 })}
+              className="w-32 text-right py-1 h-8"
+              data-testid="so-freight-input"
+            />
+          </div>
           <div className="flex justify-between"><span>GST</span><b>{fmtINR(totals.gst)}</b></div>
-          <div className="flex justify-between text-base border-t pt-1 mt-1"><span>Total</span><b className="text-emerald-600">{fmtINR(totals.total)}</b></div>
+          <div className="flex justify-between text-base border-t pt-1 mt-1"><span>Total</span><b className="text-emerald-600">{fmtINR(grandTotal)}</b></div>
         </div>
         <div className="mt-5 flex justify-end gap-2"><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={save} data-testid="so-save-btn">{edit ? "Update" : "Create"}</Button></div>
       </Modal>

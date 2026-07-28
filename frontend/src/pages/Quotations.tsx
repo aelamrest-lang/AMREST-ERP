@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { useStore, uid } from "../lib/store";
 import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Empty, Textarea } from "../components/ui";
+import { FinishedGoodCombobox } from "../components/FinishedGoodCombobox";
 import type { Quotation, DocStatus } from "../lib/types";
 import { IconPlus, IconEdit, IconTrash, IconPrint, IconFile } from "../components/icons";
 import { calcCostingTotals, calcDocTotals, fmtINR, nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
@@ -81,6 +82,17 @@ export function Quotations() {
 
   const updateItem = (i: number, key: string, val: any) => {
     setForm(f => ({...f, items: f.items.map((it, idx) => idx === i ? {...it, [key]: key === "name" || key === "description" ? val : Number(val)} : it)}));
+  };
+  const pickFinishedGood = (i: number, fg: { name: string; saleRate: number; gstRate: number }) => {
+    setForm(f => ({
+      ...f,
+      items: f.items.map((it, idx) => idx === i ? {
+        ...it,
+        name: fg.name,
+        rate: fg.saleRate || it.rate || 0,
+        gst: fg.gstRate ?? it.gst,
+      } : it),
+    }));
   };
   const addItem = () => setForm(f => ({...f, items: [...f.items, { name: "", description: "", qty: 1, rate: 0, gst: 18 }]}));
   const delItem = (i: number) => setForm(f => ({...f, items: f.items.filter((_, idx) => idx !== i)}));
@@ -227,15 +239,22 @@ export function Quotations() {
           </div>
         </div>
 
-        <div className="mt-3 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
+        <div className="mt-3 border border-slate-200 dark:border-slate-700 rounded-lg overflow-visible">
           <Table>
             <thead><tr><Th>Item Name / Description</Th><Th>Qty</Th><Th>Rate</Th><Th>GST%</Th><Th>Amount</Th><Th></Th></tr></thead>
             <tbody>
-              {form.items.map((it, i) => (
+              {form.items.map((it, i) => {
+                const finishedGoods = db.items.filter(x => x.category === "Finished Goods");
+                return (
                 <tr key={i}>
-                  <Td>
+                  <Td className="min-w-[280px]">
                     <Label>Item Name</Label>
-                    <Input value={it.name} onChange={(e: any) => updateItem(i, "name", e.target.value)}/>
+                    <FinishedGoodCombobox
+                      items={finishedGoods}
+                      value={it.name}
+                      onPick={(fg) => pickFinishedGood(i, fg)}
+                      testId={`quot-item-combo-${i}`}
+                    />
                     <Label className="mt-2">Description</Label>
                     <Textarea rows={2} value={it.description || ""} placeholder="11/0.433 kV, Copper Wound, Outdoor Type, Oil Immersed, ONAN Cooling, BIS Compliant, Complete with Standard Accessories." onChange={(e: any) => updateItem(i, "description", e.target.value)}/>
                   </Td>
@@ -245,7 +264,8 @@ export function Quotations() {
                   <Td className="font-medium">{fmtINR(it.qty * it.rate)}</Td>
                   <Td><Button size="sm" variant="ghost" onClick={() => delItem(i)}><IconTrash size={14}/></Button></Td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </Table>
         </div>
