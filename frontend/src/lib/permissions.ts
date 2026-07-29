@@ -3,6 +3,7 @@ import type { ModulePermission, PermissionAction, PermissionMatrix, Role, User }
 export type RouteId =
   | "dashboard" | "leads" | "parties" | "items" | "quotations" | "proformas" | "salesorders"
   | "purchase" | "grn" | "inventory" | "rawissue" | "bom" | "jobcards" | "production" | "testing" | "challans"
+  | "operators"
   | "reports" | "taxdash" | "users" | "settings" | "docformats" | "logs" | "profile";
 
 export const permissionActions: PermissionAction[] = ["view", "create", "edit", "delete", "approve", "print", "export"];
@@ -24,6 +25,7 @@ export const moduleLabels: Record<RouteId, string> = {
   production: "Production",
   testing: "QC Testing",
   challans: "Delivery Challan",
+  operators: "Operators & Ledger",
   reports: "Reports",
   taxdash: "Tax Dashboard",
   users: "User Management",
@@ -36,6 +38,7 @@ export const moduleLabels: Record<RouteId, string> = {
 export const permissionModules: RouteId[] = [
   "dashboard", "leads", "parties", "items", "quotations", "proformas", "salesorders",
   "purchase", "grn", "inventory", "rawissue", "bom", "jobcards", "production", "testing", "challans",
+  "operators",
   "reports", "taxdash", "users", "settings", "docformats", "logs", "profile",
 ];
 
@@ -91,6 +94,7 @@ export function defaultPermissionsForRole(role: Role): PermissionMatrix {
     grant(p, "production", ["view", "edit", "print", "export"]);
     grant(p, "testing", ["view", "create", "edit", "approve", "print", "export"]);
     grant(p, "inventory", ["view", "export"]);
+    grant(p, "operators", ["view", "create", "edit", "delete", "export"]);
     grant(p, "reports", ["view", "export"]);
   }
 

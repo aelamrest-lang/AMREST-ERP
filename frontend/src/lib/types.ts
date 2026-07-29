@@ -216,10 +216,21 @@ export interface ProductionEntry {
   todayQty: number;
   balanceQty: number;
   operatorName: string;
+  operatorId?: string;
   shift: "Day" | "Night" | "General";
   machineName: string;
   status?: "Pending" | "Running" | "Completed" | "Hold";
   remarks: string;
+  priceEach?: number;
+  createdAt: string;
+}
+
+export interface Operator {
+  id: string;
+  name: string;
+  department?: string;
+  defaultRate?: number;
+  active: boolean;
   createdAt: string;
 }
 
@@ -460,6 +471,7 @@ export interface DB {
   jobCards: JobCard[];
   challans: DeliveryChallan[];
   productionEntries: ProductionEntry[];
+  operators: Operator[];
   serials: SerialRecord[];
   qcTests: QCTestRecord[];
   qcFormats: QCFormat[];

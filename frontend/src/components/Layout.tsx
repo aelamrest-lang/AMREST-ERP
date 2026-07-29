@@ -28,6 +28,7 @@ const navGroups: { label: string; items: { id: Route; label: string; icon: any }
     { id: "bom", label: "Bill of Material", icon: IconClipboard },
     { id: "jobcards", label: "Job Cards", icon: IconClipboard },
     { id: "production", label: "Production", icon: IconFactory },
+    { id: "operators", label: "Operators & Ledger", icon: IconUser },
     { id: "testing", label: "QC Testing", icon: IconClipboard },
     { id: "challans", label: "Delivery Challan", icon: IconTruck },
   ]},

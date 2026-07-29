@@ -132,6 +132,7 @@ export function seedDB(): DB {
     jobCards: [],
     challans: [],
     productionEntries: [],
+    operators: [],
     serials: [],
     qcTests: [],
     qcFinalReports: [],

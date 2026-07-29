@@ -325,7 +325,8 @@ export function ProductionDashboard() {
   const [entryJobId, setEntryJobId] = useState(db.jobCards[0]?.id || "");
   const [entryStage, setEntryStage] = useState<ProductionStage>(STAGES[0]);
   const [entryQty, setEntryQty] = useState(0);
-  const [operatorName, setOperatorName] = useState("");
+  const [operatorId, setOperatorId] = useState("");
+  const [priceEach, setPriceEach] = useState(0);
   const [shift, setShift] = useState<"Day" | "Night" | "General">("Day");
   const [machineName, setMachineName] = useState("");
   const [remarks, setRemarks] = useState("");
@@ -355,13 +356,17 @@ export function ProductionDashboard() {
     if (!entryTotalQty || entryTotalQty <= 0) return alert("Total stage quantity is mandatory");
     if (productionComplete && !isAdmin) return alert("Production Quantity Completed");
     if (entryQty <= 0) return alert("Enter today's production quantity");
+    if (!operatorId) return alert("Please select an operator");
     if (entryQty > balanceQty && !isAdmin) return setEntryWarning("Entered quantity exceeds pending quantity");
     const qty = isAdmin ? entryQty : Math.min(entryQty, balanceQty);
+    const operator = db.operators.find(o => o.id === operatorId);
+    const operatorName = operator?.name || "";
     const entry: ProductionEntry = {
       id: uid(), date: todayISO(), jobCardId: selectedJob.id, jobCardNumber: selectedJob.number,
       stage: entryStage, productName: selectedJob.product, totalJobQty: entryTotalQty,
       previousCompletedQty: previousCompleted, todayQty: qty, balanceQty: Math.max(0, entryTotalQty - previousCompleted - qty),
-      operatorName, shift, machineName, status: previousCompleted + qty >= entryTotalQty ? "Completed" : "Running", remarks, createdAt: new Date().toISOString(),
+      operatorName, operatorId, shift, machineName, priceEach: Number(priceEach) || 0,
+      status: previousCompleted + qty >= entryTotalQty ? "Completed" : "Running", remarks, createdAt: new Date().toISOString(),
     };
     setDB(d => ({
       ...d,
@@ -377,7 +382,7 @@ export function ProductionDashboard() {
     }));
     log(`Production entry ${selectedJob.number} ${entryStage}: ${qty}`, "Production");
     printProductionEntry(entry);
-    setEntryQty(0); setOperatorName(""); setMachineName(""); setRemarks(""); setEntryWarning(""); setEntryOpen(false);
+    setEntryQty(0); setOperatorId(""); setPriceEach(0); setMachineName(""); setRemarks(""); setEntryWarning(""); setEntryOpen(false);
   };
 
   const setEntryQtySafe = (value: number) => {
@@ -486,9 +491,30 @@ export function ProductionDashboard() {
           <div><Label>Today {entryStage} Quantity</Label><Input type="number" value={entryQty} max={balanceQty} onChange={(e: any) => setEntryQtySafe(Number(e.target.value))} /></div>
           <div><Label>Total Completed Quantity</Label><Input value={previousCompleted + entryQty} disabled /></div>
           <div><Label>Balance {entryStage} Quantity</Label><Input value={projectedBalanceQty} disabled /></div>
-          <div><Label>Operator Name</Label><Input value={operatorName} onChange={(e: any) => setOperatorName(e.target.value)} /></div>
+          <div>
+            <Label>Operator Name *</Label>
+            <Select
+              value={operatorId}
+              onChange={(e: any) => {
+                const id = e.target.value;
+                setOperatorId(id);
+                const op = db.operators.find(o => o.id === id);
+                if (op && !priceEach) setPriceEach(op.defaultRate || 0);
+              }}
+              data-testid="production-operator-select"
+            >
+              <option value="">— Select Operator —</option>
+              {db.operators.filter(o => o.active).map(o => (
+                <option key={o.id} value={o.id}>{o.name}{o.department ? ` · ${o.department}` : ""}</option>
+              ))}
+            </Select>
+            {db.operators.filter(o => o.active).length === 0 && (
+              <div className="text-xs text-amber-600 mt-1">No operators yet. Go to “Operators &amp; Ledger” to add one.</div>
+            )}
+          </div>
           <div><Label>Shift</Label><Select value={shift} onChange={(e: any) => setShift(e.target.value)}><option>Day</option><option>Night</option><option>General</option></Select></div>
           <div><Label>Machine Name</Label><Input value={machineName} onChange={(e: any) => setMachineName(e.target.value)} /></div>
+          <div><Label>Price Each (₹ per unit)</Label><Input type="number" value={priceEach} onChange={(e: any) => setPriceEach(Number(e.target.value) || 0)} data-testid="production-price-each" /></div>
           <div className="sm:col-span-2"><Label>Remarks</Label><Textarea rows={3} value={remarks} onChange={(e: any) => setRemarks(e.target.value)} /></div>
         </div>
         {entryWarning && <div className="mt-3 rounded-lg bg-rose-50 text-rose-700 px-3 py-2 text-sm">{entryWarning}</div>}

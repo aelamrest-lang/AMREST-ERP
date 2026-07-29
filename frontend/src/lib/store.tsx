@@ -47,6 +47,7 @@ function migrateDB(db: DB): DB {
     ctCostings: db.ctCostings || [],
     materialIssues: db.materialIssues || [],
     productionEntries: db.productionEntries || [],
+    operators: db.operators || [],
     serials: db.serials || [],
     qcTests: db.qcTests || [],
     qcFinalReports: db.qcFinalReports || [],
