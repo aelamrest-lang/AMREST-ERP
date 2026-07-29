@@ -7,7 +7,8 @@ import { fmtINR, printArea, professionalDocument, todayISO } from "../lib/utils"
 import { userCan } from "../lib/permissions";
 
 const PRODUCTION_STAGES: ProductionStage[] = [
-  "LV Winding", "HV Winding", "Primary Winding", "Secondary Winding",
+  "LV Winding", "HV Winding", "Primary Winding",
+  "Secondary Winding 1", "Secondary Winding 2", "Secondary Winding 3",
   "Core Coil Assembly", "Tanking", "Finishing", "Testing Ready", "Dispatch Ready",
 ];
 

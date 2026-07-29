@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useStore, uid } from "../lib/store";
 import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Badge, Empty, KPI, Textarea } from "../components/ui";
 import type { DB, JobCard, ProductionEntry, ProductionStage, QCTestRecord, SerialRecord } from "../lib/types";
@@ -6,12 +6,14 @@ import { IconPlus, IconEdit, IconTrash, IconFactory, IconCheck, IconPrint } from
 import { nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
 import { userCan } from "../lib/permissions";
 
-const STAGES: ProductionStage[] = ["LV Winding", "HV Winding", "Primary Winding", "Secondary Winding", "Core Coil Assembly", "Tanking", "Finishing", "Testing Ready", "Dispatch Ready"];
+const STAGES: ProductionStage[] = ["LV Winding", "HV Winding", "Primary Winding", "Secondary Winding 1", "Secondary Winding 2", "Secondary Winding 3", "Core Coil Assembly", "Tanking", "Finishing", "Testing Ready", "Dispatch Ready"];
 const STAGE_MULTIPLIERS: Record<string, number> = {
   "LV Winding": 1,
   "HV Winding": 1,
   "Primary Winding": 1,
-  "Secondary Winding": 1,
+  "Secondary Winding 1": 0,
+  "Secondary Winding 2": 0,
+  "Secondary Winding 3": 0,
   "Core Coil Assembly": 1,
   "Tanking": 1,
   "Finishing": 1,
@@ -65,8 +67,8 @@ export function JobCards() {
 
   const defaultStageQuantities = (qty: number) => STAGES.map(stage => ({
     stage,
-    multiplier: STAGE_MULTIPLIERS[stage] || 1,
-    totalQty: qty * (STAGE_MULTIPLIERS[stage] || 1),
+    multiplier: STAGE_MULTIPLIERS[stage] ?? 1,
+    totalQty: qty * (STAGE_MULTIPLIERS[stage] ?? 1),
   }));
 
   const blank = (): JobCard => ({
@@ -88,7 +90,39 @@ export function JobCards() {
     }
     setEdit(null); setForm(f); setOpen(true);
   };
-  const openEdit = (j: JobCard) => { setEdit(j); setForm({...j, reservedItems: j.reservedItems.map(i => ({...i})), stageQuantities: j.stageQuantities || defaultStageQuantities(j.qty), stages: j.stages.map(s => ({...s}))}); setOpen(true); };
+  const openEdit = (j: JobCard) => {
+    setEdit(j);
+    // Migrate legacy stage "Secondary Winding" → 3 sub-stages
+    const migratedStageQuantities = (j.stageQuantities || defaultStageQuantities(j.qty))
+      .flatMap(sq => sq.stage === "Secondary Winding"
+        ? ["Secondary Winding 1", "Secondary Winding 2", "Secondary Winding 3"].map((s, i) => ({
+            stage: s as ProductionStage,
+            multiplier: i === 0 ? sq.multiplier : 0,
+            totalQty: i === 0 ? sq.totalQty : 0,
+          }))
+        : [sq],
+      );
+    // Ensure any missing STAGES have a row (with 0 multiplier if the sub-stage wasn't there yet)
+    const known = new Set(migratedStageQuantities.map(x => x.stage));
+    STAGES.forEach(s => {
+      if (!known.has(s)) migratedStageQuantities.push({ stage: s, multiplier: STAGE_MULTIPLIERS[s] ?? 0, totalQty: (STAGE_MULTIPLIERS[s] ?? 0) * j.qty });
+    });
+    const migratedStages = j.stages.flatMap(st => st.stage === "Secondary Winding"
+      ? ["Secondary Winding 1", "Secondary Winding 2", "Secondary Winding 3"].map((s, i) => ({ stage: s as ProductionStage, status: i === 0 ? st.status : "pending" as const, worker: i === 0 ? st.worker : undefined, date: i === 0 ? st.date : undefined }))
+      : [st],
+    );
+    const stagesKnown = new Set(migratedStages.map(x => x.stage));
+    STAGES.forEach(s => {
+      if (!stagesKnown.has(s)) migratedStages.push({ stage: s, status: "pending" as const });
+    });
+    setForm({
+      ...j,
+      reservedItems: j.reservedItems.map(i => ({ ...i })),
+      stageQuantities: migratedStageQuantities,
+      stages: migratedStages,
+    });
+    setOpen(true);
+  };
 
   const save = () => {
     if (!form.qcFormatId) return alert("QC Format selection is mandatory in Job Card.");
@@ -308,7 +342,7 @@ export function JobCards() {
               </tbody>
             </Table>
           </div>
-          <p className="mt-2 text-xs text-slate-500">Total Stage Qty = Job Qty x Stage Multiplier. Example: Job Qty 10 x LV Multiplier 3 = Total LV 30.</p>
+          <p className="mt-2 text-xs text-slate-500">Total Stage Qty = Job Qty x Stage Multiplier. Set a multiplier of <b>0</b> to skip that stage — it will not appear in the Production dropdown.</p>
         </div>
 
         <div className="mt-5 flex justify-end gap-2"><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={save}>{edit ? "Update" : "Create & Reserve Stock"}</Button></div>
@@ -341,6 +375,21 @@ export function ProductionDashboard() {
   }));
 
   const selectedJob = db.jobCards.find(j => j.id === entryJobId) || db.jobCards[0];
+  const enabledStages = useMemo(() => {
+    if (!selectedJob) return STAGES;
+    if (!selectedJob.stageQuantities || selectedJob.stageQuantities.length === 0) return STAGES;
+    return STAGES.filter(s => {
+      const sq = selectedJob.stageQuantities?.find(row => row.stage === s);
+      return (sq?.multiplier ?? 0) > 0;
+    });
+  }, [selectedJob]);
+  // Auto-correct entryStage when it's not enabled for the current job
+  useEffect(() => {
+    if (!entryOpen) return;
+    if (enabledStages.length > 0 && !enabledStages.includes(entryStage)) {
+      setEntryStage(enabledStages[0]);
+    }
+  }, [entryOpen, enabledStages, entryStage]);
   const entryTotalQty = selectedJob?.stageQuantities?.find(row => row.stage === entryStage)?.totalQty || selectedJob?.qty || 0;
   const previousCompleted = selectedJob ? db.productionEntries.filter(e => e.jobCardId === selectedJob.id && e.stage === entryStage).reduce((s, e) => s + e.todayQty, 0) : 0;
   const balanceQty = selectedJob ? Math.max(0, entryTotalQty - previousCompleted) : 0;
@@ -484,7 +533,20 @@ export function ProductionDashboard() {
       <Modal open={entryOpen} onClose={() => setEntryOpen(false)} title="Daily Production Entry" size="lg">
         <div className="grid sm:grid-cols-2 gap-3">
           <div><Label>Job Card Number</Label><Select value={entryJobId} onChange={(e: any) => { setEntryJobId(e.target.value); setEntryQty(0); }}>{db.jobCards.map(j => <option key={j.id} value={j.id}>{j.number} - {j.product}</option>)}</Select></div>
-          <div><Label>Production Stage</Label><Select value={entryStage} onChange={(e: any) => { setEntryStage(e.target.value); setEntryQty(0); setOperatorId(""); }}>{STAGES.map(s => <option key={s} value={s}>{s}</option>)}</Select></div>
+          <div><Label>Production Stage</Label>
+            <Select
+              value={entryStage}
+              onChange={(e: any) => { setEntryStage(e.target.value); setEntryQty(0); setOperatorId(""); }}
+              data-testid="prod-entry-stage-select"
+            >
+              {enabledStages.length > 0
+                ? enabledStages.map(s => <option key={s} value={s}>{s}</option>)
+                : <option value="">— No stages enabled in Job Card —</option>}
+            </Select>
+            {enabledStages.length < STAGES.length && selectedJob && (
+              <div className="text-[10px] text-slate-500 mt-1">Showing only stages enabled in this Job Card.</div>
+            )}
+          </div>
           <div><Label>Product Name</Label><Input value={selectedJob?.product || ""} disabled /></div>
           <div><Label>Total {entryStage} Quantity</Label><Input type="number" value={entryTotalQty} disabled /></div>
           <div><Label>Previously Completed Quantity</Label><Input value={previousCompleted} disabled /></div>
