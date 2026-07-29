@@ -48,7 +48,6 @@ export function Dashboard() {
   interface Shortage {
     itemId: string;
     itemName: string;
-    itemCode: string;
     unit: string;
     required: number;
     available: number;
@@ -73,7 +72,7 @@ export function Dashboard() {
     const available = Number(item.currentStock) || 0;
     if (required <= available) return;
     shortages.push({
-      itemId, itemName: item.name, itemCode: item.code, unit: item.unit || "Nos",
+      itemId, itemName: item.name, unit: item.unit || "Nos",
       required, available, shortage: required - available, jobCards: jcs,
     });
   });
@@ -245,11 +244,11 @@ export function Dashboard() {
                 type="button"
                 onClick={() => setShortageDrill(s)}
                 className="w-full text-left flex items-start justify-between gap-3 text-sm border-b border-slate-100 dark:border-slate-800 pb-2 pt-1 hover:bg-slate-50 dark:hover:bg-slate-800/50 rounded px-2 -mx-2 transition"
-                data-testid={`shortage-row-${s.itemCode}`}
+                data-testid={`shortage-row-${s.itemId}`}
               >
                 <div className="min-w-0">
                   <div className="font-medium text-slate-700 dark:text-slate-200 truncate">{s.itemName}</div>
-                  <div className="text-[11px] text-slate-500 truncate">{s.itemCode} · {s.jobCards.length} JC{s.jobCards.length === 1 ? "" : "s"} affected</div>
+                  <div className="text-[11px] text-slate-500 truncate">{s.jobCards.length} JC{s.jobCards.length === 1 ? "" : "s"} affected</div>
                   <div className="text-[11px] text-slate-500 mt-0.5">
                     Req <b className="text-slate-700 dark:text-slate-200">{fmt2(s.required)}</b> · Avail <b className="text-slate-700 dark:text-slate-200">{fmt2(s.available)}</b>
                   </div>
@@ -342,7 +341,7 @@ export function Dashboard() {
               </div>
             </div>
             <div className="text-xs text-slate-500">
-              Material Code: <span className="font-mono">{shortageDrill.itemCode}</span> · Affected Job Cards: {shortageDrill.jobCards.length}
+              Affected Job Cards: {shortageDrill.jobCards.length}
             </div>
             <div className="rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700">
               <Table>

@@ -34,13 +34,13 @@ export function BOMPage() {
   const filteredMaterials = useMemo(() => {
     const term = (materialSearch || materialText).toLowerCase();
     return rawAndSemiItems.filter(i =>
-      !term || i.name.toLowerCase().includes(term) || i.code.toLowerCase().includes(term) || i.category.toLowerCase().includes(term)
+      !term || i.name.toLowerCase().includes(term) || i.category.toLowerCase().includes(term)
     );
   }, [rawAndSemiItems, materialSearch, materialText]);
 
   const registryProducts = useMemo(() => {
     const term = registrySearch.toLowerCase();
-    return finishedProducts.filter(i => !term || i.name.toLowerCase().includes(term) || i.code.toLowerCase().includes(term));
+    return finishedProducts.filter(i => !term || i.name.toLowerCase().includes(term));
   }, [finishedProducts, registrySearch]);
 
   const selectMaterial = (id: string) => {
@@ -51,13 +51,13 @@ export function BOMPage() {
 
   const typeMaterial = (value: string) => {
     setMaterialText(value);
-    const exact = rawAndSemiItems.find(i => i.name.toLowerCase() === value.toLowerCase() || i.code.toLowerCase() === value.toLowerCase());
+    const exact = rawAndSemiItems.find(i => i.name.toLowerCase() === value.toLowerCase());
     if (exact) setMaterialId(exact.id);
   };
 
   const mapConsumable = () => {
     if (!selectedProduct) return alert("Select a finished product model first.");
-    const item = rawAndSemiItems.find(i => i.id === materialId) || rawAndSemiItems.find(i => i.name.toLowerCase() === materialText.toLowerCase() || i.code.toLowerCase() === materialText.toLowerCase());
+    const item = rawAndSemiItems.find(i => i.id === materialId) || rawAndSemiItems.find(i => i.name.toLowerCase() === materialText.toLowerCase());
     if (!item) return alert("Select or type a valid raw/semi-finished material.");
     if (!qty || qty <= 0) return alert("Enter required consumption quantity.");
 
@@ -186,7 +186,7 @@ export function BOMPage() {
     const term = copySearch.toLowerCase();
     return finishedProducts
       .filter(p => p.id !== selectedProduct?.id)
-      .filter(p => !term || p.name.toLowerCase().includes(term) || p.code.toLowerCase().includes(term));
+      .filter(p => !term || p.name.toLowerCase().includes(term));
   }, [finishedProducts, copySearch, selectedProduct]);
 
   return (
@@ -216,7 +216,7 @@ export function BOMPage() {
             <div>
               <Label>Select Transformer Model</Label>
               <Select value={selectedProduct?.id || ""} onChange={(e: any) => setSelectedProductId(e.target.value)}>
-                {finishedProducts.map(p => <option key={p.id} value={p.id}>{p.name} ({p.code})</option>)}
+                {finishedProducts.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
               </Select>
             </div>
 
@@ -228,12 +228,11 @@ export function BOMPage() {
                   <Input
                     value={materialText}
                     list="bom-material-type-options"
-                    placeholder="Type material name or code..."
+                    placeholder="Type material name..."
                     onChange={(e: any) => typeMaterial(e.target.value)}
                   />
                   <datalist id="bom-material-type-options">
-                    {rawAndSemiItems.map(i => <option key={`${i.id}-name`} value={i.name}>{i.code} - {i.category}</option>)}
-                    {rawAndSemiItems.map(i => <option key={`${i.id}-code`} value={i.code}>{i.name} - {i.category}</option>)}
+                    {rawAndSemiItems.map(i => <option key={i.id} value={i.name}>{i.category}</option>)}
                   </datalist>
                 </div>
                 <div>
@@ -268,7 +267,6 @@ export function BOMPage() {
                         <tr key={m.itemId || m.name} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                           <Td>
                             <div className="font-semibold">{item?.name || m.name}</div>
-                            <div className="text-xs text-slate-500">{item?.code || "Custom"}</div>
                             {item && <Badge color={item.category === "Raw Material" ? "blue" : "yellow"}>{item.category}</Badge>}
                           </Td>
                           <Td>{m.unit}</Td>
@@ -305,7 +303,7 @@ export function BOMPage() {
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <div className="font-semibold text-slate-800 dark:text-slate-100">{product.name}</div>
-                      <div className="text-xs text-slate-500 mt-1">{product.code} | {product.category}</div>
+                      <div className="text-xs text-slate-500 mt-1">{product.category}</div>
                     </div>
                     <Badge color={selectedProductId === product.id ? "indigo" : "slate"}>Rev {bom ? "1." + Math.max(0, bom.materials.length) : "0.0"}</Badge>
                   </div>
@@ -333,7 +331,7 @@ export function BOMPage() {
             <Label>Search Target Model</Label>
             <div className="relative">
               <IconSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
-              <Input className="pl-9" value={copySearch} onChange={(e: any) => setCopySearch(e.target.value)} placeholder="Type model name or code..." data-testid="copy-bom-search"/>
+              <Input className="pl-9" value={copySearch} onChange={(e: any) => setCopySearch(e.target.value)} placeholder="Type model name..." data-testid="copy-bom-search"/>
             </div>
           </div>
           <div className="max-h-72 overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-800">
@@ -344,12 +342,11 @@ export function BOMPage() {
                 <button
                   key={p.id}
                   onClick={() => setCopyTargetId(p.id)}
-                  data-testid={`copy-bom-target-${p.code}`}
+                  data-testid={`copy-bom-target-${p.id}`}
                   className={"w-full text-left p-3 flex items-start justify-between gap-3 " + (active ? "bg-indigo-50 dark:bg-indigo-900/30" : "hover:bg-slate-50 dark:hover:bg-slate-800/50")}
                 >
                   <div>
                     <div className="font-semibold text-slate-800 dark:text-slate-100">{p.name}</div>
-                    <div className="text-xs text-slate-500 mt-0.5">{p.code}</div>
                   </div>
                   <div className="text-right">
                     {existing ? (

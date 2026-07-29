@@ -170,8 +170,8 @@ export function JobCards() {
     const body = `
       <div class="box"><div class="section-title">Production Details</div><b>Product:</b> ${j.product}<br/><b>Quantity:</b> ${j.qty}<br/><b>Status:</b> <span class="badge">${j.status}</span><br/><b>Sales Order:</b> ${so?.number || "-"}<br/><b>BOM:</b> ${bom?.name || "-"}</div>
       <div class="section-title">Reserved Materials</div>
-      <table><thead><tr><th>#</th><th>Item</th><th>Code</th><th class="right">Qty Reserved</th><th>UOM</th></tr></thead><tbody>
-      ${j.reservedItems.map((r, idx) => { const it = db.items.find(i => i.id === r.itemId); return `<tr><td>${idx+1}</td><td>${it?.name || "-"}</td><td>${it?.code || ""}</td><td class="right">${r.qty}</td><td>${it?.unit || ""}</td></tr>`; }).join("")}
+      <table><thead><tr><th>#</th><th>Item</th><th class="right">Qty Reserved</th><th>UOM</th></tr></thead><tbody>
+      ${j.reservedItems.map((r, idx) => { const it = db.items.find(i => i.id === r.itemId); return `<tr><td>${idx+1}</td><td>${it?.name || "-"}</td><td class="right">${r.qty}</td><td>${it?.unit || ""}</td></tr>`; }).join("")}
       </tbody></table>
       <div class="section-title">Production Stages</div>
       <table><thead><tr><th>#</th><th>Stage</th><th>Status</th><th>Worker</th><th>Date</th></tr></thead><tbody>
@@ -191,8 +191,8 @@ export function JobCards() {
   const printMaterialIssue = (j: JobCard) => {
     const body = `
       <div class="box"><div class="section-title">Issue Against Job Card</div><b>Job Card:</b> ${j.number}<br/><b>Product:</b> ${j.product}<br/><b>Production Qty:</b> ${j.qty}</div>
-      <table><thead><tr><th>#</th><th>Material</th><th>Item Code</th><th class="right">Issue Qty</th><th>UOM</th><th>Remarks</th></tr></thead><tbody>
-      ${j.reservedItems.map((r, idx) => { const it = db.items.find(i => i.id === r.itemId); return `<tr><td>${idx+1}</td><td>${it?.name || "-"}</td><td>${it?.code || ""}</td><td class="right">${r.qty}</td><td>${it?.unit || ""}</td><td>Issued for production hold</td></tr>`; }).join("")}
+      <table><thead><tr><th>#</th><th>Material</th><th class="right">Issue Qty</th><th>UOM</th><th>Remarks</th></tr></thead><tbody>
+      ${j.reservedItems.map((r, idx) => { const it = db.items.find(i => i.id === r.itemId); return `<tr><td>${idx+1}</td><td>${it?.name || "-"}</td><td class="right">${r.qty}</td><td>${it?.unit || ""}</td><td>Issued for production hold</td></tr>`; }).join("")}
       </tbody></table>
       <div class="signs"><div class="sign-box">Issued By Stores</div><div class="sign-box">Received By Production</div><div class="sign-box">Approved By</div></div>
     `;

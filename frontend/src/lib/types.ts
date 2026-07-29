@@ -35,7 +35,7 @@ export interface Party {
 
 export interface Item {
   id: string;
-  code: string;
+  code?: string;
   name: string;
   category: "Raw Material" | "Finished Goods" | "Semi-Finished";
   unit: string;

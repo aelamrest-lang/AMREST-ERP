@@ -300,14 +300,14 @@ export function PurchaseOrders() {
   const matchesItemSearch = (item: any, query: string) => {
     const q = query.trim().toLowerCase();
     if (!q) return true;
-    const haystack = `${item.name} ${item.code} ${item.category} ${item.unit}`.toLowerCase();
+    const haystack = `${item.name} ${item.category} ${item.unit}`.toLowerCase();
     return q.split(/\s+/).every(term => haystack.includes(term));
   };
 
   const handleItemType = (rowIndex: number, value: string) => {
     setItemSearch(prev => ({ ...prev, [rowIndex]: value }));
     const match = db.items.find(item =>
-      item.name.toLowerCase() === value.toLowerCase() || item.code.toLowerCase() === value.toLowerCase()
+      item.name.toLowerCase() === value.toLowerCase()
     );
     if (match) {
       updateItem(rowIndex, "itemId", match.id);
@@ -376,7 +376,7 @@ export function PurchaseOrders() {
       <div class="box"><div class="section-title">Vendor Details</div><b>${v?.name || ""}</b><br/>${v?.address || ""}${v?.city ? `, ${v.city}` : ""}<br/>GST: ${v?.gst || ""}<br/>Contact: ${v?.mobile || ""} | ${v?.email || ""}</div>
       <div class="box"><span class="badge">${p.status}</span> &nbsp; <b>Expected Delivery:</b> ${p.expectedDeliveryDate || "—"}</div>
       <table><thead><tr><th>#</th><th>Item</th><th class="right">Qty</th><th class="right">Rate</th><th class="right">Amount</th></tr></thead>
-      <tbody>${p.items.map((i, idx) => { const it = db.items.find(x => x.id === i.itemId); return `<tr><td>${idx+1}</td><td><b>${it?.name || "-"} (${it?.code || ""})</b>${i.description ? `<br/><span class="muted">${i.description}</span>` : ""}</td><td class="right">${i.qty}</td><td class="right">${fmtINR(i.rate)}</td><td class="right">${fmtINR(i.qty*i.rate)}</td></tr>`; }).join("")}</tbody></table>
+      <tbody>${p.items.map((i, idx) => { const it = db.items.find(x => x.id === i.itemId); return `<tr><td>${idx+1}</td><td><b>${it?.name || "-"}</b>${i.description ? `<br/><span class="muted">${i.description}</span>` : ""}</td><td class="right">${i.qty}</td><td class="right">${fmtINR(i.rate)}</td><td class="right">${fmtINR(i.qty*i.rate)}</td></tr>`; }).join("")}</tbody></table>
       <div class="totals"><div class="grand"><span>Total</span><b>${fmtINR(t)}</b></div></div>
       <div class="box"><div class="section-title">Terms &amp; Conditions</div><pre style="white-space:pre-wrap;font-family:inherit;font-size:12px;margin:6px 0">${p.terms || getDefaultPurchaseTerms(db.settings)}</pre></div>
       ${includeHistory && historyRows ? `<div class="box"><div class="section-title">Approval History</div><table><thead><tr><th>Date &amp; Time</th><th>User</th><th>Action</th><th>Reason</th></tr></thead><tbody>${historyRows}</tbody></table></div>` : ""}
@@ -550,12 +550,11 @@ export function PurchaseOrders() {
                     className="mb-1"
                     value={itemSearch[i] ?? ""}
                     list={`po-item-suggestions-${i}`}
-                    placeholder="Type item name/code e.g. COPPER, 100 KVA, 11KV, CT COIL"
+                    placeholder="Type item name e.g. COPPER, 100 KVA, 11KV, CT COIL"
                     onChange={(e: any) => handleItemType(i, e.target.value)}
                   />
                   <datalist id={`po-item-suggestions-${i}`}>
-                    {db.items.filter(x => matchesItemSearch(x, itemSearch[i] || "")).slice(0, 25).map(x => <option key={`${x.id}-name`} value={x.name}>{x.code} - {x.category} - {x.unit}</option>)}
-                    {db.items.filter(x => matchesItemSearch(x, itemSearch[i] || "")).slice(0, 25).map(x => <option key={`${x.id}-code`} value={x.code}>{x.name} - {x.category} - {x.unit}</option>)}
+                    {db.items.filter(x => matchesItemSearch(x, itemSearch[i] || "")).slice(0, 25).map(x => <option key={x.id} value={x.name}>{x.category} - {x.unit}</option>)}
                   </datalist>
                   <Select value={it.itemId} onChange={(e: any) => {
                     const selected = db.items.find(x => x.id === e.target.value);
@@ -565,7 +564,7 @@ export function PurchaseOrders() {
                       setItemSearch(prev => ({ ...prev, [i]: selected.name }));
                     }
                   }}>
-                    {db.items.filter(x => matchesItemSearch(x, itemSearch[i] || "")).map(x => <option key={x.id} value={x.id}>{x.name} ({x.code}) - {x.unit}</option>)}
+                    {db.items.filter(x => matchesItemSearch(x, itemSearch[i] || "")).map(x => <option key={x.id} value={x.id}>{x.name} - {x.unit}</option>)}
                   </Select>
                   <Input
                     className="mt-2"

@@ -26,19 +26,19 @@ export function Items() {
     if (cat !== "all") arr = arr.filter(x => x.category === cat);
     if (search) {
       const s = search.toLowerCase();
-      arr = arr.filter(x => x.name.toLowerCase().includes(s) || x.code.toLowerCase().includes(s));
+      arr = arr.filter(x => x.name.toLowerCase().includes(s));
     }
     return arr;
   }, [db.items, cat, search]);
 
-  const blank: Item = { id: "", code: "", name: "", category: "Raw Material", unit: "Nos", hsn: "", gstRate: 18, openingStock: 0, currentStock: 0, minStock: 0, reorderLevel: 0, purchaseRate: 0, saleRate: 0 };
+  const blank: Item = { id: "", name: "", category: "Raw Material", unit: "Nos", hsn: "", gstRate: 18, openingStock: 0, currentStock: 0, minStock: 0, reorderLevel: 0, purchaseRate: 0, saleRate: 0 };
   const [form, setForm] = useState<Item>(blank);
 
   const openNew = () => { setEdit(null); setForm(blank); setOpen(true); };
   const openEdit = (i: Item) => { setEdit(i); setForm(i); setOpen(true); };
 
   const save = () => {
-    if (!form.name || !form.code) return alert("Code and Name required");
+    if (!form.name) return alert("Item Name is required");
     if (edit) {
       setDB(d => ({ ...d, items: d.items.map(i => i.id === edit.id ? form : i) }));
       log(`Updated item: ${form.name}`, "Item Master");
@@ -55,8 +55,8 @@ export function Items() {
   };
   const exportCSV = () => {
     downloadCSV("items.csv", [
-      ["Code", "Name", "Category", "Unit", "HSN", "GST%", "Stock", "MinStock", "Reorder", "Purchase Rate", "Sale Rate"],
-      ...items.map(i => [i.code, i.name, i.category, i.unit, i.hsn || "", i.gstRate, i.currentStock, i.minStock, i.reorderLevel, i.purchaseRate, i.saleRate])
+      ["Name", "Category", "Unit", "HSN", "GST%", "Stock", "MinStock", "Reorder", "Purchase Rate", "Sale Rate"],
+      ...items.map(i => [i.name, i.category, i.unit, i.hsn || "", i.gstRate, i.currentStock, i.minStock, i.reorderLevel, i.purchaseRate, i.saleRate])
     ]);
   };
 
@@ -106,16 +106,14 @@ export function Items() {
       setDB(d => {
         const nextItems = [...d.items];
         rows.forEach(row => {
-          const code = String(rowValue(row, ["Code", "Item Code", "ItemCode"]) || "").trim();
           const name = String(rowValue(row, ["Name", "Item Name", "ItemName"]) || "").trim();
-          if (!code || !name) { skipped += 1; return; }
-          const existingIndex = nextItems.findIndex(i => i.code.toLowerCase() === code.toLowerCase());
+          if (!name) { skipped += 1; return; }
+          const existingIndex = nextItems.findIndex(i => i.name.toLowerCase() === name.toLowerCase());
           const existing = existingIndex >= 0 ? nextItems[existingIndex] : undefined;
           const openingStock = num(rowValue(row, ["Opening Stock", "OpeningStock"]), existing?.openingStock || 0);
           const currentStock = num(rowValue(row, ["Current Stock", "Stock", "CurrentStock"]), existing?.currentStock ?? openingStock);
           const item: Item = {
             id: existing?.id || uid(),
-            code,
             name,
             category: cleanCategory(rowValue(row, ["Category", "Item Category"])),
             unit: String(rowValue(row, ["Unit", "UOM"]) || existing?.unit || "Nos"),
@@ -162,7 +160,7 @@ export function Items() {
         <div className="p-4 flex flex-wrap gap-3 items-center border-b border-slate-100 dark:border-slate-800">
           <div className="relative flex-1 min-w-48">
             <IconSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
-            <Input className="pl-9" placeholder="Search code or name..." value={search} onChange={(e: any) => setSearch(e.target.value)}/>
+            <Input className="pl-9" placeholder="Search item name..." value={search} onChange={(e: any) => setSearch(e.target.value)}/>
           </div>
           <Select value={cat} onChange={(e: any) => setCat(e.target.value)} className="w-44">
             <option value="all">All Categories</option>
@@ -173,14 +171,13 @@ export function Items() {
         </div>
         <Table>
           <thead>
-            <tr><Th>Code</Th><Th>Name</Th><Th>Category</Th><Th>Unit</Th><Th>HSN</Th><Th>GST</Th><Th>Stock</Th><Th>Purchase</Th><Th>Sale</Th><Th></Th></tr>
+            <tr><Th>Name</Th><Th>Category</Th><Th>Unit</Th><Th>HSN</Th><Th>GST</Th><Th>Stock</Th><Th>Purchase</Th><Th>Sale</Th><Th></Th></tr>
           </thead>
           <tbody>
             {items.map(i => {
               const low = i.currentStock <= i.minStock;
               return (
                 <tr key={i.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                  <Td className="font-mono text-xs">{i.code}</Td>
                   <Td className="font-medium">{i.name}</Td>
                   <Td><Badge color={i.category === "Raw Material" ? "blue" : i.category === "Finished Goods" ? "green" : "yellow"}>{i.category}</Badge></Td>
                   <Td>{i.unit}</Td>
@@ -203,8 +200,7 @@ export function Items() {
 
       <Modal open={open} onClose={() => setOpen(false)} title={edit ? "Edit Item" : "New Item"} size="lg">
         <div className="grid sm:grid-cols-3 gap-3">
-          <div><Label>Item Code *</Label><Input value={form.code} onChange={(e: any) => setForm({...form, code: e.target.value})}/></div>
-          <div className="sm:col-span-2"><Label>Item Name *</Label><Input value={form.name} onChange={(e: any) => setForm({...form, name: e.target.value})}/></div>
+          <div className="sm:col-span-3"><Label>Item Name *</Label><Input value={form.name} onChange={(e: any) => setForm({...form, name: e.target.value})}/></div>
           <div><Label>Category</Label>
             <Select value={form.category} onChange={(e: any) => setForm({...form, category: e.target.value})}>
               <option>Raw Material</option><option>Semi-Finished</option><option>Finished Goods</option>

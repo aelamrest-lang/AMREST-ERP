@@ -22,7 +22,7 @@ export function Inventory() {
     if (filter === "raw") arr = arr.filter(i => i.category === "Raw Material");
     if (filter === "semi") arr = arr.filter(i => i.category === "Semi-Finished");
     if (filter === "fg") arr = arr.filter(i => i.category === "Finished Goods");
-    if (search) arr = arr.filter(i => i.name.toLowerCase().includes(search.toLowerCase()) || i.code.toLowerCase().includes(search.toLowerCase()));
+    if (search) arr = arr.filter(i => i.name.toLowerCase().includes(search.toLowerCase()));
     return arr;
   }, [db.items, filter, search]);
 
@@ -65,7 +65,7 @@ export function Inventory() {
   }), [items, heldByItem]);
   const heldRows = useMemo(() => {
     return allHeldRows.filter(r => {
-      const text = `${r.jobCardNumber} ${r.item?.name || ""} ${r.item?.code || ""}`.toLowerCase();
+      const text = `${r.jobCardNumber} ${r.item?.name || ""}`.toLowerCase();
       const matchesSearch = !heldSearch || text.includes(heldSearch.toLowerCase());
       const matchesType = heldType === "all" || r.item?.category === heldType;
       return matchesSearch && matchesType;
@@ -93,15 +93,15 @@ export function Inventory() {
 
   const exportCSV = () => {
     downloadCSV("inventory.csv", [
-      ["Code", "Name", "Category", "Stock", "Unit", "Min", "Reorder", "Value (₹)"],
-      ...items.map(i => [i.code, i.name, i.category, i.currentStock, i.unit, i.minStock, i.reorderLevel, (i.currentStock * i.purchaseRate).toFixed(2)])
+      ["Name", "Category", "Stock", "Unit", "Min", "Reorder", "Value (₹)"],
+      ...items.map(i => [i.name, i.category, i.currentStock, i.unit, i.minStock, i.reorderLevel, (i.currentStock * i.purchaseRate).toFixed(2)])
     ]);
   };
 
   const downloadUploadTemplate = () => {
     downloadCSV("inventory-upload-template.csv", [
-      ["Item Code", "Item Name", "Current Stock", "Purchase Rate", "Minimum Stock", "Reorder Level"],
-      ...db.items.map(i => [i.code, i.name, i.currentStock, i.purchaseRate, i.minStock, i.reorderLevel]),
+      ["Item Name", "Current Stock", "Purchase Rate", "Minimum Stock", "Reorder Level"],
+      ...db.items.map(i => [i.name, i.currentStock, i.purchaseRate, i.minStock, i.reorderLevel]),
     ]);
   };
 
@@ -130,9 +130,8 @@ export function Inventory() {
         ...d,
         items: d.items.map(item => {
           const row = rows.find(r => {
-            const code = String(keyOf(r, ["Item Code", "Code", "item_code", "ItemCode"])).trim().toLowerCase();
             const name = String(keyOf(r, ["Item Name", "Name", "item_name", "ItemName"])).trim().toLowerCase();
-            return code === item.code.toLowerCase() || (!!name && name === item.name.toLowerCase());
+            return !!name && name === item.name.toLowerCase();
           });
           if (!row) return item;
 
@@ -221,7 +220,6 @@ export function Inventory() {
                 <tr key={i.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                   <Td>
                     <div className="font-semibold text-slate-800 dark:text-slate-100">{i.name}</div>
-                    <div className="font-mono text-xs text-slate-500">{i.code}</div>
                     <div className="mt-1"><Badge color={i.category === "Raw Material" ? "blue" : i.category === "Finished Goods" ? "green" : "yellow"}>{i.category}</Badge></div>
                   </Td>
                   <Td className="font-medium">{i.unit}</Td>
@@ -243,7 +241,7 @@ export function Inventory() {
         <div className="p-4 flex flex-wrap items-center gap-3 border-b border-slate-100 dark:border-slate-800">
           <div className="flex-1 min-w-48 relative">
             <IconSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
-            <Input className="pl-9" placeholder="Search held inventory by job card, item name or code..." value={heldSearch} onChange={(e: any) => setHeldSearch(e.target.value)} />
+            <Input className="pl-9" placeholder="Search held inventory by job card or item name..." value={heldSearch} onChange={(e: any) => setHeldSearch(e.target.value)} />
           </div>
           <Select value={heldType} onChange={(e: any) => setHeldType(e.target.value)} className="w-52">
             <option value="all">All Item Types</option>
@@ -253,13 +251,12 @@ export function Inventory() {
           </Select>
         </div>
         <Table>
-          <thead><tr><Th>Job Card Number</Th><Th>Item Name</Th><Th>Item Code</Th><Th>Quantity Held</Th><Th>Available Quantity</Th><Th>Status</Th></tr></thead>
+          <thead><tr><Th>Job Card Number</Th><Th>Item Name</Th><Th>Quantity Held</Th><Th>Available Quantity</Th><Th>Status</Th></tr></thead>
           <tbody>
             {heldRows.map((r, idx) => (
               <tr key={`${r.jobCardNumber}-${r.item?.id}-${idx}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                 <Td className="font-mono text-xs">{r.jobCardNumber}</Td>
                 <Td className="font-medium">{r.item?.name}</Td>
-                <Td className="font-mono text-xs">{r.item?.code}</Td>
                 <Td className="font-semibold text-amber-600">{r.qtyHeld} {r.item?.unit}</Td>
                 <Td>{r.availableQty} {r.item?.unit}</Td>
                 <Td><Badge color={r.jobStatus === "Completed" ? "green" : "yellow"}>{r.status}</Badge></Td>

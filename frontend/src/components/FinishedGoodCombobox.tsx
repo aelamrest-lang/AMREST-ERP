@@ -24,7 +24,6 @@ export function FinishedGoodCombobox({ items, value, onPick, placeholder = "Sear
     if (!q) return items;
     return items.filter(it =>
       it.name.toLowerCase().includes(q) ||
-      (it.code || "").toLowerCase().includes(q) ||
       (it.hsn || "").toLowerCase().includes(q),
     );
   }, [items, query]);
@@ -106,7 +105,7 @@ export function FinishedGoodCombobox({ items, value, onPick, placeholder = "Sear
               <div className="min-w-0">
                 <div className="font-medium text-slate-800 dark:text-slate-100 truncate">{it.name}</div>
                 <div className="text-xs text-slate-500 truncate">
-                  {[it.code, it.hsn && `HSN ${it.hsn}`, `₹${it.saleRate || 0}`, `${it.gstRate}% GST`, `Stock: ${it.currentStock}`].filter(Boolean).join(" · ")}
+                  {[it.hsn && `HSN ${it.hsn}`, `₹${it.saleRate || 0}`, `${it.gstRate}% GST`, `Stock: ${it.currentStock}`].filter(Boolean).join(" · ")}
                 </div>
               </div>
               {it.name === value && <span className="text-xs text-indigo-600 font-semibold">Selected</span>}
