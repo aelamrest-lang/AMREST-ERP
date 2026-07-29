@@ -62,10 +62,10 @@ export function Items() {
 
   const downloadTemplate = () => {
     downloadCSV("item-master-bulk-upload-template.csv", [
-      ["Code", "Name", "Category", "Unit", "HSN", "GST%", "Opening Stock", "Current Stock", "Minimum Stock", "Reorder Level", "Purchase Rate", "Sale Rate"],
-      ["RM-NEW-001", "New Raw Material", "Raw Material", "Kg", "8504", 18, 0, 0, 0, 0, 0, 0],
-      ["SF-NEW-001", "New Semi Finished Item", "Semi-Finished", "Nos", "8504", 18, 0, 0, 0, 0, 0, 0],
-      ["FG-NEW-001", "New Finished Good", "Finished Goods", "Nos", "8504", 18, 0, 0, 0, 0, 0, 0],
+      ["Name", "Category", "Unit", "HSN", "GST%", "Opening Stock", "Current Stock", "Minimum Stock", "Reorder Level", "Purchase Rate", "Sale Rate"],
+      ["New Raw Material", "Raw Material", "Kg", "8504", 18, 0, 0, 0, 0, 0, 0],
+      ["New Semi Finished Item", "Semi-Finished", "Nos", "8504", 18, 0, 0, 0, 0, 0, 0],
+      ["New Finished Good", "Finished Goods", "Nos", "8504", 18, 0, 0, 0, 0, 0, 0],
     ]);
   };
 
