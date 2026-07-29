@@ -484,7 +484,7 @@ export function ProductionDashboard() {
       <Modal open={entryOpen} onClose={() => setEntryOpen(false)} title="Daily Production Entry" size="lg">
         <div className="grid sm:grid-cols-2 gap-3">
           <div><Label>Job Card Number</Label><Select value={entryJobId} onChange={(e: any) => { setEntryJobId(e.target.value); setEntryQty(0); }}>{db.jobCards.map(j => <option key={j.id} value={j.id}>{j.number} - {j.product}</option>)}</Select></div>
-          <div><Label>Production Stage</Label><Select value={entryStage} onChange={(e: any) => { setEntryStage(e.target.value); setEntryQty(0); }}>{STAGES.map(s => <option key={s} value={s}>{s}</option>)}</Select></div>
+          <div><Label>Production Stage</Label><Select value={entryStage} onChange={(e: any) => { setEntryStage(e.target.value); setEntryQty(0); setOperatorId(""); }}>{STAGES.map(s => <option key={s} value={s}>{s}</option>)}</Select></div>
           <div><Label>Product Name</Label><Input value={selectedJob?.product || ""} disabled /></div>
           <div><Label>Total {entryStage} Quantity</Label><Input type="number" value={entryTotalQty} disabled /></div>
           <div><Label>Previously Completed Quantity</Label><Input value={previousCompleted} disabled /></div>
@@ -504,12 +504,17 @@ export function ProductionDashboard() {
               data-testid="production-operator-select"
             >
               <option value="">— Select Operator —</option>
-              {db.operators.filter(o => o.active).map(o => (
-                <option key={o.id} value={o.id}>{o.name}{o.department ? ` · ${o.department}` : ""}</option>
-              ))}
+              {db.operators
+                .filter(o => o.active && (o.stages || []).includes(entryStage))
+                .map(o => (
+                  <option key={o.id} value={o.id}>{o.name}{o.department ? ` · ${o.department}` : ""}</option>
+                ))
+              }
             </Select>
-            {db.operators.filter(o => o.active).length === 0 && (
-              <div className="text-xs text-amber-600 mt-1">No operators yet. Go to “Operators &amp; Ledger” to add one.</div>
+            {db.operators.filter(o => o.active && (o.stages || []).includes(entryStage)).length === 0 && (
+              <div className="text-xs text-amber-600 mt-1">
+                No operators mapped to <b>{entryStage}</b>. Go to “Operators &amp; Ledger” → edit an operator → assign this stage.
+              </div>
             )}
           </div>
           <div><Label>Shift</Label><Select value={shift} onChange={(e: any) => setShift(e.target.value)}><option>Day</option><option>Night</option><option>General</option></Select></div>

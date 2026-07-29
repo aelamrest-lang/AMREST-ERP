@@ -1,10 +1,15 @@
 import { useMemo, useState } from "react";
 import { useStore, uid } from "../lib/store";
 import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Badge, Empty } from "../components/ui";
-import type { Operator } from "../lib/types";
+import type { Operator, ProductionStage } from "../lib/types";
 import { IconPlus, IconEdit, IconTrash, IconPrint, IconSearch } from "../components/icons";
 import { fmtINR, printArea, professionalDocument, todayISO } from "../lib/utils";
 import { userCan } from "../lib/permissions";
+
+const PRODUCTION_STAGES: ProductionStage[] = [
+  "LV Winding", "HV Winding", "Primary Winding", "Secondary Winding",
+  "Core Coil Assembly", "Tanking", "Finishing", "Testing Ready", "Dispatch Ready",
+];
 
 function OperatorsMaster() {
   const { db, setDB, log, currentUser } = useStore();
@@ -14,8 +19,18 @@ function OperatorsMaster() {
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
   const [edit, setEdit] = useState<Operator | null>(null);
-  const blank: Operator = { id: "", name: "", department: "", defaultRate: 0, active: true, createdAt: new Date().toISOString() };
+  const blank: Operator = { id: "", name: "", department: "", stages: [], defaultRate: 0, active: true, createdAt: new Date().toISOString() };
   const [form, setForm] = useState<Operator>(blank);
+
+  const toggleStage = (stage: ProductionStage) => {
+    setForm(f => {
+      const list = f.stages || [];
+      return { ...f, stages: list.includes(stage) ? list.filter(s => s !== stage) : [...list, stage] };
+    });
+  };
+  const toggleAllStages = () => {
+    setForm(f => ({ ...f, stages: (f.stages || []).length === PRODUCTION_STAGES.length ? [] : [...PRODUCTION_STAGES] }));
+  };
 
   const list = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -27,6 +42,9 @@ function OperatorsMaster() {
 
   const save = () => {
     if (!form.name.trim()) return alert("Operator name is required");
+    if (!form.stages || form.stages.length === 0) {
+      if (!confirm("This operator isn't mapped to any production stage. They won't appear in the Production Entry dropdown for any stage. Save anyway?")) return;
+    }
     if (edit) setDB(d => ({ ...d, operators: d.operators.map(o => o.id === edit.id ? form : o) }));
     else setDB(d => ({ ...d, operators: [{ ...form, id: uid() }, ...d.operators] }));
     log(`${edit ? "Updated" : "Created"} operator ${form.name}`, "Operators");
@@ -54,12 +72,21 @@ function OperatorsMaster() {
       </div>
       <Card>
         <Table>
-          <thead><tr><Th>Name</Th><Th>Department</Th><Th>Default Rate (₹)</Th><Th>Status</Th><Th></Th></tr></thead>
+          <thead><tr><Th>Name</Th><Th>Department</Th><Th>Assigned Stages</Th><Th>Default Rate (₹)</Th><Th>Status</Th><Th></Th></tr></thead>
           <tbody>
             {list.map(o => (
               <tr key={o.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                 <Td className="font-medium">{o.name}</Td>
                 <Td>{o.department || "—"}</Td>
+                <Td className="max-w-md">
+                  {o.stages && o.stages.length > 0 ? (
+                    <div className="flex flex-wrap gap-1">
+                      {o.stages.map(s => <Badge key={s} color="blue">{s}</Badge>)}
+                    </div>
+                  ) : (
+                    <span className="text-xs text-amber-600">Not mapped</span>
+                  )}
+                </Td>
                 <Td>{fmtINR(o.defaultRate || 0)}</Td>
                 <Td>
                   <button
@@ -101,6 +128,39 @@ function OperatorsMaster() {
             <input type="checkbox" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })} />
             Active (available for production entry)
           </label>
+
+          <div className="sm:col-span-2">
+            <div className="flex items-center justify-between mb-2">
+              <Label>Assigned Production Stages *</Label>
+              <button
+                type="button"
+                onClick={toggleAllStages}
+                className="text-xs text-indigo-600 hover:underline"
+                data-testid="operator-toggle-all-stages"
+              >
+                {(form.stages || []).length === PRODUCTION_STAGES.length ? "Clear all" : "Select all"}
+              </button>
+            </div>
+            <div className="grid sm:grid-cols-3 gap-2 rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-slate-50 dark:bg-slate-800/30">
+              {PRODUCTION_STAGES.map(stage => {
+                const checked = (form.stages || []).includes(stage);
+                return (
+                  <label key={stage} className="flex items-center gap-2 text-sm cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleStage(stage)}
+                      data-testid={`operator-stage-${stage.replace(/\s+/g, "-").toLowerCase()}`}
+                    />
+                    <span>{stage}</span>
+                  </label>
+                );
+              })}
+            </div>
+            {(form.stages || []).length === 0 && (
+              <div className="text-xs text-amber-600 mt-1">Pick at least one stage — the operator will only appear in the dropdown for those stages.</div>
+            )}
+          </div>
         </div>
         <div className="mt-5 flex justify-end gap-2">
           <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>

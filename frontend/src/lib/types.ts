@@ -229,6 +229,7 @@ export interface Operator {
   id: string;
   name: string;
   department?: string;
+  stages?: ProductionStage[];
   defaultRate?: number;
   active: boolean;
   createdAt: string;
