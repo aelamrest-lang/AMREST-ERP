@@ -3,7 +3,7 @@ import * as XLSX from "xlsx";
 import { useStore } from "../lib/store";
 import { Card, Button, Input, Select, Table, Th, Td, Badge, Empty, KPI } from "../components/ui";
 import { IconBox, IconRefresh, IconDownload, IconSearch, IconClipboard } from "../components/icons";
-import { downloadCSV, fmtINR } from "../lib/utils";
+import { downloadCSV, fmtINR, fmt2 } from "../lib/utils";
 import { userCan } from "../lib/permissions";
 
 export function Inventory() {
@@ -173,7 +173,7 @@ export function Inventory() {
         <KPI label="Total Items" value={String(db.items.length)} color="indigo" icon={<IconBox size={22}/>} />
         <KPI label="Stock Value" value={fmtINR(totalValue)} color="emerald" icon={<IconBox size={22}/>} hint="at purchase rate"/>
         <KPI label="Low Stock" value={String(lowCount)} color="rose" icon={<IconRefresh size={22}/>} />
-        <KPI label="Held Inventory" value={String(activeHeldQty)} color="amber" icon={<IconClipboard size={22}/>} hint="active job holds" />
+        <KPI label="Held Inventory" value={fmt2(activeHeldQty)} color="amber" icon={<IconClipboard size={22}/>} hint="active job holds" />
       </div>
 
       <Card>
@@ -223,12 +223,12 @@ export function Inventory() {
                     <div className="mt-1"><Badge color={i.category === "Raw Material" ? "blue" : i.category === "Finished Goods" ? "green" : "yellow"}>{i.category}</Badge></div>
                   </Td>
                   <Td className="font-medium">{i.unit}</Td>
-                  <Td className="font-semibold">{totalStock} {i.unit}</Td>
-                  <Td className="font-semibold text-amber-600">{hold} {i.unit}</Td>
-                  <Td><span className={low ? "text-rose-600 font-bold" : "font-bold text-emerald-600"}>{available} {i.unit}</span></Td>
+                  <Td className="font-semibold">{fmt2(totalStock)} {i.unit}</Td>
+                  <Td className="font-semibold text-amber-600">{fmt2(hold)} {i.unit}</Td>
+                  <Td><span className={low ? "text-rose-600 font-bold" : "font-bold text-emerald-600"}>{fmt2(available)} {i.unit}</span></Td>
                   <Td>{fmtINR(i.purchaseRate)}</Td>
                   <Td className="font-semibold text-indigo-700 dark:text-indigo-300">{fmtINR(available * i.purchaseRate)}</Td>
-                  <Td><Badge color={statusColor}>{status}</Badge><div className="text-[10px] text-slate-500 mt-1">Min {i.minStock} / Reorder {i.reorderLevel}</div></Td>
+                  <Td><Badge color={statusColor}>{status}</Badge><div className="text-[10px] text-slate-500 mt-1">Min {fmt2(i.minStock)} / Reorder {fmt2(i.reorderLevel)}</div></Td>
                 </tr>
               );
             })}
@@ -257,8 +257,8 @@ export function Inventory() {
               <tr key={`${r.jobCardNumber}-${r.item?.id}-${idx}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                 <Td className="font-mono text-xs">{r.jobCardNumber}</Td>
                 <Td className="font-medium">{r.item?.name}</Td>
-                <Td className="font-semibold text-amber-600">{r.qtyHeld} {r.item?.unit}</Td>
-                <Td>{r.availableQty} {r.item?.unit}</Td>
+                <Td className="font-semibold text-amber-600">{fmt2(r.qtyHeld)} {r.item?.unit}</Td>
+                <Td>{fmt2(r.availableQty)} {r.item?.unit}</Td>
                 <Td><Badge color={r.jobStatus === "Completed" ? "green" : "yellow"}>{r.status}</Badge></Td>
               </tr>
             ))}
@@ -282,7 +282,7 @@ export function Inventory() {
                 <Td><Badge color={m.direction === "In" ? "green" : m.direction === "Out" ? "red" : "yellow"}>{m.direction}</Badge></Td>
                 <Td className="font-medium">{m.item?.name || (m as any).fallbackName || "-"}</Td>
                 <Td>{m.type}</Td>
-                <Td>{m.qty} {m.item?.unit || "Nos"}</Td>
+                <Td>{fmt2(m.qty)} {m.item?.unit || "Nos"}</Td>
               </tr>
             ))}
           </tbody>

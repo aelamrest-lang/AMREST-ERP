@@ -4,7 +4,7 @@ import { useStore, uid } from "../lib/store";
 import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Badge, Empty } from "../components/ui";
 import type { Item } from "../lib/types";
 import { IconPlus, IconEdit, IconTrash, IconSearch, IconDownload } from "../components/icons";
-import { downloadCSV, fmtINR } from "../lib/utils";
+import { downloadCSV, fmtINR, fmt2 } from "../lib/utils";
 import { userCan } from "../lib/permissions";
 
 const GST_OPTIONS = [0, 5, 12, 18, 28];
@@ -183,7 +183,7 @@ export function Items() {
                   <Td>{i.unit}</Td>
                   <Td className="text-xs">{i.hsn}</Td>
                   <Td>{i.gstRate}%</Td>
-                  <Td><span className={low ? "text-rose-600 font-semibold" : ""}>{i.currentStock} {i.unit}</span>{low && <Badge color="red">low</Badge>}</Td>
+                  <Td><span className={low ? "text-rose-600 font-semibold" : ""}>{fmt2(i.currentStock)} {i.unit}</span>{low && <Badge color="red">low</Badge>}</Td>
                   <Td>{fmtINR(i.purchaseRate)}</Td>
                   <Td>{fmtINR(i.saleRate)}</Td>
                   <Td><div className="flex gap-1">
