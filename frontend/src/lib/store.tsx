@@ -90,37 +90,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(THEME_KEY, theme);
   }, [theme]);
 
-  // Hydrate from backend on mount if we have a token
+  // Auto-login disabled: clear any persisted auth on every fresh app load
+  // so the login page always shows first. Users must re-enter credentials
+  // for every session.
   useEffect(() => {
-    let cancelled = false;
-    async function hydrate() {
-      if (!getToken()) {
-        setSyncStatus("not-configured");
-        return;
-      }
-      setSyncStatus("syncing");
-      try {
-        const remote = await fetchRemoteDB();
-        if (cancelled) return;
-        const next = migrateDB(remote || seedDB());
-        setDb(next);
-        localVersion.current = await fetchRemoteVersion().catch(() => 0);
-        setSyncStatus("connected");
-        setSyncError("");
-        const sessionId = localStorage.getItem(SESSION_KEY);
-        if (sessionId) setCurrentUser(next.users.find(u => u.id === sessionId) || null);
-      } catch (err: any) {
-        if (cancelled) return;
-        setSyncStatus("error");
-        setSyncError(err?.message || "Load failed");
-        if (err?.message === "Unauthorized") {
-          setCurrentUser(null);
-          localStorage.removeItem(SESSION_KEY);
-        }
-      }
-    }
-    hydrate();
-    return () => { cancelled = true; };
+    setToken(null);
+    localStorage.removeItem(SESSION_KEY);
+    setSyncStatus("not-configured");
   }, []);
 
   // Poll for external changes every 15s
