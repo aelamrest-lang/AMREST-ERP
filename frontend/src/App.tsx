@@ -27,7 +27,7 @@ import { Profile } from "./pages/Profile";
 import { Leads } from "./pages/Leads";
 
 function Shell() {
-  const { currentUser } = useStore();
+  const { currentUser, hydrating } = useStore();
   const [route, setRoute] = useState<Route>("dashboard");
 
   useEffect(() => {
@@ -35,6 +35,18 @@ function Shell() {
     setRoute(r);
   }, []);
   useEffect(() => { localStorage.setItem("amrest_route", route); }, [route]);
+
+  if (hydrating) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950" data-testid="auth-hydrating">
+        <div className="flex flex-col items-center gap-3">
+          <img src="/amrest-logo.png" alt="AMREST" className="w-16 h-16 rounded-lg shadow" />
+          <div className="w-6 h-6 border-2 border-slate-300 border-t-indigo-600 rounded-full animate-spin"></div>
+          <div className="text-xs text-slate-500">Restoring your session...</div>
+        </div>
+      </div>
+    );
+  }
 
   if (!currentUser) return <Login />;
 

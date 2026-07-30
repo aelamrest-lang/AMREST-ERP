@@ -62,6 +62,7 @@ interface Ctx {
   db: DB;
   setDB: (updater: (db: DB) => DB) => void;
   currentUser: User | null;
+  hydrating: boolean;
   login: (username: string, password: string) => Promise<{ ok: boolean; msg?: string }>;
   logout: () => void;
   changePassword: (oldPwd: string, newPwd: string) => { ok: boolean; msg?: string };
@@ -90,13 +91,49 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(THEME_KEY, theme);
   }, [theme]);
 
-  // Auto-login disabled: clear any persisted auth on every fresh app load
-  // so the login page always shows first. Users must re-enter credentials
-  // for every session.
+  // Hydrate from backend on mount. If a valid JWT token exists in localStorage
+  // and the stored session ID matches a user, restore the session automatically.
+  // Session is only cleared on explicit Logout or if the token is rejected.
+  const [hydrating, setHydrating] = useState<boolean>(() => !!getToken());
   useEffect(() => {
-    setToken(null);
-    localStorage.removeItem(SESSION_KEY);
-    setSyncStatus("not-configured");
+    let cancelled = false;
+    async function hydrate() {
+      if (!getToken()) {
+        setSyncStatus("not-configured");
+        setHydrating(false);
+        return;
+      }
+      setSyncStatus("syncing");
+      try {
+        const remote = await fetchRemoteDB();
+        if (cancelled) return;
+        const next = migrateDB(remote || seedDB());
+        setDb(next);
+        localVersion.current = await fetchRemoteVersion().catch(() => 0);
+        setSyncStatus("connected");
+        setSyncError("");
+        const sessionId = localStorage.getItem(SESSION_KEY);
+        if (sessionId) {
+          const restored = next.users.find(u => u.id === sessionId) || null;
+          setCurrentUser(restored);
+          if (!restored) localStorage.removeItem(SESSION_KEY);
+        }
+      } catch (err: any) {
+        if (cancelled) return;
+        setSyncStatus("error");
+        setSyncError(err?.message || "Load failed");
+        // Only clear session if the server explicitly rejected the token
+        if (err?.message === "Unauthorized") {
+          setToken(null);
+          localStorage.removeItem(SESSION_KEY);
+          setCurrentUser(null);
+        }
+      } finally {
+        if (!cancelled) setHydrating(false);
+      }
+    }
+    hydrate();
+    return () => { cancelled = true; };
   }, []);
 
   // Poll for external changes every 15s
@@ -229,7 +266,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const toggleTheme = () => setTheme(t => t === "light" ? "dark" : "light");
 
   return (
-    <StoreCtx.Provider value={{ db, setDB, currentUser, login, logout, changePassword, log, syncStatus, syncError, syncNow, theme, toggleTheme }}>
+    <StoreCtx.Provider value={{ db, setDB, currentUser, hydrating, login, logout, changePassword, log, syncStatus, syncError, syncNow, theme, toggleTheme }}>
       {children}
     </StoreCtx.Provider>
   );
