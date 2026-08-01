@@ -14,6 +14,7 @@ const navGroups: { label: string; items: { id: Route; label: string; icon: any }
     { id: "leads", label: "Sales CRM", icon: IconBriefcase },
     { id: "parties", label: "Party Master", icon: IconUsers },
     { id: "quotations", label: "Quotations", icon: IconFile },
+    { id: "costing", label: "Costing Sheets", icon: IconChart },
     { id: "proformas", label: "Proforma Invoices", icon: IconFile },
     { id: "salesorders", label: "Sales Orders", icon: IconShop },
   ]},

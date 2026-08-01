@@ -1,7 +1,7 @@
 import type { ModulePermission, PermissionAction, PermissionMatrix, Role, User } from "./types";
 
 export type RouteId =
-  | "dashboard" | "leads" | "parties" | "items" | "quotations" | "proformas" | "salesorders"
+  | "dashboard" | "leads" | "parties" | "items" | "costing" | "quotations" | "proformas" | "salesorders"
   | "purchase" | "grn" | "inventory" | "rawissue" | "bom" | "jobcards" | "production" | "testing" | "challans"
   | "operators"
   | "reports" | "taxdash" | "users" | "settings" | "docformats" | "logs" | "profile";
@@ -14,6 +14,7 @@ export const moduleLabels: Record<RouteId, string> = {
   parties: "Party Master",
   items: "Item Master",
   quotations: "Quotations",
+  costing: "Costing Sheets",
   proformas: "Proforma Invoices",
   salesorders: "Sales Orders",
   purchase: "Purchase Orders",
@@ -36,7 +37,7 @@ export const moduleLabels: Record<RouteId, string> = {
 };
 
 export const permissionModules: RouteId[] = [
-  "dashboard", "leads", "parties", "items", "quotations", "proformas", "salesorders",
+  "dashboard", "leads", "parties", "items", "costing", "quotations", "proformas", "salesorders",
   "purchase", "grn", "inventory", "rawissue", "bom", "jobcards", "production", "testing", "challans",
   "operators",
   "reports", "taxdash", "users", "settings", "docformats", "logs", "profile",
@@ -82,7 +83,7 @@ export function defaultPermissionsForRole(role: Role): PermissionMatrix {
   grant(p, "profile", ["view", "edit"]);
 
   if (role === "sales") {
-    ["leads", "parties", "quotations", "proformas", "salesorders"].forEach(m => grant(p, m as RouteId, ["view", "create", "edit", "delete", "print", "export"]));
+    ["leads", "parties", "costing", "quotations", "proformas", "salesorders"].forEach(m => grant(p, m as RouteId, ["view", "create", "edit", "delete", "print", "export"]));
     grant(p, "reports", ["view", "export"]);
     grant(p, "taxdash", ["view", "export"]);
   }

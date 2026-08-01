@@ -50,24 +50,42 @@ export interface Item {
 }
 
 export interface CostingMaterial {
+  itemId?: string;
   name: string;
+  unit?: string;
   qty: number;
   rate: number;
+}
+
+export interface CostingVersion {
+  version: number;
+  updatedAt: string;
+  updatedBy?: string;
+  materials: CostingMaterial[];
+  marginPct: number;
+  gstRate: number;
+  totalCost: number;
+  salePrice: number;
+  profit: number;
 }
 
 export interface CostingSheet {
   id: string;
   number: string;
   title: string;
+  productItemId?: string;
+  productName?: string;
   customerId?: string;
   kva?: string; // transformer rating
   materials: CostingMaterial[];
   gstRate: number;
   marginPct: number;
   status: "draft" | "pending" | "approved" | "rejected";
+  locked?: boolean;
   ownerId: string;
   createdAt: string;
   version: number;
+  history?: CostingVersion[];
 }
 
 export type DocStatus =
