@@ -59,12 +59,18 @@ export function Layout({ route, setRoute, children }: { route: Route; setRoute: 
         open ? "translate-x-0" : "-translate-x-full"
       )}>
         <div className="h-16 flex items-center gap-2 px-5 border-b border-slate-800">
-          <div className="h-9 w-9 rounded-lg bg-gradient-to-br from-amber-400 to-orange-600 flex items-center justify-center text-white shadow overflow-hidden">
-            {db.settings.logoUrl ? <img src={db.settings.logoUrl} alt="Logo" className="h-full w-full object-contain bg-white" /> : <IconBolt size={20} />}
+          <div className="h-9 w-9 rounded-lg bg-white flex items-center justify-center shadow overflow-hidden">
+            <img
+              src={db.settings.logoUrl || "/amrest-logo.png"}
+              alt="Company Logo"
+              className="h-full w-full object-contain"
+              onError={(e) => { (e.currentTarget as HTMLImageElement).src = "/amrest-logo.png"; }}
+              data-testid="sidebar-company-logo"
+            />
           </div>
           <div className="leading-tight">
-            <div className="font-bold text-white text-sm">AMREST</div>
-            <div className="text-[10px] text-slate-400 uppercase tracking-wider">Electricals Ltd.</div>
+            <div className="font-bold text-white text-sm">{db.settings.name?.split(" ")[0] || "AMREST"}</div>
+            <div className="text-[10px] text-slate-400 uppercase tracking-wider">{db.settings.name?.split(" ").slice(1).join(" ") || "Electricals Ltd."}</div>
           </div>
         </div>
         <nav className="overflow-y-auto h-[calc(100vh-4rem)] py-3 px-2 space-y-3">

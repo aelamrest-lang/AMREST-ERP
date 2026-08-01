@@ -6,6 +6,28 @@ import { apiLogin, fetchRemoteDB, saveRemoteDB, fetchRemoteVersion, getToken, se
 
 const SESSION_KEY = "amrest_erp_session";
 const THEME_KEY = "amrest_theme";
+const SETTINGS_CACHE_KEY = "amrest_settings_cache";
+
+function readCachedSettings(): Partial<import("./types").CompanySettings> | null {
+  try {
+    const raw = localStorage.getItem(SETTINGS_CACHE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+function writeCachedSettings(settings: import("./types").CompanySettings) {
+  try {
+    const slim = {
+      name: settings.name,
+      address: settings.address,
+      gst: settings.gst,
+      logoUrl: settings.logoUrl,
+      logoText: settings.logoText,
+      email: settings.email,
+      phone: settings.phone,
+    };
+    localStorage.setItem(SETTINGS_CACHE_KEY, JSON.stringify(slim));
+  } catch { /* quota exceeded */ }
+}
 
 function migrateDB(db: DB): DB {
   const seeded = seedDB();
@@ -77,7 +99,11 @@ interface Ctx {
 const StoreCtx = createContext<Ctx | null>(null);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
-  const [db, setDb] = useState<DB>(() => seedDB());
+  const [db, setDb] = useState<DB>(() => {
+    const base = seedDB();
+    const cached = readCachedSettings();
+    return cached ? { ...base, settings: { ...base.settings, ...cached } } : base;
+  });
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [theme, setTheme] = useState<"light" | "dark">(() => (localStorage.getItem(THEME_KEY) as any) || "light");
   const [syncStatus, setSyncStatus] = useState<Ctx["syncStatus"]>("syncing");
@@ -109,6 +135,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (cancelled) return;
         const next = migrateDB(remote || seedDB());
         setDb(next);
+        writeCachedSettings(next.settings);
         localVersion.current = await fetchRemoteVersion().catch(() => 0);
         setSyncStatus("connected");
         setSyncError("");
@@ -223,6 +250,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const next = migrateDB(remote || seedDB());
       const user = next.users.find(u => u.id === res.user.id) || res.user;
       setDb(next);
+      writeCachedSettings(next.settings);
       localVersion.current = await fetchRemoteVersion().catch(() => 0);
       setCurrentUser(user);
       localStorage.setItem(SESSION_KEY, user.id);

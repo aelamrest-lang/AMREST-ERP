@@ -292,10 +292,12 @@ export function PurchaseOrders() {
     setRejectingId(null); setRejectReason("");
     setPreview(null);
   };
-  const addItem = () => setForm(f => ({...f, items: [...f.items, { itemId: db.items[0]?.id || "", qty: 1, rate: 0, description: "" }]}));
+  const addItem = () => setForm(f => ({...f, items: [...f.items, { itemId: db.items[0]?.id || "", qty: 1, rate: 0, gst: 18, description: "" }]}));
   const updateItem = (i: number, key: string, val: any) => setForm(f => ({...f, items: f.items.map((it, idx) => idx === i ? {...it, [key]: key === "itemId" || key === "description" ? val : Number(val)} : it)}));
   const delItem = (i: number) => setForm(f => ({...f, items: f.items.filter((_, idx) => idx !== i)}));
-  const total = form.items.reduce((s, i) => s + i.qty * i.rate, 0);
+  const sub = form.items.reduce((s, i) => s + i.qty * i.rate, 0);
+  const gstAmount = form.items.reduce((s, i) => s + i.qty * i.rate * ((Number(i.gst) || 0) / 100), 0);
+  const total = sub + gstAmount;
 
   const matchesItemSearch = (item: any, query: string) => {
     const q = query.trim().toLowerCase();
@@ -369,15 +371,21 @@ export function PurchaseOrders() {
   const buildPOHtml = (p: PurchaseOrder, opts?: { includeApprovalHistory?: boolean }): string => {
     const includeHistory = opts?.includeApprovalHistory !== false;
     const v = db.parties.find(x => x.id === p.vendorId);
-    const t = p.items.reduce((s, i) => s + i.qty * i.rate, 0);
+    const sub = p.items.reduce((s, i) => s + i.qty * i.rate, 0);
+    const gst = p.items.reduce((s, i) => s + i.qty * i.rate * ((Number(i.gst) || 0) / 100), 0);
+    const t = sub + gst;
     const historyRows = (p.approvalHistory || []).map(e => `<tr><td>${new Date(e.timestamp).toLocaleString("en-IN")}</td><td>${e.userName}</td><td>${e.action}</td><td>${e.reason || ""}</td></tr>`).join("");
     const body = `
       ${approvalBannerHtml(p)}
       <div class="box"><div class="section-title">Vendor Details</div><b>${v?.name || ""}</b><br/>${v?.address || ""}${v?.city ? `, ${v.city}` : ""}<br/>GST: ${v?.gst || ""}<br/>Contact: ${v?.mobile || ""} | ${v?.email || ""}</div>
       <div class="box"><span class="badge">${p.status}</span> &nbsp; <b>Expected Delivery:</b> ${p.expectedDeliveryDate || "—"}</div>
-      <table><thead><tr><th>#</th><th>Item</th><th class="right">Qty</th><th class="right">Rate</th><th class="right">Amount</th></tr></thead>
-      <tbody>${p.items.map((i, idx) => { const it = db.items.find(x => x.id === i.itemId); return `<tr><td>${idx+1}</td><td><b>${it?.name || "-"}</b>${i.description ? `<br/><span class="muted">${i.description}</span>` : ""}</td><td class="right">${i.qty}</td><td class="right">${fmtINR(i.rate)}</td><td class="right">${fmtINR(i.qty*i.rate)}</td></tr>`; }).join("")}</tbody></table>
-      <div class="totals"><div class="grand"><span>Total</span><b>${fmtINR(t)}</b></div></div>
+      <table><thead><tr><th>#</th><th>Item</th><th class="right">Qty</th><th class="right">Rate</th><th class="right">GST%</th><th class="right">Amount</th></tr></thead>
+      <tbody>${p.items.map((i, idx) => { const it = db.items.find(x => x.id === i.itemId); const g = Number(i.gst) || 0; const amt = i.qty * i.rate * (1 + g / 100); return `<tr><td>${idx+1}</td><td><b>${it?.name || "-"}</b>${i.description ? `<br/><span class="muted">${i.description}</span>` : ""}</td><td class="right">${i.qty}</td><td class="right">${fmtINR(i.rate)}</td><td class="right">${g}%</td><td class="right">${fmtINR(amt)}</td></tr>`; }).join("")}</tbody></table>
+      <div class="totals">
+        <div><span>Sub Total</span><b>${fmtINR(sub)}</b></div>
+        <div><span>GST</span><b>${fmtINR(gst)}</b></div>
+        <div class="grand"><span>Total</span><b>${fmtINR(t)}</b></div>
+      </div>
       <div class="box"><div class="section-title">Terms &amp; Conditions</div><pre style="white-space:pre-wrap;font-family:inherit;font-size:12px;margin:6px 0">${p.terms || getDefaultPurchaseTerms(db.settings)}</pre></div>
       ${includeHistory && historyRows ? `<div class="box"><div class="section-title">Approval History</div><table><thead><tr><th>Date &amp; Time</th><th>User</th><th>Action</th><th>Reason</th></tr></thead><tbody>${historyRows}</tbody></table></div>` : ""}
     `;
@@ -413,7 +421,7 @@ export function PurchaseOrders() {
           <thead><tr><Th>#</Th><Th>Date</Th><Th>Vendor</Th><Th>Items</Th><Th>Expected Delivery</Th><Th>Received / Pending</Th><Th>Total</Th><Th>Status</Th><Th></Th></tr></thead>
           <tbody>
             {filteredPOs.map(p => {
-              const t = p.items.reduce((s, i) => s + i.qty * i.rate, 0);
+              const t = p.items.reduce((s, i) => s + i.qty * i.rate * (1 + ((Number(i.gst) || 0) / 100)), 0);
               const summary = overdueSummary(p, db.grns);
               const showDelay = summary.delayDays > 0 && !summary.fullyReceived && p.status !== "Cancelled";
               const derivedStatus: PurchaseOrder["status"] = summary.fullyReceived
@@ -542,7 +550,7 @@ export function PurchaseOrders() {
         </div>
         <div className="mt-3 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
           <Table>
-            <thead><tr><Th>Item</Th><Th>Qty</Th><Th>Rate</Th><Th>Amount</Th><Th></Th></tr></thead>
+            <thead><tr><Th>Item</Th><Th>Qty</Th><Th>Rate</Th><Th>GST%</Th><Th>Amount</Th><Th></Th></tr></thead>
             <tbody>{form.items.map((it, i) => (
               <tr key={i}>
                 <Td>
@@ -561,6 +569,7 @@ export function PurchaseOrders() {
                     updateItem(i, "itemId", e.target.value);
                     if (selected) {
                       updateItem(i, "rate", selected.purchaseRate);
+                      if (typeof selected.gstRate === "number") updateItem(i, "gst", selected.gstRate);
                       setItemSearch(prev => ({ ...prev, [i]: selected.name }));
                     }
                   }}>
@@ -575,15 +584,28 @@ export function PurchaseOrders() {
                 </Td>
                 <Td><Input type="number" value={it.qty} onChange={(e: any) => updateItem(i, "qty", e.target.value)}/></Td>
                 <Td><Input type="number" value={it.rate} onChange={(e: any) => updateItem(i, "rate", e.target.value)}/></Td>
-                <Td>{fmtINR(it.qty * it.rate)}</Td>
+                <Td>
+                  <Select
+                    value={it.gst ?? 18}
+                    onChange={(e: any) => updateItem(i, "gst", e.target.value)}
+                    data-testid={`po-item-gst-${i}`}
+                  >
+                    {[0, 5, 12, 18, 28].map(rate => <option key={rate} value={rate}>{rate}%</option>)}
+                  </Select>
+                </Td>
+                <Td>{fmtINR(it.qty * it.rate * (1 + ((Number(it.gst) || 0) / 100)))}</Td>
                 <Td><Button size="sm" variant="ghost" onClick={() => delItem(i)}><IconTrash size={14}/></Button></Td>
               </tr>
             ))}</tbody>
           </Table>
         </div>
-        <div className="mt-2 flex items-center justify-between">
+        <div className="mt-2 flex items-start justify-between gap-4">
           <Button size="sm" variant="outline" onClick={addItem}><IconPlus size={14}/> Add Item</Button>
-          <div className="text-base font-semibold">Total: <span className="text-emerald-600">{fmtINR(total)}</span></div>
+          <div className="text-sm w-full sm:w-64 rounded-lg border p-3 bg-slate-50 dark:bg-slate-800/40 dark:border-slate-700 space-y-1">
+            <div className="flex justify-between"><span>Sub Total</span><b>{fmtINR(sub)}</b></div>
+            <div className="flex justify-between"><span>GST</span><b>{fmtINR(gstAmount)}</b></div>
+            <div className="flex justify-between text-base border-t pt-1 mt-1"><span>Total</span><b className="text-emerald-600">{fmtINR(total)}</b></div>
+          </div>
         </div>
         <div className="mt-4">
           <div className="flex items-center justify-between mb-1">

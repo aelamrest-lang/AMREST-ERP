@@ -141,7 +141,7 @@ export interface PurchaseOrder {
   number: string;
   date: string;
   vendorId: string;
-  items: { itemId: string; qty: number; rate: number; description?: string }[];
+  items: { itemId: string; qty: number; rate: number; gst?: number; description?: string }[];
   terms?: string;
   expectedDeliveryDate?: string;
   status: "Draft" | "Approved" | "Partially Received" | "Received" | "Completed" | "Cancelled";
