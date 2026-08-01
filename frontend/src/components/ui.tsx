@@ -5,7 +5,7 @@ export function Card({ className, children }: { className?: string; children: Re
   return <div className={cn("rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm", className)}>{children}</div>;
 }
 
-export function CardHeader({ title, subtitle, right }: { title: string; subtitle?: string; right?: ReactNode }) {
+export function CardHeader({ title, subtitle, right }: { title: ReactNode; subtitle?: ReactNode; right?: ReactNode }) {
   return (
     <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-3">
       <div>

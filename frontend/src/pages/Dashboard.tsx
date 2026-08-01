@@ -51,6 +51,8 @@ export function Dashboard() {
     unit: string;
     required: number;
     available: number;
+    currentStock: number;
+    heldQty: number;
     shortage: number;
     jobCards: ShortageJC[];
   }
@@ -73,11 +75,17 @@ export function Dashboard() {
     if (required <= available) return;
     shortages.push({
       itemId, itemName: item.name, unit: item.unit || "Nos",
-      required, available, shortage: required - available, jobCards: jcs,
+      required,
+      available,
+      currentStock: Number(item.currentStock) || 0,
+      heldQty: required,
+      shortage: required - available,
+      jobCards: jcs,
     });
   });
   shortages.sort((a, b) => b.shortage - a.shortage);
   const [shortageDrill, setShortageDrill] = useState<Shortage | null>(null);
+  const [shortageListOpen, setShortageListOpen] = useState(false);
   const productionInProg = db.jobCards.filter(j => j.status === "In Progress").length;
 
   // ---- Monthly Sales from Delivery Challans ----
@@ -231,14 +239,21 @@ export function Dashboard() {
           </div>
         </Card>
         <Card>
-          <CardHeader
-            title="Low Stock Alerts"
-            subtitle="Shortages from Pending Job Cards vs current inventory"
-            right={<Badge color={shortages.length ? "red" : "green"}>{shortages.length}</Badge>}
-          />
+          <button
+            type="button"
+            onClick={() => setShortageListOpen(true)}
+            className="w-full text-left focus:outline-none"
+            data-testid="dashboard-low-stock-header"
+          >
+            <CardHeader
+              title={<span className="hover:text-indigo-600 transition inline-flex items-center gap-1">Low Stock Alerts <span className="text-[10px] text-slate-500 font-normal">(click to view all)</span></span>}
+              subtitle="Shortages from Pending Job Cards vs current inventory"
+              right={<Badge color={shortages.length ? "red" : "green"}>{shortages.length}</Badge>}
+            />
+          </button>
           <div className="p-4 space-y-2 max-h-72 overflow-y-auto" data-testid="dashboard-low-stock">
             {shortages.length === 0 && <Empty title="No shortages against pending job cards" />}
-            {shortages.map(s => (
+            {shortages.slice(0, 5).map(s => (
               <button
                 key={s.itemId}
                 type="button"
@@ -260,6 +275,16 @@ export function Dashboard() {
                 </div>
               </button>
             ))}
+            {shortages.length > 5 && (
+              <button
+                type="button"
+                onClick={() => setShortageListOpen(true)}
+                className="w-full text-center text-xs text-indigo-600 dark:text-indigo-400 hover:underline pt-2"
+                data-testid="dashboard-low-stock-view-all"
+              >
+                View all {shortages.length} shortages →
+              </button>
+            )}
           </div>
         </Card>
       </div>
@@ -318,6 +343,65 @@ export function Dashboard() {
       )}
 
       <DashboardDrillDown drill={drill} onClose={() => setDrill(null)} db={db} monthBuckets={monthBuckets} />
+
+      <Modal open={shortageListOpen} onClose={() => setShortageListOpen(false)} title={`Low Stock Alerts — ${shortages.length} Shortage${shortages.length === 1 ? "" : "s"}`} size="xl">
+        <div className="text-xs text-slate-500 mb-3">Items where pending Job Card requirement exceeds available inventory. Click any row to see the affected Job Cards and material breakdown.</div>
+        {shortages.length === 0 ? (
+          <Empty title="No shortages" />
+        ) : (
+          <div className="overflow-x-auto max-h-[65vh] overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700">
+            <Table>
+              <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800/60 backdrop-blur z-10">
+                <tr>
+                  <Th>Item Name</Th>
+                  <Th>UOM</Th>
+                  <Th className="text-right">Required Qty</Th>
+                  <Th className="text-right">Current Stock</Th>
+                  <Th className="text-right">Held Qty</Th>
+                  <Th className="text-right">Available Qty</Th>
+                  <Th className="text-right">Shortage Qty</Th>
+                  <Th className="text-right">Affected JCs</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {shortages.map(s => {
+                  const availableNet = s.currentStock - s.heldQty;
+                  return (
+                    <tr
+                      key={s.itemId}
+                      className="hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer"
+                      onClick={() => { setShortageDrill(s); setShortageListOpen(false); }}
+                      data-testid={`shortage-list-row-${s.itemId}`}
+                    >
+                      <Td className="font-medium">{s.itemName}</Td>
+                      <Td>{s.unit}</Td>
+                      <Td className="text-right">{fmt2(s.required)}</Td>
+                      <Td className="text-right">{fmt2(s.currentStock)}</Td>
+                      <Td className="text-right text-amber-600">{fmt2(s.heldQty)}</Td>
+                      <Td className={"text-right " + (availableNet < 0 ? "text-rose-600 font-semibold" : "")}>{fmt2(availableNet)}</Td>
+                      <Td className="text-right">
+                        <span className="inline-block px-2 py-0.5 rounded-md bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300 font-bold">
+                          -{fmt2(s.shortage)}
+                        </span>
+                      </Td>
+                      <Td className="text-right">
+                        <Badge color="blue">{s.jobCards.length}</Badge>
+                      </Td>
+                    </tr>
+                  );
+                })}
+                <tr className="bg-slate-50 dark:bg-slate-800/40 font-semibold border-t-2 border-slate-300 dark:border-slate-600">
+                  <Td colSpan={6} className="text-right">Total Shortage across {shortages.length} item{shortages.length === 1 ? "" : "s"}</Td>
+                  <Td className="text-right text-rose-600">-{fmt2(shortages.reduce((s, x) => s + x.shortage, 0))}</Td>
+                  <Td className="text-right">
+                    <Badge color="blue">{new Set(shortages.flatMap(x => x.jobCards.map(j => j.jc.id))).size}</Badge>
+                  </Td>
+                </tr>
+              </tbody>
+            </Table>
+          </div>
+        )}
+      </Modal>
 
       <Modal open={!!shortageDrill} onClose={() => setShortageDrill(null)} title={shortageDrill ? `Shortage · ${shortageDrill.itemName}` : "Shortage"} size="xl">
         {shortageDrill && (
