@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useStore, uid } from "../lib/store";
 import type { CostingSheet, CostingMaterial, Item } from "../lib/types";
 import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Badge, Empty } from "../components/ui";
-import { IconPlus, IconEdit, IconTrash, IconSearch, IconPrint } from "../components/icons";
+import { IconPlus, IconEdit, IconTrash, IconSearch, IconPrint, IconRefresh, IconChart } from "../components/icons";
 import { fmt2, fmtINR, nextNumber, todayISO, professionalDocument, printArea } from "../lib/utils";
 import { userCan } from "../lib/permissions";
 
@@ -30,6 +30,7 @@ export function Costings() {
   const [open, setOpen] = useState(false);
   const [edit, setEditing] = useState<CostingSheet | null>(null);
   const [historyFor, setHistoryFor] = useState<CostingSheet | null>(null);
+  const [trendFor, setTrendFor] = useState<CostingSheet | null>(null);
   const [showNewItemInline, setShowNewItemInline] = useState(false);
   const [newItem, setNewItem] = useState<Partial<Item>>({ name: "", category: "Finished Goods", unit: "Nos", gstRate: 18, purchaseRate: 0, saleRate: 0 });
 
@@ -172,6 +173,43 @@ export function Costings() {
     openEdit(c);
   };
 
+  const duplicateCosting = (c: CostingSheet) => {
+    setEditing(null);
+    setForm({
+      ...blank(),
+      title: `${c.title} (Copy)`,
+      productItemId: c.productItemId,
+      productName: c.productName,
+      kva: c.kva,
+      customerId: c.customerId,
+      gstRate: c.gstRate,
+      marginPct: c.marginPct,
+      materials: c.materials.map(m => ({ ...m })),
+    });
+    setOpen(true);
+    setShowNewItemInline(false);
+  };
+
+  const refreshMaterialRates = () => {
+    let updated = 0;
+    setForm(f => ({
+      ...f,
+      materials: f.materials.map(m => {
+        const it = m.itemId
+          ? db.items.find(x => x.id === m.itemId)
+          : db.items.find(x => x.name.toLowerCase() === m.name.toLowerCase());
+        if (it && Number(it.purchaseRate) > 0 && Number(it.purchaseRate) !== Number(m.rate)) {
+          updated += 1;
+          return { ...m, itemId: it.id, unit: m.unit || it.unit || "Nos", rate: Number(it.purchaseRate) };
+        }
+        return m;
+      }),
+    }));
+    setTimeout(() => alert(updated > 0
+      ? `Refreshed ${updated} material rate${updated === 1 ? "" : "s"} from Item Master.`
+      : "All material rates already match the latest Item Master purchase rates."), 50);
+  };
+
   const remove = (c: CostingSheet) => {
     if (!confirm(`Delete costing ${c.number}?`)) return;
     setDB(d => ({ ...d, costings: d.costings.filter(x => x.id !== c.id) }));
@@ -251,6 +289,8 @@ export function Costings() {
                   <Td>{c.locked ? <Badge color="amber">Locked</Badge> : <Badge color="green">Draft</Badge>}</Td>
                   <Td>
                     <div className="flex gap-1">
+                      {canCreate && <Button size="sm" variant="ghost" title="Duplicate costing" onClick={() => duplicateCosting(c)} data-testid={`costing-duplicate-${c.id}`}><IconPlus size={14}/></Button>}
+                      <Button size="sm" variant="ghost" title="Cost trend" onClick={() => setTrendFor(c)} data-testid={`costing-trend-${c.id}`}><IconChart size={14}/></Button>
                       {canEdit && c.locked && <Button size="sm" variant="ghost" title="Edit costing" onClick={() => unlockForEdit(c)} data-testid={`costing-edit-${c.id}`}><IconEdit size={14}/></Button>}
                       {canEdit && !c.locked && <Button size="sm" variant="ghost" title="Continue draft" onClick={() => openEdit(c)}><IconEdit size={14}/></Button>}
                       {canPrint && <Button size="sm" variant="ghost" title="Print" onClick={() => printCosting(c)}><IconPrint size={14}/></Button>}
@@ -368,8 +408,19 @@ export function Costings() {
               )}
             </tbody>
           </Table>
-          <div className="p-3 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40">
+          <div className="p-3 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 flex items-center justify-between gap-2 flex-wrap">
             <Button size="sm" variant="outline" onClick={addMaterial} data-testid="costing-add-material"><IconPlus size={14}/> Add Raw Material</Button>
+            {form.materials.length > 0 && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={refreshMaterialRates}
+                data-testid="costing-refresh-rates"
+                title="Pull the latest purchase rate for every material from Item Master"
+              >
+                <IconRefresh size={14}/> Refresh Rates from Item Master
+              </Button>
+            )}
           </div>
         </div>
 
@@ -426,6 +477,96 @@ export function Costings() {
             </Table>
           </div>
         )}
+      </Modal>
+
+      <Modal open={!!trendFor} onClose={() => setTrendFor(null)} title={trendFor ? `Cost Trend · ${trendFor.productName || trendFor.title}` : "Cost Trend"} size="lg">
+        {trendFor && (() => {
+          const points = [
+            ...(trendFor.history || []).map(h => ({
+              version: h.version,
+              at: h.updatedAt,
+              cost: h.totalCost,
+              sale: h.salePrice,
+              margin: h.marginPct,
+            })),
+            {
+              version: trendFor.version || 1,
+              at: trendFor.createdAt,
+              cost: computeTotals(trendFor.materials, trendFor.marginPct).totalCost,
+              sale: computeTotals(trendFor.materials, trendFor.marginPct).salePrice,
+              margin: trendFor.marginPct,
+            },
+          ];
+          if (points.length < 2) {
+            return <Empty title="Not enough versions yet — save an edit at least once to see the trend." />;
+          }
+          const maxCost = Math.max(...points.map(p => p.cost), 1);
+          const minCost = Math.min(...points.map(p => p.cost));
+          const first = points[0].cost;
+          const last = points[points.length - 1].cost;
+          const delta = last - first;
+          const pctChange = first > 0 ? (delta / first) * 100 : 0;
+          const W = 640;
+          const H = 220;
+          const pad = 30;
+          const step = points.length > 1 ? (W - pad * 2) / (points.length - 1) : 0;
+          const y = (v: number) => H - pad - ((v - minCost) / Math.max(1, maxCost - minCost)) * (H - pad * 2);
+          const path = points.map((p, i) => `${i === 0 ? "M" : "L"} ${pad + i * step} ${y(p.cost)}`).join(" ");
+          return (
+            <div className="space-y-3">
+              <div className="grid sm:grid-cols-3 gap-3 text-sm">
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-slate-50 dark:bg-slate-800/40">
+                  <div className="text-xs text-slate-500">Latest Cost</div>
+                  <div className="text-lg font-bold">{fmtINR(last)}</div>
+                </div>
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-slate-50 dark:bg-slate-800/40">
+                  <div className="text-xs text-slate-500">Change vs v1</div>
+                  <div className={"text-lg font-bold " + (delta > 0 ? "text-rose-600" : delta < 0 ? "text-emerald-600" : "text-slate-600")}>
+                    {delta >= 0 ? "+" : ""}{fmtINR(delta)} ({fmt2(pctChange)}%)
+                  </div>
+                </div>
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-slate-50 dark:bg-slate-800/40">
+                  <div className="text-xs text-slate-500">Versions</div>
+                  <div className="text-lg font-bold">{points.length}</div>
+                </div>
+              </div>
+              <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
+                <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-56">
+                  <path d={path} fill="none" stroke="#4f46e5" strokeWidth="2" />
+                  {points.map((p, i) => (
+                    <g key={i}>
+                      <circle cx={pad + i * step} cy={y(p.cost)} r="4" fill="#4f46e5" />
+                      <text x={pad + i * step} y={y(p.cost) - 10} textAnchor="middle" fontSize="10" fill="#475569">₹{Math.round(p.cost).toLocaleString("en-IN")}</text>
+                      <text x={pad + i * step} y={H - pad + 15} textAnchor="middle" fontSize="10" fill="#94a3b8">v{p.version}</text>
+                    </g>
+                  ))}
+                </svg>
+              </div>
+              <Table>
+                <thead><tr><Th>Version</Th><Th>Date</Th><Th className="text-right">Cost</Th><Th className="text-right">Margin</Th><Th className="text-right">Sale Price</Th><Th className="text-right">Δ vs prev</Th></tr></thead>
+                <tbody>
+                  {points.map((p, i) => {
+                    const prev = i > 0 ? points[i - 1].cost : null;
+                    const d = prev !== null ? p.cost - prev : null;
+                    const dPct = prev && prev > 0 ? (d! / prev) * 100 : null;
+                    return (
+                      <tr key={i}>
+                        <Td><Badge color={i === points.length - 1 ? "green" : "blue"}>v{p.version}{i === points.length - 1 ? " (current)" : ""}</Badge></Td>
+                        <Td className="text-xs">{p.at.slice(0, 16).replace("T", " ")}</Td>
+                        <Td className="text-right">{fmtINR(p.cost)}</Td>
+                        <Td className="text-right">{fmt2(p.margin)}%</Td>
+                        <Td className="text-right">{fmtINR(p.sale)}</Td>
+                        <Td className={"text-right " + (d === null ? "text-slate-400" : d > 0 ? "text-rose-600" : d < 0 ? "text-emerald-600" : "")}>
+                          {d === null ? "—" : `${d >= 0 ? "+" : ""}${fmtINR(d)} (${fmt2(dPct!)}%)`}
+                        </Td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </Table>
+            </div>
+          );
+        })()}
       </Modal>
     </div>
   );
