@@ -76,7 +76,7 @@ export interface CostingSheet {
   productItemId?: string;
   productName?: string;
   customerId?: string;
-  kva?: string; // transformer rating
+  kva?: string;
   materials: CostingMaterial[];
   gstRate: number;
   marginPct: number;
@@ -86,6 +86,7 @@ export interface CostingSheet {
   createdAt: string;
   version: number;
   history?: CostingVersion[];
+  sequence?: number;
 }
 
 export type DocStatus =

@@ -27,6 +27,14 @@ export function Costings() {
   const isAdmin = currentUser?.role === "admin";
 
   const [search, setSearch] = useState("");
+  const [productFilter, setProductFilter] = useState<string>("");
+  const [statusFilter, setStatusFilter] = useState<string>("");
+  const [versionFilter, setVersionFilter] = useState<string>("");
+  const [fromDate, setFromDate] = useState<string>("");
+  const [toDate, setToDate] = useState<string>("");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [compareOpen, setCompareOpen] = useState(false);
+  const [dragId, setDragId] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const [edit, setEditing] = useState<CostingSheet | null>(null);
   const [historyFor, setHistoryFor] = useState<CostingSheet | null>(null);
@@ -66,8 +74,59 @@ export function Costings() {
         (c.productName || "").toLowerCase().includes(q)
       );
     }
-    return [...arr].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  }, [db.costings, isAdmin, currentUser, search]);
+    if (productFilter) arr = arr.filter(c => (c.productName || c.title || "") === productFilter);
+    if (statusFilter) arr = arr.filter(c => (c.locked ? "locked" : c.status) === statusFilter);
+    if (versionFilter) arr = arr.filter(c => `v${c.version || 1}` === versionFilter);
+    if (fromDate) arr = arr.filter(c => c.createdAt.slice(0, 10) >= fromDate);
+    if (toDate) arr = arr.filter(c => c.createdAt.slice(0, 10) <= toDate);
+    // Sort by manual sequence first, then newest
+    return [...arr].sort((a, b) => {
+      const sa = a.sequence ?? 9999;
+      const sb = b.sequence ?? 9999;
+      if (sa !== sb) return sa - sb;
+      return b.createdAt.localeCompare(a.createdAt);
+    });
+  }, [db.costings, isAdmin, currentUser, search, productFilter, statusFilter, versionFilter, fromDate, toDate]);
+
+  const productOptions = useMemo(() => Array.from(new Set(db.costings.map(c => c.productName || c.title).filter(Boolean))).sort(), [db.costings]);
+  const versionOptions = useMemo(() => Array.from(new Set(db.costings.map(c => `v${c.version || 1}`))).sort(), [db.costings]);
+  const selectedList = list.filter(c => selectedIds.has(c.id));
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const toggleSelectAll = () => {
+    if (selectedIds.size === list.length) setSelectedIds(new Set());
+    else setSelectedIds(new Set(list.map(c => c.id)));
+  };
+  const clearFilters = () => {
+    setSearch(""); setProductFilter(""); setStatusFilter(""); setVersionFilter(""); setFromDate(""); setToDate("");
+  };
+
+  const handleDragStart = (id: string) => setDragId(id);
+  const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); };
+  const handleDrop = (targetId: string) => {
+    if (!dragId || dragId === targetId) return;
+    // Build ordered list of ids using current sort, then reorder
+    const currentOrder = list.map(c => c.id);
+    const from = currentOrder.indexOf(dragId);
+    const to = currentOrder.indexOf(targetId);
+    if (from < 0 || to < 0) return;
+    const reordered = [...currentOrder];
+    reordered.splice(from, 1);
+    reordered.splice(to, 0, dragId);
+    // Persist sequence 0..n
+    const seqMap = new Map(reordered.map((id, i) => [id, i]));
+    setDB(d => ({
+      ...d,
+      costings: d.costings.map(c => seqMap.has(c.id) ? { ...c, sequence: seqMap.get(c.id) } : c),
+    }));
+    setDragId(null);
+  };
 
   const openNew = () => {
     setEditing(null);
@@ -254,25 +313,88 @@ export function Costings() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold">Costing Sheets</h1>
-          <p className="text-sm text-slate-500">Build a bill of costs for each finished good with automatic profit & sale price calculation.</p>
+          <p className="text-sm text-slate-500">Build a bill of costs for each finished good with automatic profit &amp; sale price calculation.</p>
         </div>
         <div className="flex items-center gap-2">
-          <div className="relative w-full sm:w-72">
-            <IconSearch size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"/>
-            <Input className="pl-9" placeholder="Search costing number, title, product..." value={search} onChange={(e: any) => setSearch(e.target.value)}/>
-          </div>
+          <Button
+            variant={selectedIds.size >= 2 ? "primary" : "outline"}
+            disabled={selectedIds.size < 2}
+            onClick={() => setCompareOpen(true)}
+            data-testid="compare-costings-btn"
+          >
+            Compare Selected {selectedIds.size > 0 ? `(${selectedIds.size})` : ""}
+          </Button>
           {canCreate && <Button onClick={openNew} data-testid="new-costing-btn"><IconPlus size={14}/> New Costing</Button>}
         </div>
       </div>
 
       <Card>
+        <div className="p-3 border-b border-slate-200 dark:border-slate-800 grid sm:grid-cols-6 gap-2 text-sm">
+          <div className="sm:col-span-2 relative">
+            <IconSearch size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"/>
+            <Input className="pl-9" placeholder="Search costing no / title / product..." value={search} onChange={(e: any) => setSearch(e.target.value)} data-testid="costing-search"/>
+          </div>
+          <Select value={productFilter} onChange={(e: any) => setProductFilter(e.target.value)} data-testid="costing-filter-product">
+            <option value="">All Products</option>
+            {productOptions.map(p => <option key={p} value={p}>{p}</option>)}
+          </Select>
+          <Select value={versionFilter} onChange={(e: any) => setVersionFilter(e.target.value)} data-testid="costing-filter-version">
+            <option value="">All Versions</option>
+            {versionOptions.map(v => <option key={v} value={v}>{v}</option>)}
+          </Select>
+          <Select value={statusFilter} onChange={(e: any) => setStatusFilter(e.target.value)} data-testid="costing-filter-status">
+            <option value="">All Statuses</option>
+            <option value="locked">Locked</option>
+            <option value="draft">Draft</option>
+            <option value="pending">Pending</option>
+            <option value="approved">Approved</option>
+            <option value="rejected">Rejected</option>
+          </Select>
+          <div className="flex gap-1">
+            <Input type="date" value={fromDate} onChange={(e: any) => setFromDate(e.target.value)} title="From date" data-testid="costing-filter-from" />
+            <Input type="date" value={toDate} onChange={(e: any) => setToDate(e.target.value)} title="To date" data-testid="costing-filter-to" />
+          </div>
+          {(search || productFilter || statusFilter || versionFilter || fromDate || toDate) && (
+            <button onClick={clearFilters} className="sm:col-span-6 text-left text-xs text-indigo-600 hover:underline" data-testid="costing-clear-filters">Clear all filters</button>
+          )}
+        </div>
         <Table>
-          <thead><tr><Th>#</Th><Th>Date</Th><Th>Product</Th><Th>Title</Th><Th className="text-right">Total Cost</Th><Th className="text-right">Margin</Th><Th className="text-right">Sale Price</Th><Th>Version</Th><Th>Status</Th><Th></Th></tr></thead>
+          <thead><tr>
+            <Th className="w-8">
+              <input
+                type="checkbox"
+                checked={list.length > 0 && selectedIds.size === list.length}
+                onChange={toggleSelectAll}
+                data-testid="costing-select-all"
+              />
+            </Th>
+            <Th className="w-6"></Th>
+            <Th>#</Th><Th>Date</Th><Th>Product</Th><Th>Title</Th><Th className="text-right">Total Cost</Th><Th className="text-right">Margin</Th><Th className="text-right">Sale Price</Th><Th>Version</Th><Th>Status</Th><Th></Th>
+          </tr></thead>
           <tbody>
             {list.map(c => {
               const t = computeTotals(c.materials, c.marginPct);
+              const isSelected = selectedIds.has(c.id);
               return (
-                <tr key={c.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                <tr
+                  key={c.id}
+                  className={"hover:bg-slate-50 dark:hover:bg-slate-800/50 " + (isSelected ? "bg-indigo-50/50 dark:bg-indigo-900/20 " : "") + (dragId === c.id ? "opacity-50 " : "")}
+                  draggable
+                  onDragStart={() => handleDragStart(c.id)}
+                  onDragOver={handleDragOver}
+                  onDrop={() => handleDrop(c.id)}
+                  data-testid={`costing-row-${c.id}`}
+                >
+                  <Td>
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleSelect(c.id)}
+                      onClick={e => e.stopPropagation()}
+                      data-testid={`costing-select-${c.id}`}
+                    />
+                  </Td>
+                  <Td className="cursor-move text-slate-400 select-none" title="Drag to reorder">⋮⋮</Td>
                   <Td className="font-mono text-xs">{c.number}</Td>
                   <Td>{c.createdAt.slice(0, 10)}</Td>
                   <Td className="font-medium">{c.productName || "—"}</Td>
@@ -302,7 +424,7 @@ export function Costings() {
             })}
           </tbody>
         </Table>
-        {list.length === 0 && <Empty title="No costings yet" />}
+        {list.length === 0 && <Empty title="No costings match the current filters" />}
       </Card>
 
       <Modal open={open} onClose={() => setOpen(false)} title={edit ? `Edit Costing · ${edit.number}${edit.locked ? " (Locked → will save as new version)" : ""}` : "New Costing"} size="xl">
@@ -564,6 +686,86 @@ export function Costings() {
                   })}
                 </tbody>
               </Table>
+            </div>
+          );
+        })()}
+      </Modal>
+      <Modal open={compareOpen} onClose={() => setCompareOpen(false)} title={`Compare Costings (${selectedList.length})`} size="xl">
+        {selectedList.length < 2 ? (
+          <Empty title="Select at least 2 costings to compare" />
+        ) : (() => {
+          // Union of material names across selected costings
+          const matNames = Array.from(new Set(selectedList.flatMap(c => c.materials.map(m => m.name)))).sort();
+          const matRows = matNames.map(name => {
+            const perCosting = selectedList.map(c => c.materials.find(m => m.name === name));
+            const qtyValues = perCosting.map(m => m ? Number(m.qty) : NaN);
+            const rateValues = perCosting.map(m => m ? Number(m.rate) : NaN);
+            const distinctQty = new Set(qtyValues.filter(v => !isNaN(v)));
+            const distinctRate = new Set(rateValues.filter(v => !isNaN(v)));
+            return { name, perCosting, qtyDiffers: distinctQty.size > 1, rateDiffers: distinctRate.size > 1 };
+          });
+          const totals = selectedList.map(c => computeTotals(c.materials, c.marginPct));
+          const totalCostDiffers = new Set(totals.map(t => t.totalCost.toFixed(2))).size > 1;
+          const marginDiffers = new Set(selectedList.map(c => Number(c.marginPct).toFixed(2))).size > 1;
+          const saleDiffers = new Set(totals.map(t => t.salePrice.toFixed(2))).size > 1;
+          return (
+            <div className="overflow-x-auto max-h-[70vh]">
+              <Table>
+                <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800/70 backdrop-blur z-10">
+                  <tr>
+                    <Th>Field / Material</Th>
+                    {selectedList.map(c => (
+                      <Th key={c.id} className="text-right whitespace-nowrap">
+                        <div>{c.number}</div>
+                        <div className="text-[10px] text-slate-500 font-normal">v{c.version || 1} · {c.productName || "—"}</div>
+                      </Th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {matRows.map(row => (
+                    <tr key={row.name}>
+                      <Td className="font-medium">{row.name}</Td>
+                      {row.perCosting.map((m, i) => (
+                        <Td key={i} className="text-right">
+                          {m ? (
+                            <div className="space-y-0.5">
+                              <div className={row.qtyDiffers ? "px-1 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-900 dark:text-amber-200 inline-block" : ""}>
+                                {fmt2(m.qty)} {m.unit || ""}
+                              </div>
+                              <div className={"text-xs " + (row.rateDiffers ? "px-1 rounded bg-rose-100 dark:bg-rose-900/40 text-rose-800 dark:text-rose-200 inline-block" : "text-slate-500")}>
+                                @ {fmt2(m.rate)}
+                              </div>
+                            </div>
+                          ) : <span className="text-slate-300">—</span>}
+                        </Td>
+                      ))}
+                    </tr>
+                  ))}
+                  <tr className="bg-slate-100 dark:bg-slate-800/60 border-t-2 border-slate-300 dark:border-slate-600">
+                    <Td className="font-semibold">Total Cost</Td>
+                    {totals.map((t, i) => (
+                      <Td key={i} className={"text-right font-semibold " + (totalCostDiffers ? "bg-amber-50 dark:bg-amber-900/20" : "")}>{fmtINR(t.totalCost)}</Td>
+                    ))}
+                  </tr>
+                  <tr>
+                    <Td className="font-semibold">Margin %</Td>
+                    {selectedList.map((c, i) => (
+                      <Td key={i} className={"text-right " + (marginDiffers ? "bg-amber-50 dark:bg-amber-900/20" : "")}>{fmt2(c.marginPct)}%</Td>
+                    ))}
+                  </tr>
+                  <tr className="bg-emerald-50 dark:bg-emerald-900/20">
+                    <Td className="font-semibold">Sale Price</Td>
+                    {totals.map((t, i) => (
+                      <Td key={i} className={"text-right font-bold text-emerald-700 dark:text-emerald-300 " + (saleDiffers ? "bg-amber-50 dark:bg-amber-900/30" : "")}>{fmtINR(t.salePrice)}</Td>
+                    ))}
+                  </tr>
+                </tbody>
+              </Table>
+              <div className="mt-3 text-xs text-slate-500">
+                <span className="inline-block px-2 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-900 dark:text-amber-200 mr-2">amber</span> qty / total difference &nbsp;·&nbsp;
+                <span className="inline-block px-2 py-0.5 rounded bg-rose-100 dark:bg-rose-900/40 text-rose-800 dark:text-rose-200 mr-2">rose</span> rate difference
+              </div>
             </div>
           );
         })()}
