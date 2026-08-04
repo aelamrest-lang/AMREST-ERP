@@ -3,7 +3,7 @@ import { useStore, uid } from "../lib/store";
 import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Badge, Empty, Textarea } from "../components/ui";
 import type { PurchaseOrder, GRN, Party, POApprovalEvent } from "../lib/types";
 import { IconPlus, IconEdit, IconTrash, IconPrint, IconSearch, IconCheck } from "../components/icons";
-import { fmtINR, nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
+import { fmtINR, fmt2, nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
 import { userCan } from "../lib/permissions";
 
 const DEFAULT_PO_TERMS = `1. Material should be as per specification.
@@ -824,6 +824,10 @@ export function GRNPage() {
   const [received, setReceived] = useState<{ itemId: string; qty: number }[]>([]);
   const [qcPassed, setQcPassed] = useState(true);
   const [hideCompleted, setHideCompleted] = useState(true);
+  const [freightEnabled, setFreightEnabled] = useState(false);
+  const [freight, setFreight] = useState<number>(0);
+  const [packingEnabled, setPackingEnabled] = useState(false);
+  const [packing, setPacking] = useState<number>(0);
 
   const isFullyReceived = (p: PurchaseOrder): boolean => {
     if (p.status === "Completed" || p.status === "Received" || p.status === "Cancelled") return true;
@@ -881,14 +885,13 @@ export function GRNPage() {
 
   const save = () => {
     if (!po) return;
-    // Filter out zero-qty receipts; guard over-receipt against balance
     const already = alreadyReceivedByItem(po.id);
+    // Allow received qty to EXCEED PO qty (over-receipts). No balance cap.
     const cleaned = received
       .map(r => {
         const line = po.items.find(i => i.itemId === r.itemId);
         if (!line) return null;
-        const balance = Math.max(0, line.qty - (already[r.itemId] || 0));
-        const q = Math.max(0, Math.min(balance, Number(r.qty) || 0));
+        const q = Math.max(0, Number(r.qty) || 0);
         return q > 0 ? { itemId: r.itemId, qty: q } : null;
       })
       .filter(Boolean) as { itemId: string; qty: number }[];
@@ -897,10 +900,13 @@ export function GRNPage() {
 
     const grn: GRN = {
       id: uid(), number: nextNumber("GRN", db.grns), date: todayISO(),
-      poId, receivedItems: cleaned, qcPassed, createdAt: new Date().toISOString(),
+      poId, receivedItems: cleaned, qcPassed,
+      freightEnabled, freight: freightEnabled ? Number(freight) || 0 : 0,
+      packingEnabled, packing: packingEnabled ? Number(packing) || 0 : 0,
+      createdAt: new Date().toISOString(),
     };
 
-    // Determine new PO status
+    // Determine new PO status (compare to PO qty)
     const cumulativeAfter: Record<string, number> = { ...already };
     cleaned.forEach(r => { cumulativeAfter[r.itemId] = (cumulativeAfter[r.itemId] || 0) + r.qty; });
     const fullyReceived = po.items.every(i => (cumulativeAfter[i.itemId] || 0) >= i.qty);
@@ -910,15 +916,37 @@ export function GRNPage() {
     setDB(d => {
       const items = d.items.map(it => {
         const r = cleaned.find(x => x.itemId === it.id);
-        return r ? {...it, currentStock: it.currentStock + r.qty} : it;
+        return r ? { ...it, currentStock: it.currentStock + r.qty } : it;
       });
       return {
         ...d, grns: [grn, ...d.grns], items,
-        purchaseOrders: d.purchaseOrders.map(p => p.id === poId ? {...p, status: nextStatus} : p),
+        purchaseOrders: d.purchaseOrders.map(p => p.id === poId ? { ...p, status: nextStatus } : p),
       };
     });
     log(`GRN ${grn.number} created (PO ${po?.number}) → PO ${nextStatus}`, "GRN");
+    // Reset transient GRN charges state
+    setFreightEnabled(false); setFreight(0); setPackingEnabled(false); setPacking(0);
     setOpen(false);
+  };
+
+  // Increase PO line quantity to the current Receive Now value for one item
+  const updatePOQtyForItem = (itemId: string) => {
+    if (!po) return;
+    const rec = received.find(r => r.itemId === itemId);
+    const line = po.items.find(i => i.itemId === itemId);
+    if (!rec || !line) return;
+    const alreadyMap = alreadyReceivedByItem(po.id);
+    const already = alreadyMap[itemId] || 0;
+    const newPoQty = already + (Number(rec.qty) || 0);
+    if (newPoQty <= line.qty) return alert("Receive Now is not more than the current PO quantity — nothing to update.");
+    if (!confirm(`Update PO ${po.number} line qty for this item from ${line.qty} to ${newPoQty}?`)) return;
+    setDB(d => ({
+      ...d,
+      purchaseOrders: d.purchaseOrders.map(p => p.id === po.id
+        ? { ...p, items: p.items.map(i => i.itemId === itemId ? { ...i, qty: newPoQty } : i) }
+        : p),
+    }));
+    log(`PO ${po.number} line qty updated to ${newPoQty}`, "Procurement");
   };
 
   return (
@@ -977,48 +1005,131 @@ export function GRNPage() {
           </div>
           {po && (() => {
             const already = alreadyReceivedByItem(po.id);
+            const grandItemsTotal = po.items.reduce((s, oi) => {
+              const rec = received.find(x => x.itemId === oi.itemId);
+              const q = Math.max(0, Number(rec?.qty) || 0);
+              return s + q * (Number(oi.rate) || 0) * (1 + ((Number(oi.gst) || 0) / 100));
+            }, 0);
+            const fr = freightEnabled ? (Number(freight) || 0) : 0;
+            const pk = packingEnabled ? (Number(packing) || 0) : 0;
+            const grand = grandItemsTotal + fr + pk;
             return (
-              <Table>
-                <thead><tr><Th>Item</Th><Th>PO Qty</Th><Th>Already Received</Th><Th>Balance</Th><Th>Receive Now</Th><Th>Status</Th></tr></thead>
-                <tbody>
-                  {po.items.map((oi, idx) => {
-                    const it = db.items.find(x => x.id === oi.itemId);
-                    const r = received.find(x => x.itemId === oi.itemId);
-                    const alr = already[oi.itemId] || 0;
-                    const balance = Math.max(0, oi.qty - alr);
-                    const now = Math.max(0, Math.min(balance, Number(r?.qty) || 0));
-                    const st = itemStatus(oi.qty, alr, now);
-                    return (
-                      <tr key={idx}>
-                        <Td>{it?.name}</Td>
-                        <Td>{oi.qty} {it?.unit}</Td>
-                        <Td>{alr} {it?.unit}</Td>
-                        <Td className="font-semibold">{balance} {it?.unit}</Td>
-                        <Td>
-                          <Input
-                            type="number"
-                            min={0}
-                            max={balance}
-                            disabled={balance === 0}
-                            value={r?.qty ?? 0}
-                            onChange={(e: any) => {
-                              const raw = Number(e.target.value);
-                              const q = isNaN(raw) ? 0 : Math.max(0, Math.min(balance, raw));
-                              setReceived(prev => {
-                                const exists = prev.some(x => x.itemId === oi.itemId);
-                                return exists
-                                  ? prev.map(x => x.itemId === oi.itemId ? { ...x, qty: q } : x)
-                                  : [...prev, { itemId: oi.itemId, qty: q }];
-                              });
-                            }}
-                          />
-                        </Td>
-                        <Td><Badge color={st.color as any}>{st.label}</Badge></Td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </Table>
+              <>
+                <Table>
+                  <thead><tr><Th>Item</Th><Th>PO Qty</Th><Th>Already Received</Th><Th>Balance</Th><Th>Receive Now</Th><Th>Status</Th><Th></Th></tr></thead>
+                  <tbody>
+                    {po.items.map((oi, idx) => {
+                      const it = db.items.find(x => x.id === oi.itemId);
+                      const r = received.find(x => x.itemId === oi.itemId);
+                      const alr = already[oi.itemId] || 0;
+                      const balance = Math.max(0, oi.qty - alr);
+                      const now = Math.max(0, Number(r?.qty) || 0);
+                      const st = itemStatus(oi.qty, alr, now);
+                      const isOver = now > balance;
+                      return (
+                        <tr key={idx} className={isOver ? "bg-amber-50 dark:bg-amber-900/20" : ""}>
+                          <Td>{it?.name}</Td>
+                          <Td>{fmt2(oi.qty)} {it?.unit}</Td>
+                          <Td>{fmt2(alr)} {it?.unit}</Td>
+                          <Td className="font-semibold">{fmt2(balance)} {it?.unit}</Td>
+                          <Td>
+                            <Input
+                              type="number"
+                              min={0}
+                              value={r?.qty ?? 0}
+                              onChange={(e: any) => {
+                                const raw = Number(e.target.value);
+                                const q = isNaN(raw) ? 0 : Math.max(0, raw);
+                                setReceived(prev => {
+                                  const exists = prev.some(x => x.itemId === oi.itemId);
+                                  return exists
+                                    ? prev.map(x => x.itemId === oi.itemId ? { ...x, qty: q } : x)
+                                    : [...prev, { itemId: oi.itemId, qty: q }];
+                                });
+                              }}
+                              data-testid={`grn-receive-${oi.itemId}`}
+                            />
+                            {isOver && (
+                              <div className="text-[10px] text-amber-700 dark:text-amber-300 mt-1">
+                                Over-receipt: {fmt2(now - balance)} extra {it?.unit || ""}
+                              </div>
+                            )}
+                          </Td>
+                          <Td><Badge color={st.color as any}>{st.label}</Badge></Td>
+                          <Td>
+                            {isOver && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => updatePOQtyForItem(oi.itemId)}
+                                data-testid={`grn-update-po-${oi.itemId}`}
+                                title="Increase PO qty to match received"
+                              >
+                                Update PO Qty
+                              </Button>
+                            )}
+                          </Td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </Table>
+
+                <div className="mt-4 grid sm:grid-cols-2 gap-3">
+                  <div className="rounded-lg border p-3 bg-slate-50 dark:bg-slate-800/40 dark:border-slate-700 space-y-2">
+                    <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Additional Charges</div>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={freightEnabled}
+                        onChange={(e) => setFreightEnabled(e.target.checked)}
+                        data-testid="grn-freight-toggle"
+                      />
+                      <span>Freight Charges</span>
+                      {freightEnabled && (
+                        <Input
+                          type="number"
+                          value={freight}
+                          onChange={(e: any) => setFreight(Number(e.target.value) || 0)}
+                          className="ml-auto w-32 text-right py-1 h-8"
+                          data-testid="grn-freight"
+                        />
+                      )}
+                    </label>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={packingEnabled}
+                        onChange={(e) => setPackingEnabled(e.target.checked)}
+                        data-testid="grn-packing-toggle"
+                      />
+                      <span>Packing Charges</span>
+                      {packingEnabled && (
+                        <Input
+                          type="number"
+                          value={packing}
+                          onChange={(e: any) => setPacking(Number(e.target.value) || 0)}
+                          className="ml-auto w-32 text-right py-1 h-8"
+                          data-testid="grn-packing"
+                        />
+                      )}
+                    </label>
+                    <div className="text-[11px] text-slate-500 pt-1 border-t border-slate-200 dark:border-slate-700">
+                      Tick to include; leave unticked to skip. Amounts are added to the GRN total below.
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border p-3 bg-slate-50 dark:bg-slate-800/40 dark:border-slate-700 text-sm space-y-1">
+                    <div className="flex justify-between"><span>Received Items Total (incl. GST)</span><b>{fmtINR(grandItemsTotal)}</b></div>
+                    <div className="flex justify-between"><span>Freight Charges</span><b>{freightEnabled ? fmtINR(fr) : "—"}</b></div>
+                    <div className="flex justify-between"><span>Packing Charges</span><b>{packingEnabled ? fmtINR(pk) : "—"}</b></div>
+                    <div className="flex justify-between text-base border-t pt-1 mt-1">
+                      <span>GRN / Invoice Total</span>
+                      <b className="text-emerald-600" data-testid="grn-grand-total">{fmtINR(grand)}</b>
+                    </div>
+                  </div>
+                </div>
+              </>
             );
           })()}
           <label className="flex items-center gap-2 text-sm">

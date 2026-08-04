@@ -182,6 +182,10 @@ export interface GRN {
   poId: string;
   receivedItems: { itemId: string; qty: number }[];
   qcPassed: boolean;
+  freight?: number;
+  freightEnabled?: boolean;
+  packing?: number;
+  packingEnabled?: boolean;
   createdAt: string;
 }
 
