@@ -184,8 +184,12 @@ export interface GRN {
   qcPassed: boolean;
   freight?: number;
   freightEnabled?: boolean;
+  freightGst?: number;
   packing?: number;
   packingEnabled?: boolean;
+  packingGst?: number;
+  vendorInvoiceNo?: string;
+  vendorInvoiceAmount?: number;
   createdAt: string;
 }
 

@@ -395,7 +395,13 @@ export function Costings() {
                     />
                   </Td>
                   <Td className="cursor-move text-slate-400 select-none" title="Drag to reorder">⋮⋮</Td>
-                  <Td className="font-mono text-xs">{c.number}</Td>
+                  <Td className="font-mono text-xs">
+                    <button
+                      className="text-indigo-600 hover:underline"
+                      onClick={() => openEdit(c)}
+                      data-testid={`costing-view-${c.id}`}
+                    >{c.number}</button>
+                  </Td>
                   <Td>{c.createdAt.slice(0, 10)}</Td>
                   <Td className="font-medium">{c.productName || "—"}</Td>
                   <Td>{c.title}</Td>

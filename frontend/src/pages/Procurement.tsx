@@ -819,6 +819,7 @@ export function GRNPage() {
   const { db, setDB, log, currentUser } = useStore();
   const canCreate = userCan(currentUser, "grn", "create");
   const [open, setOpen] = useState(false);
+  const [viewGRN, setViewGRN] = useState<GRN | null>(null);
   const [poId, setPoId] = useState<string>(db.purchaseOrders[0]?.id || "");
   const po = db.purchaseOrders.find(p => p.id === poId);
   const [received, setReceived] = useState<{ itemId: string; qty: number }[]>([]);
@@ -826,8 +827,12 @@ export function GRNPage() {
   const [hideCompleted, setHideCompleted] = useState(true);
   const [freightEnabled, setFreightEnabled] = useState(false);
   const [freight, setFreight] = useState<number>(0);
+  const [freightGst, setFreightGst] = useState<number>(18);
   const [packingEnabled, setPackingEnabled] = useState(false);
   const [packing, setPacking] = useState<number>(0);
+  const [packingGst, setPackingGst] = useState<number>(18);
+  const [vendorInvoiceNo, setVendorInvoiceNo] = useState<string>("");
+  const [vendorInvoiceAmount, setVendorInvoiceAmount] = useState<number>(0);
 
   const isFullyReceived = (p: PurchaseOrder): boolean => {
     if (p.status === "Completed" || p.status === "Received" || p.status === "Cancelled") return true;
@@ -902,7 +907,11 @@ export function GRNPage() {
       id: uid(), number: nextNumber("GRN", db.grns), date: todayISO(),
       poId, receivedItems: cleaned, qcPassed,
       freightEnabled, freight: freightEnabled ? Number(freight) || 0 : 0,
+      freightGst: freightEnabled ? Number(freightGst) || 0 : 0,
       packingEnabled, packing: packingEnabled ? Number(packing) || 0 : 0,
+      packingGst: packingEnabled ? Number(packingGst) || 0 : 0,
+      vendorInvoiceNo: vendorInvoiceNo.trim() || undefined,
+      vendorInvoiceAmount: Number(vendorInvoiceAmount) || undefined,
       createdAt: new Date().toISOString(),
     };
 
@@ -925,8 +934,37 @@ export function GRNPage() {
     });
     log(`GRN ${grn.number} created (PO ${po?.number}) → PO ${nextStatus}`, "GRN");
     // Reset transient GRN charges state
-    setFreightEnabled(false); setFreight(0); setPackingEnabled(false); setPacking(0);
+    setFreightEnabled(false); setFreight(0); setFreightGst(18);
+    setPackingEnabled(false); setPacking(0); setPackingGst(18);
+    setVendorInvoiceNo(""); setVendorInvoiceAmount(0);
     setOpen(false);
+  };
+
+  // Bulk update all over-received PO lines at once
+  const updatePOQtyBulk = () => {
+    if (!po) return;
+    const alreadyMap = alreadyReceivedByItem(po.id);
+    const updates = po.items
+      .map(line => {
+        const rec = received.find(r => r.itemId === line.itemId);
+        const alr = alreadyMap[line.itemId] || 0;
+        const now = Math.max(0, Number(rec?.qty) || 0);
+        const balance = Math.max(0, line.qty - alr);
+        return now > balance ? { itemId: line.itemId, newQty: alr + now, oldQty: line.qty } : null;
+      })
+      .filter(Boolean) as { itemId: string; newQty: number; oldQty: number }[];
+    if (updates.length === 0) return alert("No over-received lines to update.");
+    if (!confirm(`Update PO qty for ${updates.length} over-received line${updates.length === 1 ? "" : "s"}?`)) return;
+    setDB(d => ({
+      ...d,
+      purchaseOrders: d.purchaseOrders.map(p => p.id === po.id
+        ? { ...p, items: p.items.map(i => {
+            const u = updates.find(x => x.itemId === i.itemId);
+            return u ? { ...i, qty: u.newQty } : i;
+          }) }
+        : p),
+    }));
+    log(`PO ${po.number} — bulk updated ${updates.length} line qty`, "Procurement");
   };
 
   // Increase PO line quantity to the current Receive Now value for one item
@@ -949,6 +987,66 @@ export function GRNPage() {
     log(`PO ${po.number} line qty updated to ${newPoQty}`, "Procurement");
   };
 
+  const printGRN = (g: GRN) => {
+    const p = db.purchaseOrders.find(x => x.id === g.poId);
+    const v = p ? db.parties.find(x => x.id === p.vendorId) : null;
+    const linesHtml = g.receivedItems.map((ri, idx) => {
+      const it = db.items.find(x => x.id === ri.itemId);
+      const line = p?.items.find(x => x.itemId === ri.itemId);
+      const rate = Number(line?.rate) || 0;
+      const gst = Number(line?.gst) || 0;
+      const amt = ri.qty * rate * (1 + gst / 100);
+      return `<tr>
+        <td>${idx + 1}</td>
+        <td>${it?.name || "-"}</td>
+        <td>${it?.unit || ""}</td>
+        <td class="right">${fmt2(ri.qty)}</td>
+        <td class="right">${fmtINR(rate)}</td>
+        <td class="right">${gst}%</td>
+        <td class="right">${fmtINR(amt)}</td>
+      </tr>`;
+    }).join("");
+    const itemsTotal = g.receivedItems.reduce((s, ri) => {
+      const line = p?.items.find(x => x.itemId === ri.itemId);
+      const rate = Number(line?.rate) || 0;
+      const gst = Number(line?.gst) || 0;
+      return s + ri.qty * rate * (1 + gst / 100);
+    }, 0);
+    const fr = Number(g.freight) || 0;
+    const frGstAmt = fr * ((Number(g.freightGst) || 0) / 100);
+    const pk = Number(g.packing) || 0;
+    const pkGstAmt = pk * ((Number(g.packingGst) || 0) / 100);
+    const grand = itemsTotal + (g.freightEnabled ? fr + frGstAmt : 0) + (g.packingEnabled ? pk + pkGstAmt : 0);
+    const invAmt = Number(g.vendorInvoiceAmount) || 0;
+    const invDiff = invAmt - grand;
+    const body = `
+      <div class="box"><div class="section-title">Received From</div>
+        <b>${v?.name || ""}</b><br/>${v?.address || ""}${v?.city ? `, ${v.city}` : ""}<br/>GST: ${v?.gst || ""}
+      </div>
+      <div class="box"><div class="section-title">Against</div>
+        <b>PO:</b> ${p?.number || "-"}<br/>
+        <b>QC:</b> ${g.qcPassed ? "Passed" : "Failed"}<br/>
+        ${g.vendorInvoiceNo ? `<b>Vendor Invoice No:</b> ${g.vendorInvoiceNo}<br/>` : ""}
+        ${invAmt > 0 ? `<b>Vendor Invoice Amount:</b> ${fmtINR(invAmt)}` : ""}
+      </div>
+      <table>
+        <thead><tr><th>#</th><th>Item</th><th>Unit</th><th class="right">Qty</th><th class="right">Rate</th><th class="right">GST%</th><th class="right">Amount</th></tr></thead>
+        <tbody>${linesHtml}</tbody>
+      </table>
+      <table style="margin-top:8px;max-width:360px;margin-left:auto">
+        <tr><td>Received Items Total (incl. GST)</td><td class="right">${fmtINR(itemsTotal)}</td></tr>
+        ${g.freightEnabled ? `<tr><td>Freight (+ GST ${g.freightGst || 0}%)</td><td class="right">${fmtINR(fr + frGstAmt)}</td></tr>` : ""}
+        ${g.packingEnabled ? `<tr><td>Packing (+ GST ${g.packingGst || 0}%)</td><td class="right">${fmtINR(pk + pkGstAmt)}</td></tr>` : ""}
+        <tr><td><b>GRN / Invoice Total</b></td><td class="right"><b>${fmtINR(grand)}</b></td></tr>
+        ${invAmt > 0 ? `<tr><td>Vendor Invoice</td><td class="right">${fmtINR(invAmt)}</td></tr>
+          <tr><td><b>${Math.abs(invDiff) > 0.5 ? "Mismatch" : "Match"}</b></td><td class="right"><b>${invDiff >= 0 ? "+" : ""}${fmtINR(invDiff)}</b></td></tr>` : ""}
+      </table>
+      <div class="signs"><div class="sign-box">Store Keeper</div><div class="sign-box">QC / Inspector</div><div class="sign-box">Authorized Signatory</div></div>
+    `;
+    const html = professionalDocument(db.settings, { title: "Goods Receipt Note", number: g.number, date: g.date, body, accent: "#0891b2" });
+    printArea(html, g.number);
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -957,17 +1055,48 @@ export function GRNPage() {
       </div>
       <Card>
         <Table>
-          <thead><tr><Th>#</Th><Th>Date</Th><Th>PO</Th><Th>Items</Th><Th>QC</Th></tr></thead>
+          <thead><tr><Th>#</Th><Th>Date</Th><Th>PO / Vendor</Th><Th>Items</Th><Th>Invoice #</Th><Th className="text-right">Total</Th><Th>QC</Th><Th></Th></tr></thead>
           <tbody>
             {db.grns.map(g => {
               const p = db.purchaseOrders.find(x => x.id === g.poId);
+              const itemsTotal = g.receivedItems.reduce((s, ri) => {
+                const line = p?.items.find(x => x.itemId === ri.itemId);
+                const rate = Number(line?.rate) || 0;
+                const gst = Number(line?.gst) || 0;
+                return s + ri.qty * rate * (1 + gst / 100);
+              }, 0);
+              const fr = Number(g.freight) || 0;
+              const frGst = fr * ((Number(g.freightGst) || 0) / 100);
+              const pk = Number(g.packing) || 0;
+              const pkGst = pk * ((Number(g.packingGst) || 0) / 100);
+              const grand = itemsTotal + (g.freightEnabled ? fr + frGst : 0) + (g.packingEnabled ? pk + pkGst : 0);
+              const invAmt = Number(g.vendorInvoiceAmount) || 0;
+              const mismatch = invAmt > 0 && Math.abs(invAmt - grand) > 0.5;
               return (
                 <tr key={g.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                  <Td className="font-mono text-xs">{g.number}</Td>
+                  <Td className="font-mono text-xs">
+                    <button
+                      className="text-indigo-600 hover:underline"
+                      onClick={() => setViewGRN(g)}
+                      data-testid={`grn-view-${g.id}`}
+                    >{g.number}</button>
+                  </Td>
                   <Td>{g.date}</Td>
                   <Td>{p?.number} — {db.parties.find(v => v.id === p?.vendorId)?.name}</Td>
                   <Td>{g.receivedItems.length} items</Td>
+                  <Td>
+                    {g.vendorInvoiceNo ? (
+                      <div>
+                        <div className="font-mono text-xs">{g.vendorInvoiceNo}</div>
+                        {mismatch && <Badge color="red">Mismatch</Badge>}
+                      </div>
+                    ) : <span className="text-slate-400 text-xs">—</span>}
+                  </Td>
+                  <Td className="text-right font-semibold">{fmtINR(grand)}</Td>
                   <Td><Badge color={g.qcPassed ? "green" : "red"}>{g.qcPassed ? "Passed" : "Failed"}</Badge></Td>
+                  <Td>
+                    <Button size="sm" variant="ghost" title="Print GRN" onClick={() => printGRN(g)} data-testid={`grn-print-${g.id}`}><IconPrint size={14}/></Button>
+                  </Td>
                 </tr>
               );
             })}
@@ -1011,8 +1140,19 @@ export function GRNPage() {
               return s + q * (Number(oi.rate) || 0) * (1 + ((Number(oi.gst) || 0) / 100));
             }, 0);
             const fr = freightEnabled ? (Number(freight) || 0) : 0;
+            const frGst = freightEnabled ? fr * ((Number(freightGst) || 0) / 100) : 0;
             const pk = packingEnabled ? (Number(packing) || 0) : 0;
-            const grand = grandItemsTotal + fr + pk;
+            const pkGst = packingEnabled ? pk * ((Number(packingGst) || 0) / 100) : 0;
+            const grand = grandItemsTotal + fr + frGst + pk + pkGst;
+            const overCount = po.items.filter(oi => {
+              const rec = received.find(x => x.itemId === oi.itemId);
+              const alr = already[oi.itemId] || 0;
+              const balance = Math.max(0, oi.qty - alr);
+              return (Number(rec?.qty) || 0) > balance;
+            }).length;
+            const invAmt = Number(vendorInvoiceAmount) || 0;
+            const invDiff = invAmt > 0 ? invAmt - grand : 0;
+            const invMismatch = invAmt > 0 && Math.abs(invDiff) > 0.5;
             return (
               <>
                 <Table>
@@ -1075,57 +1215,81 @@ export function GRNPage() {
                   </tbody>
                 </Table>
 
+                {overCount >= 2 && (
+                  <div className="mt-3 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 p-3 flex items-center justify-between gap-3 text-sm">
+                    <div>
+                      <b>{overCount}</b> line{overCount === 1 ? "" : "s"} received above PO qty. Bulk-update the PO to match?
+                    </div>
+                    <Button size="sm" variant="outline" onClick={updatePOQtyBulk} data-testid="grn-update-po-bulk">
+                      Update All Over-Received Lines
+                    </Button>
+                  </div>
+                )}
+
                 <div className="mt-4 grid sm:grid-cols-2 gap-3">
                   <div className="rounded-lg border p-3 bg-slate-50 dark:bg-slate-800/40 dark:border-slate-700 space-y-2">
                     <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Additional Charges</div>
                     <label className="flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={freightEnabled}
-                        onChange={(e) => setFreightEnabled(e.target.checked)}
-                        data-testid="grn-freight-toggle"
-                      />
+                      <input type="checkbox" checked={freightEnabled} onChange={(e) => setFreightEnabled(e.target.checked)} data-testid="grn-freight-toggle" />
                       <span>Freight Charges</span>
                       {freightEnabled && (
-                        <Input
-                          type="number"
-                          value={freight}
-                          onChange={(e: any) => setFreight(Number(e.target.value) || 0)}
-                          className="ml-auto w-32 text-right py-1 h-8"
-                          data-testid="grn-freight"
-                        />
+                        <>
+                          <Input type="number" value={freight} onChange={(e: any) => setFreight(Number(e.target.value) || 0)} className="ml-auto w-24 text-right py-1 h-8" data-testid="grn-freight" placeholder="Amount" />
+                          <Select value={freightGst} onChange={(e: any) => setFreightGst(Number(e.target.value) || 0)} className="w-20 py-1 h-8" data-testid="grn-freight-gst">
+                            {[0, 5, 12, 18, 28].map(g => <option key={g} value={g}>{g}%</option>)}
+                          </Select>
+                        </>
                       )}
                     </label>
                     <label className="flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={packingEnabled}
-                        onChange={(e) => setPackingEnabled(e.target.checked)}
-                        data-testid="grn-packing-toggle"
-                      />
+                      <input type="checkbox" checked={packingEnabled} onChange={(e) => setPackingEnabled(e.target.checked)} data-testid="grn-packing-toggle" />
                       <span>Packing Charges</span>
                       {packingEnabled && (
-                        <Input
-                          type="number"
-                          value={packing}
-                          onChange={(e: any) => setPacking(Number(e.target.value) || 0)}
-                          className="ml-auto w-32 text-right py-1 h-8"
-                          data-testid="grn-packing"
-                        />
+                        <>
+                          <Input type="number" value={packing} onChange={(e: any) => setPacking(Number(e.target.value) || 0)} className="ml-auto w-24 text-right py-1 h-8" data-testid="grn-packing" placeholder="Amount" />
+                          <Select value={packingGst} onChange={(e: any) => setPackingGst(Number(e.target.value) || 0)} className="w-20 py-1 h-8" data-testid="grn-packing-gst">
+                            {[0, 5, 12, 18, 28].map(g => <option key={g} value={g}>{g}%</option>)}
+                          </Select>
+                        </>
                       )}
                     </label>
                     <div className="text-[11px] text-slate-500 pt-1 border-t border-slate-200 dark:border-slate-700">
-                      Tick to include; leave unticked to skip. Amounts are added to the GRN total below.
+                      GST on each charge is optional — matches supplier invoices that tax freight/packing separately.
                     </div>
                   </div>
 
                   <div className="rounded-lg border p-3 bg-slate-50 dark:bg-slate-800/40 dark:border-slate-700 text-sm space-y-1">
                     <div className="flex justify-between"><span>Received Items Total (incl. GST)</span><b>{fmtINR(grandItemsTotal)}</b></div>
-                    <div className="flex justify-between"><span>Freight Charges</span><b>{freightEnabled ? fmtINR(fr) : "—"}</b></div>
-                    <div className="flex justify-between"><span>Packing Charges</span><b>{packingEnabled ? fmtINR(pk) : "—"}</b></div>
+                    <div className="flex justify-between"><span>Freight {freightEnabled ? `(+ GST ${freightGst}%)` : ""}</span><b>{freightEnabled ? fmtINR(fr + frGst) : "—"}</b></div>
+                    <div className="flex justify-between"><span>Packing {packingEnabled ? `(+ GST ${packingGst}%)` : ""}</span><b>{packingEnabled ? fmtINR(pk + pkGst) : "—"}</b></div>
                     <div className="flex justify-between text-base border-t pt-1 mt-1">
                       <span>GRN / Invoice Total</span>
                       <b className="text-emerald-600" data-testid="grn-grand-total">{fmtINR(grand)}</b>
+                    </div>
+                  </div>
+                </div>
+
+                <div className={"mt-3 rounded-lg border p-3 " + (invMismatch ? "border-rose-300 dark:border-rose-700 bg-rose-50 dark:bg-rose-900/20" : "border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40")}>
+                  <div className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">Vendor Invoice Match</div>
+                  <div className="grid sm:grid-cols-3 gap-3 text-sm">
+                    <div>
+                      <Label>Invoice No.</Label>
+                      <Input value={vendorInvoiceNo} onChange={(e: any) => setVendorInvoiceNo(e.target.value)} placeholder="e.g. INV-2026-1201" data-testid="grn-vendor-invoice-no" />
+                    </div>
+                    <div>
+                      <Label>Invoice Amount</Label>
+                      <Input type="number" value={vendorInvoiceAmount} onChange={(e: any) => setVendorInvoiceAmount(Number(e.target.value) || 0)} data-testid="grn-vendor-invoice-amount" />
+                    </div>
+                    <div className="flex items-end">
+                      {invAmt > 0 ? (
+                        invMismatch ? (
+                          <Badge color="red">Mismatch: {invDiff > 0 ? "+" : ""}{fmtINR(invDiff)}</Badge>
+                        ) : (
+                          <Badge color="green">Matches GRN total</Badge>
+                        )
+                      ) : (
+                        <span className="text-xs text-slate-500">Enter supplier invoice amount to compare</span>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1138,6 +1302,92 @@ export function GRNPage() {
           </label>
           <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={save}>Receive & Update Stock</Button></div>
         </div>
+      </Modal>
+
+      <Modal open={!!viewGRN} onClose={() => setViewGRN(null)} title={viewGRN ? `GRN Details · ${viewGRN.number}` : ""} size="xl">
+        {viewGRN && (() => {
+          const g = viewGRN;
+          const p = db.purchaseOrders.find(x => x.id === g.poId);
+          const v = p ? db.parties.find(x => x.id === p.vendorId) : null;
+          const itemsTotal = g.receivedItems.reduce((s, ri) => {
+            const line = p?.items.find(x => x.itemId === ri.itemId);
+            return s + ri.qty * (Number(line?.rate) || 0) * (1 + ((Number(line?.gst) || 0) / 100));
+          }, 0);
+          const fr = Number(g.freight) || 0;
+          const frGst = fr * ((Number(g.freightGst) || 0) / 100);
+          const pk = Number(g.packing) || 0;
+          const pkGst = pk * ((Number(g.packingGst) || 0) / 100);
+          const grand = itemsTotal + (g.freightEnabled ? fr + frGst : 0) + (g.packingEnabled ? pk + pkGst : 0);
+          const invAmt = Number(g.vendorInvoiceAmount) || 0;
+          const invDiff = invAmt - grand;
+          return (
+            <div className="space-y-3">
+              <div className="grid sm:grid-cols-2 gap-3 text-sm">
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-slate-50 dark:bg-slate-800/40">
+                  <div className="text-xs text-slate-500 mb-1">Purchase Order</div>
+                  <div className="font-semibold">{p?.number || "—"}</div>
+                  <div className="mt-2 text-xs text-slate-500">Vendor</div>
+                  <div>{v?.name || "—"}</div>
+                  {v?.gst && <div className="text-xs text-slate-500 mt-1">GST: {v.gst}</div>}
+                </div>
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-slate-50 dark:bg-slate-800/40">
+                  <div className="flex items-center justify-between"><div><div className="text-xs text-slate-500">GRN Date</div><div className="font-semibold">{g.date}</div></div><Badge color={g.qcPassed ? "green" : "red"}>QC {g.qcPassed ? "Passed" : "Failed"}</Badge></div>
+                  {g.vendorInvoiceNo && <div className="mt-2 text-xs text-slate-500">Vendor Invoice</div>}
+                  {g.vendorInvoiceNo && <div className="font-mono text-sm">{g.vendorInvoiceNo}</div>}
+                  {invAmt > 0 && (
+                    <div className="mt-2 flex items-center gap-2">
+                      <span className="text-xs text-slate-500">Invoice ₹</span>
+                      <b>{fmtINR(invAmt)}</b>
+                      {Math.abs(invDiff) > 0.5
+                        ? <Badge color="red">{invDiff > 0 ? "+" : ""}{fmtINR(invDiff)}</Badge>
+                        : <Badge color="green">Match</Badge>}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+                <Table>
+                  <thead><tr><Th>Item</Th><Th className="text-right">PO Qty</Th><Th className="text-right">Received</Th><Th className="text-right">Balance</Th><Th className="text-right">Rate</Th><Th className="text-right">GST%</Th><Th className="text-right">Amount</Th></tr></thead>
+                  <tbody>
+                    {g.receivedItems.map((ri, idx) => {
+                      const it = db.items.find(x => x.id === ri.itemId);
+                      const line = p?.items.find(x => x.itemId === ri.itemId);
+                      const poQty = Number(line?.qty) || 0;
+                      const rate = Number(line?.rate) || 0;
+                      const gst = Number(line?.gst) || 0;
+                      const amt = ri.qty * rate * (1 + gst / 100);
+                      const balance = Math.max(0, poQty - ri.qty);
+                      return (
+                        <tr key={idx}>
+                          <Td className="font-medium">{it?.name || "—"} <span className="text-xs text-slate-500">({it?.unit || ""})</span></Td>
+                          <Td className="text-right">{fmt2(poQty)}</Td>
+                          <Td className="text-right font-semibold">{fmt2(ri.qty)}</Td>
+                          <Td className="text-right">{fmt2(balance)}</Td>
+                          <Td className="text-right">{fmtINR(rate)}</Td>
+                          <Td className="text-right">{gst}%</Td>
+                          <Td className="text-right font-semibold">{fmtINR(amt)}</Td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </Table>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-slate-50 dark:bg-slate-800/40 max-w-md ml-auto text-sm space-y-1">
+                <div className="flex justify-between"><span>Received Items Total (incl. GST)</span><b>{fmtINR(itemsTotal)}</b></div>
+                {g.freightEnabled && <div className="flex justify-between"><span>Freight (+ GST {g.freightGst || 0}%)</span><b>{fmtINR(fr + frGst)}</b></div>}
+                {g.packingEnabled && <div className="flex justify-between"><span>Packing (+ GST {g.packingGst || 0}%)</span><b>{fmtINR(pk + pkGst)}</b></div>}
+                <div className="flex justify-between text-base border-t pt-1 mt-1"><span><b>GRN Total</b></span><b className="text-emerald-600">{fmtINR(grand)}</b></div>
+              </div>
+
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setViewGRN(null)}>Close</Button>
+                <Button onClick={() => printGRN(g)} data-testid="grn-view-print"><IconPrint size={14}/> Print / Download</Button>
+              </div>
+            </div>
+          );
+        })()}
       </Modal>
     </div>
   );

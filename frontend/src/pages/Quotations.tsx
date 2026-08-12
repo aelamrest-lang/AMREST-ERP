@@ -196,7 +196,13 @@ export function Quotations() {
               const t = calcDocTotals(q.items);
               return (
                 <tr key={q.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                  <Td className="font-mono text-xs">{q.number}</Td>
+                  <Td className="font-mono text-xs">
+                    <button
+                      className="text-indigo-600 hover:underline"
+                      onClick={() => openEdit(q)}
+                      data-testid={`quot-view-${q.id}`}
+                    >{q.number}</button>
+                  </Td>
                   <Td>{q.date}</Td>
                   <Td>{db.parties.find(p => p.id === q.customerId)?.name}</Td>
                   <Td>{q.items.length}</Td>
