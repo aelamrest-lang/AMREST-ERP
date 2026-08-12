@@ -26,6 +26,7 @@ export function SalesOrders() {
   const [open, setOpen] = useState(false);
   const [edit, setEdit] = useState<SalesOrder | null>(null);
   const [newItemForRow, setNewItemForRow] = useState<{ idx: number; seed: string } | null>(null);
+  const [viewOrder, setViewOrder] = useState<SalesOrder | null>(null);
 
   const list = useMemo(() => {
     const arr = isAdmin ? db.salesOrders : db.salesOrders.filter(o => o.ownerId === currentUser?.id);
@@ -214,7 +215,14 @@ export function SalesOrders() {
               const extra = o.items.length - 1;
               return (
                 <tr key={o.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 align-top">
-                  <Td className="font-mono text-xs">{o.number}</Td>
+                  <Td className="font-mono text-xs">
+                    <button
+                      className="text-indigo-600 hover:underline"
+                      onClick={() => setViewOrder(o)}
+                      data-testid={`so-view-${o.number}`}
+                      title="View full sales order details"
+                    >{o.number}</button>
+                  </Td>
                   <Td>{o.date}</Td>
                   <Td>{db.parties.find(x => x.id === o.customerId)?.name}</Td>
                   <Td>
@@ -390,6 +398,145 @@ export function SalesOrders() {
         }}
         testIdPrefix="so-new-fg"
       />
+
+      <Modal open={!!viewOrder} onClose={() => setViewOrder(null)} title={viewOrder ? `Sales Order · ${viewOrder.number}` : "Sales Order"} size="xl">
+        {viewOrder && (() => {
+          const o = viewOrder;
+          const cust = db.parties.find(x => x.id === o.customerId);
+          const owner = db.users.find(u => u.id === o.ownerId);
+          const proforma = o.proformaId ? db.proformas.find(p => p.id === o.proformaId) : null;
+          const t = calcDocTotalsWithFreight(o.items, Number(o.freight) || 0);
+          const oq = totalOrderQty(o);
+          const sq = totalScheduledQty(o);
+          const dq = totalDeliveredQty(o);
+          const delay = orderDelayInfo(o);
+          const linkedJobCards = db.jobCards.filter(j => j.salesOrderId === o.id);
+          const linkedChallans = db.challans.filter(c => c.salesOrderId === o.id);
+          const schedules = (o.schedules || []).slice().sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+          return (
+            <div className="space-y-4 text-sm">
+              <div className="grid sm:grid-cols-3 gap-3">
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-slate-50 dark:bg-slate-800/40">
+                  <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Order Info</div>
+                  <div><span className="text-slate-500">No.:</span> <b className="font-mono">{o.number}</b></div>
+                  <div><span className="text-slate-500">Date:</span> <b>{o.date}</b></div>
+                  <div><span className="text-slate-500">Status:</span> <Badge color={o.status === "Delivered" ? "green" : o.status === "Dispatched" ? "blue" : o.status === "In Production" ? "amber" : "slate"}>{o.status}</Badge></div>
+                  <div><span className="text-slate-500">Owner:</span> {owner?.name || "—"}</div>
+                  {proforma && <div><span className="text-slate-500">Proforma:</span> <b className="font-mono">{proforma.number}</b></div>}
+                </div>
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-slate-50 dark:bg-slate-800/40 sm:col-span-2">
+                  <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Customer</div>
+                  <div className="font-semibold text-slate-800 dark:text-slate-100">{cust?.name || "—"}</div>
+                  {cust?.address && <div className="text-xs text-slate-500">{cust.address}{cust?.city ? `, ${cust.city}` : ""}</div>}
+                  <div className="text-xs text-slate-500 mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+                    {cust?.gst && <span>GST: <b>{cust.gst}</b></span>}
+                    {cust?.mobile && <span>Mobile: <b>{cust.mobile}</b></span>}
+                    {cust?.email && <span>Email: <b>{cust.email}</b></span>}
+                    {cust?.contactPerson && <span>Contact: <b>{cust.contactPerson}</b></span>}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid sm:grid-cols-4 gap-3">
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
+                  <div className="text-[11px] text-slate-500">Delivery Date</div>
+                  <div className="text-base font-semibold">{o.deliveryDate || "—"}</div>
+                </div>
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
+                  <div className="text-[11px] text-slate-500">Ordered Qty</div>
+                  <div className="text-base font-semibold">{oq}</div>
+                </div>
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
+                  <div className="text-[11px] text-slate-500">Scheduled / Delivered</div>
+                  <div className="text-base font-semibold">{sq} / {dq}</div>
+                </div>
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
+                  <div className="text-[11px] text-slate-500">Delay</div>
+                  <div className="text-base font-semibold">
+                    {delay.hasDelay ? <span className="text-rose-600">{delay.maxDelayDays} {delay.maxDelayDays === 1 ? "Day" : "Days"}</span> : <span className="text-emerald-600">On Time</span>}
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <div className="text-sm font-semibold mb-2">Items</div>
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
+                  <Table>
+                    <thead><tr><Th>#</Th><Th>Item</Th><Th className="text-right">Qty</Th><Th className="text-right">Rate</Th><Th className="text-right">GST %</Th><Th className="text-right">Amount</Th></tr></thead>
+                    <tbody>
+                      {o.items.map((it, i) => (
+                        <tr key={i}>
+                          <Td>{i + 1}</Td>
+                          <Td className="font-medium">{it.name}</Td>
+                          <Td className="text-right">{it.qty}</Td>
+                          <Td className="text-right">{fmtINR(it.rate)}</Td>
+                          <Td className="text-right">{it.gst}%</Td>
+                          <Td className="text-right font-medium">{fmtINR(it.qty * it.rate)}</Td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </Table>
+                </div>
+              </div>
+
+              <div className="grid sm:grid-cols-2 gap-3">
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-slate-50 dark:bg-slate-800/40">
+                  <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-2">Linked Documents</div>
+                  <div className="space-y-1 text-xs">
+                    <div><span className="text-slate-500">Proforma:</span> {proforma ? <b className="font-mono">{proforma.number}</b> : <span className="text-slate-400">—</span>}</div>
+                    <div><span className="text-slate-500">Job Cards:</span> {linkedJobCards.length ? linkedJobCards.map(j => <b key={j.id} className="font-mono mr-2">{j.number}</b>) : <span className="text-slate-400">—</span>}</div>
+                    <div><span className="text-slate-500">Delivery Challans:</span> {linkedChallans.length ? linkedChallans.map(c => <b key={c.id} className="font-mono mr-2">{c.number}</b>) : <span className="text-slate-400">—</span>}</div>
+                  </div>
+                </div>
+                <div className="rounded-lg border p-3 bg-slate-50 dark:bg-slate-800/40 dark:border-slate-700 space-y-1">
+                  <div className="flex justify-between"><span>Sub Total</span><b>{fmtINR(t.sub)}</b></div>
+                  <div className="flex justify-between"><span>Freight</span><b>{fmtINR(t.freight)}</b></div>
+                  <div className="flex justify-between"><span>GST</span><b>{fmtINR(t.gst)}</b></div>
+                  <div className="flex justify-between text-base border-t pt-1 mt-1"><span>Total</span><b className="text-emerald-600">{fmtINR(t.total)}</b></div>
+                </div>
+              </div>
+
+              {schedules.length > 0 && (
+                <div>
+                  <div className="text-sm font-semibold mb-2">Delivery Schedule</div>
+                  <div className="rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
+                    <Table>
+                      <thead><tr><Th>Date</Th>{o.items.length > 1 && <Th>Item</Th>}<Th className="text-right">Scheduled</Th><Th className="text-right">Delivered</Th><Th className="text-right">Pending</Th><Th>Status</Th></tr></thead>
+                      <tbody>
+                        {schedules.map(s => {
+                          const st = scheduleStatus(s);
+                          return (
+                            <tr key={s.id}>
+                              <Td>{s.date || "—"}</Td>
+                              {o.items.length > 1 && <Td>{s.itemName || "—"}</Td>}
+                              <Td className="text-right">{s.qty}</Td>
+                              <Td className="text-right">{s.deliveredQty || 0}</Td>
+                              <Td className="text-right">{st.pending}</Td>
+                              <Td>
+                                {st.isCompleted ? <Badge color="green">Completed</Badge>
+                                  : st.isOverdue ? <Badge color="red">{st.delayDays} Days Delayed</Badge>
+                                  : <Badge color="slate">On Track</Badge>}
+                              </Td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </Table>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-700">
+                <Button variant="outline" onClick={() => setViewOrder(null)}>Close</Button>
+                {canPrint && <Button variant="outline" onClick={() => printSO(o)} data-testid="so-view-print"><IconPrint size={14}/> Print</Button>}
+                {canEdit && (
+                  <Button onClick={() => { setViewOrder(null); openEdit(o); }} data-testid="so-view-edit"><IconEdit size={14}/> Edit</Button>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
 
       <Badge color="slate">Use the Sales Order to create a Job Card for production.</Badge>
     </div>
