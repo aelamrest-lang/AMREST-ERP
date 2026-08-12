@@ -9,9 +9,10 @@ interface Props {
   onPick: (item: Item) => void;
   placeholder?: string;
   testId?: string;
+  onCreateNew?: (seedName: string) => void;
 }
 
-export function FinishedGoodCombobox({ items, value, onPick, placeholder = "Search item by name or code...", testId }: Props) {
+export function FinishedGoodCombobox({ items, value, onPick, placeholder = "Search item by name or code...", testId, onCreateNew }: Props) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [highlight, setHighlight] = useState(0);
@@ -57,6 +58,14 @@ export function FinishedGoodCombobox({ items, value, onPick, placeholder = "Sear
     setQuery("");
   };
 
+  const triggerCreate = () => {
+    if (!onCreateNew) return;
+    const seed = query.trim();
+    setOpen(false);
+    setQuery("");
+    onCreateNew(seed);
+  };
+
   const handleKey = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowDown") { e.preventDefault(); setOpen(true); setHighlight(h => Math.min(filtered.length - 1, h + 1)); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setHighlight(h => Math.max(0, h - 1)); }
@@ -92,7 +101,20 @@ export function FinishedGoodCombobox({ items, value, onPick, placeholder = "Sear
           className="fixed z-[100] max-h-72 overflow-auto rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg"
           style={{ top: popupPos.top, left: popupPos.left, width: popupPos.width }}
         >
-          {filtered.length === 0 && <div className="p-3 text-sm text-slate-500">No finished goods match “{query}”.</div>}
+          {filtered.length === 0 && !onCreateNew && <div className="p-3 text-sm text-slate-500">No finished goods match “{query}”.</div>}
+          {filtered.length === 0 && onCreateNew && (
+            <div className="p-3 text-sm text-slate-500">
+              No finished goods match “{query}”.
+              <button
+                type="button"
+                onMouseDown={(e) => { e.preventDefault(); triggerCreate(); }}
+                className="mt-2 block w-full text-left px-2 py-1.5 rounded bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-900/40 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-200 font-medium"
+                data-testid={testId ? `${testId}-create-new-empty` : undefined}
+              >
+                + Create new finished good{query.trim() ? ` "${query.trim()}"` : ""}
+              </button>
+            </div>
+          )}
           {filtered.map((it, idx) => (
             <button
               type="button"
@@ -111,6 +133,16 @@ export function FinishedGoodCombobox({ items, value, onPick, placeholder = "Sear
               {it.name === value && <span className="text-xs text-indigo-600 font-semibold">Selected</span>}
             </button>
           ))}
+          {filtered.length > 0 && onCreateNew && (
+            <button
+              type="button"
+              onMouseDown={(e) => { e.preventDefault(); triggerCreate(); }}
+              className="w-full text-left px-3 py-2 border-t border-slate-200 dark:border-slate-700 bg-slate-50 hover:bg-indigo-50 dark:bg-slate-800/60 dark:hover:bg-indigo-900/30 text-indigo-700 dark:text-indigo-200 font-medium text-sm sticky bottom-0"
+              data-testid={testId ? `${testId}-create-new` : undefined}
+            >
+              + Create new finished good{query.trim() ? ` "${query.trim()}"` : "..."}
+            </button>
+          )}
         </div>
       )}
     </div>

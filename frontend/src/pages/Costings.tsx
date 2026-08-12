@@ -10,11 +10,14 @@ const UNIT_OPTIONS = ["Kg", "Nos", "Ltr", "Mtr", "Pcs", "Sets", "Sheets", "Roll"
 
 // The Item.unit is the source of truth; keep this list for freshly-created inline items only.
 
-function computeTotals(materials: CostingMaterial[], marginPct: number) {
-  const totalCost = materials.reduce((s, m) => s + (Number(m.qty) || 0) * (Number(m.rate) || 0), 0);
+function computeTotals(materials: CostingMaterial[], marginPct: number, labourPct: number = 0, officePct: number = 0) {
+  const materialCost = materials.reduce((s, m) => s + (Number(m.qty) || 0) * (Number(m.rate) || 0), 0);
+  const labourAmt = materialCost * ((Number(labourPct) || 0) / 100);
+  const officeAmt = materialCost * ((Number(officePct) || 0) / 100);
+  const totalCost = materialCost + labourAmt + officeAmt;
   const salePrice = totalCost * (1 + (Number(marginPct) || 0) / 100);
   const profit = salePrice - totalCost;
-  return { totalCost, salePrice, profit };
+  return { materialCost, labourAmt, officeAmt, totalCost, salePrice, profit };
 }
 
 export function Costings() {
@@ -54,6 +57,8 @@ export function Costings() {
     materials: [],
     gstRate: 18,
     marginPct: 15,
+    labourPct: 0,
+    officePct: 0,
     status: "draft",
     locked: false,
     ownerId: currentUser?.id || "",
@@ -192,7 +197,7 @@ export function Costings() {
     setForm(f => ({ ...f, materials: f.materials.filter((_, i) => i !== idx) }));
   };
 
-  const totals = computeTotals(form.materials, form.marginPct);
+  const totals = computeTotals(form.materials, form.marginPct, form.labourPct || 0, form.officePct || 0);
 
   const save = () => {
     if (!form.title.trim()) return alert("Enter a title (or pick a Finished Good)");
@@ -209,9 +214,9 @@ export function Costings() {
         materials: prev.materials.map(m => ({ ...m })),
         marginPct: prev.marginPct,
         gstRate: prev.gstRate,
-        totalCost: computeTotals(prev.materials, prev.marginPct).totalCost,
-        salePrice: computeTotals(prev.materials, prev.marginPct).salePrice,
-        profit: computeTotals(prev.materials, prev.marginPct).profit,
+        totalCost: computeTotals(prev.materials, prev.marginPct, prev.labourPct || 0, prev.officePct || 0).totalCost,
+        salePrice: computeTotals(prev.materials, prev.marginPct, prev.labourPct || 0, prev.officePct || 0).salePrice,
+        profit: computeTotals(prev.materials, prev.marginPct, prev.labourPct || 0, prev.officePct || 0).profit,
       };
       payload.version = (prev.version || 1) + 1;
       payload.history = [...(prev.history || []), prevSnapshot];
@@ -243,6 +248,8 @@ export function Costings() {
       customerId: c.customerId,
       gstRate: c.gstRate,
       marginPct: c.marginPct,
+      labourPct: c.labourPct || 0,
+      officePct: c.officePct || 0,
       materials: c.materials.map(m => ({ ...m })),
     });
     setOpen(true);
@@ -276,7 +283,7 @@ export function Costings() {
   };
 
   const printCosting = (c: CostingSheet) => {
-    const t = computeTotals(c.materials, c.marginPct);
+    const t = computeTotals(c.materials, c.marginPct, c.labourPct || 0, c.officePct || 0);
     const body = `
       <div class="box"><div class="section-title">Product</div>
         <b>${c.productName || c.title}</b><br/>${c.kva ? `Rating: ${c.kva}<br/>` : ""}
@@ -296,7 +303,10 @@ export function Costings() {
         </tbody>
       </table>
       <table style="margin-top:8px;max-width:340px;margin-left:auto">
-        <tr><td>Total Cost</td><td class="right"><b>${fmtINR(t.totalCost)}</b></td></tr>
+        <tr><td>Material Cost</td><td class="right">${fmtINR(t.materialCost)}</td></tr>
+        <tr><td>Labour @ ${fmt2(c.labourPct || 0)}%</td><td class="right">${fmtINR(t.labourAmt)}</td></tr>
+        <tr><td>Office Expenses @ ${fmt2(c.officePct || 0)}%</td><td class="right">${fmtINR(t.officeAmt)}</td></tr>
+        <tr><td>Total Costing</td><td class="right"><b>${fmtINR(t.totalCost)}</b></td></tr>
         <tr><td>Profit %</td><td class="right">${fmt2(c.marginPct)}%</td></tr>
         <tr><td>Profit</td><td class="right">${fmtINR(t.profit)}</td></tr>
         <tr><td><b>Sale Price</b></td><td class="right"><b>${fmtINR(t.salePrice)}</b></td></tr>
@@ -373,7 +383,7 @@ export function Costings() {
           </tr></thead>
           <tbody>
             {list.map(c => {
-              const t = computeTotals(c.materials, c.marginPct);
+              const t = computeTotals(c.materials, c.marginPct, c.labourPct || 0, c.officePct || 0);
               const isSelected = selectedIds.has(c.id);
               return (
                 <tr
@@ -554,6 +564,16 @@ export function Costings() {
 
         <div className="grid sm:grid-cols-2 gap-3 mt-4">
           <div className="space-y-2">
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label>Labour Charges %</Label>
+                <Input type="number" value={form.labourPct ?? 0} onChange={(e: any) => setForm({ ...form, labourPct: Number(e.target.value) || 0 })} data-testid="costing-labour-pct" />
+              </div>
+              <div>
+                <Label>Office Expenses %</Label>
+                <Input type="number" value={form.officePct ?? 0} onChange={(e: any) => setForm({ ...form, officePct: Number(e.target.value) || 0 })} data-testid="costing-office-pct" />
+              </div>
+            </div>
             <div>
               <Label>Profit / Margin %</Label>
               <Input type="number" value={form.marginPct} onChange={(e: any) => setForm({ ...form, marginPct: Number(e.target.value) || 0 })} data-testid="costing-margin" />
@@ -562,9 +582,15 @@ export function Costings() {
               <Label>GST %</Label>
               <Input type="number" value={form.gstRate} onChange={(e: any) => setForm({ ...form, gstRate: Number(e.target.value) || 0 })} />
             </div>
+            <div className="text-[11px] text-slate-500">
+              Labour &amp; Office are calculated on <b>Material Cost</b> and added into Total Costing. Profit % is applied on Total Costing (Material + Labour + Office).
+            </div>
           </div>
           <div className="rounded-lg border p-3 bg-slate-50 dark:bg-slate-800/40 dark:border-slate-700 text-sm space-y-1">
-            <div className="flex justify-between"><span>Total Costing</span><b>{fmtINR(totals.totalCost)}</b></div>
+            <div className="flex justify-between"><span>Material Cost</span><b>{fmtINR(totals.materialCost)}</b></div>
+            <div className="flex justify-between"><span>Labour @ {fmt2(form.labourPct || 0)}%</span><b>{fmtINR(totals.labourAmt)}</b></div>
+            <div className="flex justify-between"><span>Office Expenses @ {fmt2(form.officePct || 0)}%</span><b>{fmtINR(totals.officeAmt)}</b></div>
+            <div className="flex justify-between border-t pt-1 mt-1"><span>Total Costing</span><b>{fmtINR(totals.totalCost)}</b></div>
             <div className="flex justify-between"><span>Profit %</span><b>{fmt2(form.marginPct)}%</b></div>
             <div className="flex justify-between"><span>Profit</span><b className="text-emerald-600">{fmtINR(totals.profit)}</b></div>
             <div className="flex justify-between text-base border-t pt-1 mt-1"><span>Sale Price</span><b className="text-indigo-700 dark:text-indigo-300">{fmtINR(totals.salePrice)}</b></div>
@@ -596,9 +622,9 @@ export function Costings() {
                 <tr className="bg-emerald-50 dark:bg-emerald-900/20 font-semibold">
                   <Td><Badge color="green">v{historyFor.version || 1} (current)</Badge></Td>
                   <Td className="text-xs">{historyFor.createdAt.slice(0, 16).replace("T", " ")}</Td>
-                  <Td className="text-right">{fmtINR(computeTotals(historyFor.materials, historyFor.marginPct).totalCost)}</Td>
+                  <Td className="text-right">{fmtINR(computeTotals(historyFor.materials, historyFor.marginPct, historyFor.labourPct || 0, historyFor.officePct || 0).totalCost)}</Td>
                   <Td className="text-right">{fmt2(historyFor.marginPct)}%</Td>
-                  <Td className="text-right">{fmtINR(computeTotals(historyFor.materials, historyFor.marginPct).salePrice)}</Td>
+                  <Td className="text-right">{fmtINR(computeTotals(historyFor.materials, historyFor.marginPct, historyFor.labourPct || 0, historyFor.officePct || 0).salePrice)}</Td>
                   <Td className="text-right">{historyFor.materials.length}</Td>
                 </tr>
               </tbody>
@@ -620,8 +646,8 @@ export function Costings() {
             {
               version: trendFor.version || 1,
               at: trendFor.createdAt,
-              cost: computeTotals(trendFor.materials, trendFor.marginPct).totalCost,
-              sale: computeTotals(trendFor.materials, trendFor.marginPct).salePrice,
+              cost: computeTotals(trendFor.materials, trendFor.marginPct, trendFor.labourPct || 0, trendFor.officePct || 0).totalCost,
+              sale: computeTotals(trendFor.materials, trendFor.marginPct, trendFor.labourPct || 0, trendFor.officePct || 0).salePrice,
               margin: trendFor.marginPct,
             },
           ];
@@ -710,7 +736,7 @@ export function Costings() {
             const distinctRate = new Set(rateValues.filter(v => !isNaN(v)));
             return { name, perCosting, qtyDiffers: distinctQty.size > 1, rateDiffers: distinctRate.size > 1 };
           });
-          const totals = selectedList.map(c => computeTotals(c.materials, c.marginPct));
+          const totals = selectedList.map(c => computeTotals(c.materials, c.marginPct, c.labourPct || 0, c.officePct || 0));
           const totalCostDiffers = new Set(totals.map(t => t.totalCost.toFixed(2))).size > 1;
           const marginDiffers = new Set(selectedList.map(c => Number(c.marginPct).toFixed(2))).size > 1;
           const saleDiffers = new Set(totals.map(t => t.salePrice.toFixed(2))).size > 1;

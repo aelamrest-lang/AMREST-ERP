@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import { useStore, uid } from "../lib/store";
 import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Empty, Textarea } from "../components/ui";
 import { FinishedGoodCombobox } from "../components/FinishedGoodCombobox";
+import { NewFinishedGoodModal } from "../components/NewFinishedGoodModal";
 import type { Quotation, DocStatus } from "../lib/types";
 import { IconPlus, IconEdit, IconTrash, IconPrint, IconFile } from "../components/icons";
 import { calcCostingTotals, calcDocTotals, fmtINR, nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
@@ -31,6 +32,7 @@ export function Quotations() {
   const canPrint = userCan(currentUser, "quotations", "print");
   const [open, setOpen] = useState(false);
   const [edit, setEdit] = useState<Quotation | null>(null);
+  const [newItemForRow, setNewItemForRow] = useState<{ idx: number; seed: string } | null>(null);
 
   const list = useMemo(() => {
     const arr = isAdmin ? db.quotations : db.quotations.filter(q => q.ownerId === currentUser?.id);
@@ -259,6 +261,7 @@ export function Quotations() {
                       items={finishedGoods}
                       value={it.name}
                       onPick={(fg) => pickFinishedGood(i, fg)}
+                      onCreateNew={(seed) => setNewItemForRow({ idx: i, seed })}
                       testId={`quot-item-combo-${i}`}
                     />
                     <Label className="mt-2">Description</Label>
@@ -306,6 +309,17 @@ export function Quotations() {
           <Button onClick={save}>{edit ? "Update" : "Create"}</Button>
         </div>
       </Modal>
+
+      <NewFinishedGoodModal
+        open={!!newItemForRow}
+        seedName={newItemForRow?.seed || ""}
+        onClose={() => setNewItemForRow(null)}
+        onCreated={(item) => {
+          if (newItemForRow) pickFinishedGood(newItemForRow.idx, item as any);
+          setNewItemForRow(null);
+        }}
+        testIdPrefix="quot-new-fg"
+      />
     </div>
   );
 }

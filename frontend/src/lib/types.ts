@@ -80,6 +80,8 @@ export interface CostingSheet {
   materials: CostingMaterial[];
   gstRate: number;
   marginPct: number;
+  labourPct?: number;
+  officePct?: number;
   status: "draft" | "pending" | "approved" | "rejected";
   locked?: boolean;
   ownerId: string;

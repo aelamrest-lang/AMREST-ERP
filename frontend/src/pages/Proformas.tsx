@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import { useStore, uid } from "../lib/store";
 import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Empty } from "../components/ui";
 import { FinishedGoodCombobox } from "../components/FinishedGoodCombobox";
+import { NewFinishedGoodModal } from "../components/NewFinishedGoodModal";
 import type { Proforma } from "../lib/types";
 import { IconPlus, IconEdit, IconTrash, IconPrint } from "../components/icons";
 import { calcDocTotals, fmtINR, nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
@@ -18,6 +19,7 @@ export function Proformas() {
   const canPrint = userCan(currentUser, "proformas", "print");
   const [open, setOpen] = useState(false);
   const [edit, setEdit] = useState<Proforma | null>(null);
+  const [newItemForRow, setNewItemForRow] = useState<{ idx: number; seed: string } | null>(null);
 
   const list = useMemo(() => {
     const arr = isAdmin ? db.proformas : db.proformas.filter(p => p.ownerId === currentUser?.id);
@@ -146,6 +148,7 @@ export function Proformas() {
                     items={finishedGoods}
                     value={it.name}
                     onPick={(fg) => pickFinishedGood(i, fg)}
+                    onCreateNew={(seed) => setNewItemForRow({ idx: i, seed })}
                     testId={`pf-item-combo-${i}`}
                   />
                 </Td>
@@ -173,6 +176,17 @@ export function Proformas() {
         </div>
         <div className="mt-5 flex justify-end gap-2"><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={save}>{edit ? "Update" : "Create"}</Button></div>
       </Modal>
+
+      <NewFinishedGoodModal
+        open={!!newItemForRow}
+        seedName={newItemForRow?.seed || ""}
+        onClose={() => setNewItemForRow(null)}
+        onCreated={(item) => {
+          if (newItemForRow) pickFinishedGood(newItemForRow.idx, item as any);
+          setNewItemForRow(null);
+        }}
+        testIdPrefix="pf-new-fg"
+      />
     </div>
   );
 }

@@ -1,0 +1,27 @@
+{
+  "summary": "Frontend-only regression for the two new features. Logged in as aaa@amrest.in/anwar@123. Costings: created a New Costing (product '33 kV OC 3 Ph. PT'), added 2 raw materials (10x100 + 5x200 = ₹2,000 material cost), set Labour=10%, Office=5%, Profit=20% — totals card showed Material Cost ₹2,000, Labour @10% ₹200, Office @5% ₹100, Total Costing ₹2,300, Profit % 20.00%, Profit ₹460, Sale Price ₹2,760 — matches formula totalCost = materialCost*(1+0.10+0.05) and salePrice = totalCost*1.20 exactly. Saved and re-opened costing CST-2026-002: labourPct=10, officePct=5, marginPct=20 persisted. List row shows Total Cost ₹2,300.00 and Sale Price ₹2,760.00. Duplicate copied labour=10, office=5 correctly. Sales Orders: New SO → in row 0 combobox typed 'Zzz Special Transformer 42 kVA' → empty-state '+ Create new finished good' button (data-testid so-item-combo-0-create-new-empty) appeared → clicked → NewFinishedGoodModal opened with seed name pre-filled → set unit=Nos, GST=18, saleRate=125000 → Create & Use → row auto-populated with rate 125000 and GST 18% (Amount ₹1,25,000, GST ₹22,500, Total ₹1,47,500 in totals card). Quotations: same flow with 'Yyy Custom Xformer 88 kVA', GST=12, saleRate=88000 → row shows rate=88000, GST 12%, Sub Total ₹88,000, GST ₹10,560, Grand Total ₹98,560. Item Master: both new items appear at top with correct category (Finished Goods), GST (18%, 12%) and Sale rates (₹1,25,000.00 and ₹88,000.00). Regression: opening SO combobox and clicking an existing option ('Yyy Custom Xformer 88 kVA') populated the row name — existing selection flow still works. No page errors observed during the flows.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Costings — New Costing modal", "issues": ["React hydration warning in console: '<span> cannot be a child of <option>' — originates from a <datalist><option> in Costings.tsx line ~524 where a dev-mode wrapper injects <span style=display:contents> inside <option>. Not a functional bug, but pollutes console with hydration warnings. Consider suppressing/removing the ve-dynamic wrapper for <option> content, or replace datalist option children with plain string via a helper."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Costings.tsx is ~800 lines — near the 700-line guideline; consider extracting the compare/trend/history modals into separate components.",
+    "computeTotals is repeated 3× in history-snapshot creation inside save() — extract to a single call and reuse the object.",
+    "NewFinishedGoodModal.tsx: state (name/unit/gst/hsn/rates) is reset in useEffect only when 'open' or 'seedName' changes — good; but the 'error' shown for empty name is only set via setError, no aria-live and no red border on the input. Minor a11y polish.",
+    "FinishedGoodCombobox.tsx: the '+ Create new finished good' bottom button is sticky, but when 'filtered' contains many rows the popup can obscure it briefly on first render; not blocking. Consider always showing it even in empty-state via a single unified footer."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (frontend-only)", "frontend": "100%"},
+  "test_credentials": "aaa@amrest.in / anwar@123 (verified).",
+  "seed_data_creation": "Created CST-2026-002 (Costing) and 2 Finished Good items in Item Master via inline modal: 'Zzz Special Transformer 42 kVA' (GST 18%, sale ₹1,25,000) and 'Yyy Custom Xformer 88 kVA' (GST 12%, sale ₹88,000). Also two TEST raw material rows saved inside CST-2026-002 (TEST Copper Wire ZZ, TEST Steel Sheet ZZ).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Both features work end-to-end. Data-testid IDs are as documented in the review request: costing-labour-pct, costing-office-pct, costing-margin, costing-save-btn, costing-duplicate-<id>, so-item-combo-<i>, so-item-combo-<i>-create-new / -create-new-empty, so-new-fg-name/unit/gst/sale-rate/purchase-rate/hsn/save (and quot-new-fg-*). Sidebar links are not <a> — use page.get_by_text('Sales Orders', exact=True). Customer select in modals has an empty-value placeholder option; auto-select first non-empty value via JS if needed. Playwright select_option by label fails for options with trailing spaces (e.g. '33 kV OC 3 Ph. PT ') — use select_option by value instead.",
+  "rca of the issue": "N/A — no bugs to root-cause. Only a console hydration warning about <span> inside <option> in the raw-material datalist; caused by dev-mode ve-dynamic wrappers, not by application code logic."
+}

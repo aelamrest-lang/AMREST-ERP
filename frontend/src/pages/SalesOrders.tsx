@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import { useStore, uid } from "../lib/store";
 import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Badge, Empty } from "../components/ui";
 import { FinishedGoodCombobox } from "../components/FinishedGoodCombobox";
+import { NewFinishedGoodModal } from "../components/NewFinishedGoodModal";
 import type { SalesOrder, DeliverySchedule } from "../lib/types";
 import { IconPlus, IconEdit, IconTrash, IconPrint, IconCheck } from "../components/icons";
 import { calcDocTotalsWithFreight, fmtINR, nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
@@ -24,6 +25,7 @@ export function SalesOrders() {
   const canPrint = userCan(currentUser, "salesorders", "print");
   const [open, setOpen] = useState(false);
   const [edit, setEdit] = useState<SalesOrder | null>(null);
+  const [newItemForRow, setNewItemForRow] = useState<{ idx: number; seed: string } | null>(null);
 
   const list = useMemo(() => {
     const arr = isAdmin ? db.salesOrders : db.salesOrders.filter(o => o.ownerId === currentUser?.id);
@@ -317,6 +319,7 @@ export function SalesOrders() {
                     items={finishedGoods}
                     value={it.name}
                     onPick={(fg) => pickFinishedGood(i, fg)}
+                    onCreateNew={(seed) => setNewItemForRow({ idx: i, seed })}
                     testId={`so-item-combo-${i}`}
                   />
                 </Td>
@@ -376,6 +379,17 @@ export function SalesOrders() {
         </div>
         <div className="mt-5 flex justify-end gap-2"><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={save} data-testid="so-save-btn">{edit ? "Update" : "Create"}</Button></div>
       </Modal>
+
+      <NewFinishedGoodModal
+        open={!!newItemForRow}
+        seedName={newItemForRow?.seed || ""}
+        onClose={() => setNewItemForRow(null)}
+        onCreated={(item) => {
+          if (newItemForRow) pickFinishedGood(newItemForRow.idx, item as any);
+          setNewItemForRow(null);
+        }}
+        testIdPrefix="so-new-fg"
+      />
 
       <Badge color="slate">Use the Sales Order to create a Job Card for production.</Badge>
     </div>
