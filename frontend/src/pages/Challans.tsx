@@ -45,33 +45,54 @@ function jobCardCompletedQty(jc: JobCard, entries: ProductionEntry[]) {
   return Math.min(jc.qty, dispatchReady);
 }
 
+// Build a dispatch row from a JC, with or without a linked SO.
+// - With SO: cap = min(SO balance for the JC's product, JC completed remaining).
+// - Without SO: cap = JC completed remaining. ordered = JC.qty; alreadyDispatched = 0 for display.
 function buildDispatchRow(
-  so: SalesOrder,
+  so: SalesOrder | undefined,
   jc: JobCard,
   entries: ProductionEntry[],
   challans: DeliveryChallan[],
   excludeChallanId?: string,
   existing?: DeliveryChallan["items"],
 ): DispatchRow | null {
-  // A JC targets exactly one product name. Find the matching SO item.
-  const soi = so.items.find(i => i.name === jc.product);
-  if (!soi) return null;
-  const already = sumDispatched(challans, so.id, soi.name, excludeChallanId);
-  const soBalance = Math.max(0, soi.qty - already);
   const jcCompleted = jobCardCompletedQty(jc, entries);
   const jcAlreadyDispatched = sumDispatchedFromJC(challans, jc.id, excludeChallanId);
   const jcRemaining = Math.max(0, jcCompleted - jcAlreadyDispatched);
-  const cap = Math.min(soBalance, jcRemaining);
-  const existingRow = existing?.find(x => x.name === soi.name);
+
+  if (so) {
+    // A JC targets exactly one product name. Try to find the matching SO item.
+    const soi = so.items.find(i => i.name === jc.product);
+    if (soi) {
+      const already = sumDispatched(challans, so.id, soi.name, excludeChallanId);
+      const soBalance = Math.max(0, soi.qty - already);
+      const cap = Math.min(soBalance, jcRemaining);
+      const existingRow = existing?.find(x => x.name === soi.name);
+      return {
+        name: soi.name,
+        ordered: soi.qty,
+        alreadyDispatched: already,
+        jcCompleted,
+        jcAlreadyDispatched,
+        currentQty: existingRow?.qty ?? cap,
+        rate: existingRow?.rate ?? soi.rate,
+        gst: existingRow?.gst ?? soi.gst,
+      };
+    }
+    // SO exists but product name mismatch — fall through to JC-only dispatch.
+  }
+
+  // No SO linked (or product mismatch) — dispatch directly from the JC.
+  const existingRow = existing?.find(x => x.name === jc.product);
   return {
-    name: soi.name,
-    ordered: soi.qty,
-    alreadyDispatched: already,
+    name: jc.product,
+    ordered: jc.qty,
+    alreadyDispatched: 0,
     jcCompleted,
     jcAlreadyDispatched,
-    currentQty: existingRow?.qty ?? cap,
-    rate: existingRow?.rate ?? soi.rate,
-    gst: existingRow?.gst ?? soi.gst,
+    currentQty: existingRow?.qty ?? jcRemaining,
+    rate: existingRow?.rate ?? 0,
+    gst: existingRow?.gst ?? 18,
   };
 }
 
@@ -99,10 +120,10 @@ export function Challans() {
   const currentSO = db.salesOrders.find(s => s.id === form.salesOrderId);
   const currentJC = db.jobCards.find(j => j.id === form.jobCardId);
 
-  // Only JCs whose completed qty is not yet fully dispatched are eligible.
+  // Any JC (with or without SO link) whose completed qty is not yet fully dispatched is eligible.
+  // A JC with status "Completed" counts as fully ready (jc.qty), even without production entries.
   const dispatchableJobCards = useMemo(() => {
     return db.jobCards.filter(j => {
-      if (!j.salesOrderId) return false;
       const completed = jobCardCompletedQty(j, db.productionEntries);
       if (completed <= 0) return false;
       const dispatched = sumDispatchedFromJC(db.challans, j.id, edit?.id);
@@ -127,7 +148,7 @@ export function Challans() {
     setForm({ ...c });
     const jc = db.jobCards.find(j => j.id === c.jobCardId);
     const so = db.salesOrders.find(s => s.id === c.salesOrderId);
-    if (jc && so) setRow(buildDispatchRow(so, jc, db.productionEntries, db.challans, c.id, c.items));
+    if (jc) setRow(buildDispatchRow(so, jc, db.productionEntries, db.challans, c.id, c.items));
     else setRow(null);
     setOpen(true);
   };
@@ -135,19 +156,13 @@ export function Challans() {
   const applyJobCard = (jobCardId: string) => {
     const jc = db.jobCards.find(j => j.id === jobCardId);
     if (!jc) { setForm(f => ({ ...f, jobCardId: "", salesOrderId: "", customerId: "" })); setRow(null); return; }
-    const so = db.salesOrders.find(s => s.id === jc.salesOrderId);
-    if (!so) {
-      setForm(f => ({ ...f, jobCardId }));
-      setRow(null);
-      alert("Selected Job Card is not linked to a Sales Order. Please link the JC to an SO first.");
-      return;
-    }
+    const so = jc.salesOrderId ? db.salesOrders.find(s => s.id === jc.salesOrderId) : undefined;
     setForm(f => ({
       ...f,
       jobCardId,
-      salesOrderId: so.id,
-      customerId: so.customerId,
-      freight: so.freight ?? f.freight ?? 0,
+      salesOrderId: so?.id || "",
+      customerId: so?.customerId || f.customerId || "",
+      freight: so?.freight ?? f.freight ?? 0,
     }));
     setRow(buildDispatchRow(so, jc, db.productionEntries, db.challans, edit?.id));
   };
@@ -158,22 +173,23 @@ export function Challans() {
 
   const save = () => {
     if (!currentJC) return alert("Job Card is required — dispatch is only allowed against a Job Card. If none exists, please create a Job Card in Production first.");
-    if (!currentSO || !row) return alert("Job Card must be linked to a Sales Order with a matching product.");
-    // Cap = min(SO balance for item, JC completed remaining)
-    const soBalance = Math.max(0, row.ordered - row.alreadyDispatched);
+    if (!row) return alert("No dispatch row available. Please re-select the Job Card.");
+    if (!form.customerId) return alert("Please select a Customer for this dispatch.");
+    // Cap = min(SO balance for item, JC completed remaining). If no SO, only JC cap applies.
+    const soBalance = currentSO ? Math.max(0, row.ordered - row.alreadyDispatched) : Infinity;
     const jcRemaining = Math.max(0, row.jcCompleted - row.jcAlreadyDispatched);
     const cap = Math.min(soBalance, jcRemaining);
     if (row.currentQty <= 0) return alert(`Enter a Current Dispatch quantity greater than 0.`);
     if (row.currentQty > cap) {
       const reason = jcRemaining < soBalance
         ? `only ${jcRemaining} unit(s) are completed on Job Card ${currentJC.number}`
-        : `only ${soBalance} unit(s) remain on Sales Order ${currentSO.number}`;
+        : `only ${soBalance} unit(s) remain on Sales Order ${currentSO?.number || ""}`;
       return alert(`Cannot dispatch ${row.currentQty} unit(s) of "${row.name}" — ${reason}. Please reduce the qty.`);
     }
     const dispatchItems = [{ name: row.name, qty: row.currentQty, rate: row.rate, gst: row.gst }];
     const payload: DeliveryChallan = { ...form, items: dispatchItems };
 
-    // Total dispatched against this JC after this save (excluding current edit id, then + currentQty)
+    // Total dispatched against this JC after this save
     const jcTotalDispatched = row.jcAlreadyDispatched + row.currentQty;
     const jcFullyDispatched = jcTotalDispatched >= currentJC.qty;
 
@@ -189,19 +205,20 @@ export function Challans() {
     log(`${edit ? "Updated" : "Created"} DC ${form.number}${jcFullyDispatched ? ` · Job Card ${currentJC.number} fully dispatched` : ""}`, "Delivery Challan");
 
     // After save, if SO still has balance across all items, offer to create a new JC.
-    // Compute SO balance (all items) including this dispatch.
-    const newDispatchedForItem = row.alreadyDispatched + row.currentQty;
-    const totalSoOrdered = currentSO.items.reduce((s, i) => s + i.qty, 0);
-    // For total dispatched: for the current item use newDispatchedForItem; other items use pre-save already dispatched.
-    const totalSoDispatched = currentSO.items.reduce((s, i) => {
-      if (i.name === row.name) return s + newDispatchedForItem;
-      return s + sumDispatched(db.challans, currentSO.id, i.name, edit?.id);
-    }, 0);
-    const soBalanceAfter = Math.max(0, totalSoOrdered - totalSoDispatched);
+    let soBalanceAfter = 0;
+    if (currentSO) {
+      const newDispatchedForItem = row.alreadyDispatched + row.currentQty;
+      const totalSoOrdered = currentSO.items.reduce((s, i) => s + i.qty, 0);
+      const totalSoDispatched = currentSO.items.reduce((s, i) => {
+        if (i.name === row.name) return s + newDispatchedForItem;
+        return s + sumDispatched(db.challans, currentSO.id, i.name, edit?.id);
+      }, 0);
+      soBalanceAfter = Math.max(0, totalSoOrdered - totalSoDispatched);
+    }
 
     setOpen(false);
 
-    if (jcFullyDispatched && soBalanceAfter > 0) {
+    if (currentSO && jcFullyDispatched && soBalanceAfter > 0) {
       setBalancePrompt({ so: currentSO, parentJc: currentJC, balance: soBalanceAfter });
     }
   };
@@ -348,11 +365,19 @@ export function Challans() {
           </div>
           <div>
             <Label>Sales Order (auto)</Label>
-            <Input value={currentSO?.number || ""} disabled placeholder="Auto-set from Job Card" data-testid="dc-so-display" />
+            <Input value={currentSO?.number || ""} disabled placeholder={currentJC ? "Not linked (JC has no SO)" : "Auto-set from Job Card"} data-testid="dc-so-display" />
           </div>
           <div className="sm:col-span-2">
-            <Label>Customer</Label>
-            <Input value={db.parties.find(p => p.id === form.customerId)?.name || ""} disabled placeholder="Auto-set from Sales Order" />
+            <Label>Customer{currentSO ? " (auto)" : " *"}</Label>
+            <Select
+              value={form.customerId}
+              onChange={(e: any) => setForm({...form, customerId: e.target.value})}
+              disabled={!!currentSO}
+              data-testid="dc-customer-select"
+            >
+              <option value="">— Select Customer —</option>
+              {db.parties.filter(p => p.type === "customer").map(p => <option key={p.id} value={p.id}>{p.name}{p.city ? ` · ${p.city}` : ""}</option>)}
+            </Select>
           </div>
         </div>
 
