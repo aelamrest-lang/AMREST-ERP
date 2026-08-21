@@ -309,6 +309,13 @@ export function Challans() {
   const jcAlreadyDispatchedNow = currentJC ? sumDispatchedFromJC(db.challans, currentJC.id, edit?.id) : 0;
   const jcAvailable = Math.max(0, jcCompletedNow - jcAlreadyDispatchedNow);
 
+  // SO-level totals (across ALL items and ALL JCs) — used in the summary tiles.
+  const soTotalQty = currentSO ? currentSO.items.reduce((s, i) => s + (Number(i.qty) || 0), 0) : 0;
+  const soTotalDispatched = currentSO
+    ? currentSO.items.reduce((s, i) => s + sumDispatched(db.challans, currentSO.id, i.name, edit?.id), 0)
+    : 0;
+  const soTotalBalance = Math.max(0, soTotalQty - soTotalDispatched);
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -392,17 +399,17 @@ export function Challans() {
           <div className="mt-4 grid gap-3 md:grid-cols-5 sm:grid-cols-2" data-testid="dc-dispatch-summary">
             <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
               <div className="text-[11px] uppercase tracking-wide text-slate-500">Sales Order Qty</div>
-              <div className="text-xl font-bold" data-testid="dc-sum-so-qty">{row?.ordered ?? 0}</div>
-              <div className="text-[11px] text-slate-500 mt-0.5">{currentSO?.number ? `From ${currentSO.number}` : "No SO linked"}</div>
+              <div className="text-xl font-bold" data-testid="dc-sum-so-qty">{currentSO ? soTotalQty : (row?.ordered ?? 0)}</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">{currentSO ? `${currentSO.number} · ${currentSO.items.length} item${currentSO.items.length > 1 ? "s" : ""}` : "No SO linked"}</div>
             </div>
             <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
               <div className="text-[11px] uppercase tracking-wide text-slate-500">Already Dispatched</div>
-              <div className="text-xl font-bold" data-testid="dc-sum-already-dispatched">{row?.alreadyDispatched ?? 0}</div>
-              <div className="text-[11px] text-slate-500 mt-0.5">All JCs combined for this item</div>
+              <div className="text-xl font-bold" data-testid="dc-sum-already-dispatched">{currentSO ? soTotalDispatched : (row?.alreadyDispatched ?? 0)}</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">{currentSO ? "All items, all JCs combined" : "This item, all JCs"}</div>
             </div>
             <div className="rounded-lg border border-emerald-200 dark:border-emerald-800 p-3 bg-emerald-50 dark:bg-emerald-900/20">
               <div className="text-[11px] uppercase tracking-wide text-emerald-700 dark:text-emerald-300">Sales Order Balance</div>
-              <div className="text-xl font-bold text-emerald-700 dark:text-emerald-300" data-testid="dc-sum-so-balance">{Math.max(0, (row?.ordered ?? 0) - (row?.alreadyDispatched ?? 0))}</div>
+              <div className="text-xl font-bold text-emerald-700 dark:text-emerald-300" data-testid="dc-sum-so-balance">{currentSO ? soTotalBalance : Math.max(0, (row?.ordered ?? 0) - (row?.alreadyDispatched ?? 0))}</div>
               <div className="text-[11px] text-slate-500 mt-0.5">SO Qty − Already Dispatched</div>
             </div>
             <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
