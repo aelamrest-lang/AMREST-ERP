@@ -389,29 +389,61 @@ export function Challans() {
         )}
 
         {currentJC && (
-          <div className="mt-4 rounded-lg border border-teal-300 bg-teal-50 dark:bg-teal-900/20 dark:border-teal-700 p-3 text-sm" data-testid="dc-jc-info">
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-              <span><b>Job Card:</b> <span className="font-mono">{currentJC.number}</span></span>
-              <span><b>Product:</b> {currentJC.product}</span>
-              <span><b>JC Qty:</b> {currentJC.qty}</span>
-              <span><b>Completed (Dispatch Ready):</b> {jcCompletedNow}</span>
-              <span><b>Already Dispatched from JC:</b> {jcAlreadyDispatchedNow}</span>
-              <Badge color={jcAvailable > 0 ? "green" : "red"}>Available to Dispatch: {jcAvailable}</Badge>
+          <div className="mt-4 grid gap-3 md:grid-cols-5 sm:grid-cols-2" data-testid="dc-dispatch-summary">
+            <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
+              <div className="text-[11px] uppercase tracking-wide text-slate-500">Sales Order Qty</div>
+              <div className="text-xl font-bold" data-testid="dc-sum-so-qty">{row?.ordered ?? 0}</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">{currentSO?.number ? `From ${currentSO.number}` : "No SO linked"}</div>
+            </div>
+            <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
+              <div className="text-[11px] uppercase tracking-wide text-slate-500">Already Dispatched</div>
+              <div className="text-xl font-bold" data-testid="dc-sum-already-dispatched">{row?.alreadyDispatched ?? 0}</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">All JCs combined for this item</div>
+            </div>
+            <div className="rounded-lg border border-emerald-200 dark:border-emerald-800 p-3 bg-emerald-50 dark:bg-emerald-900/20">
+              <div className="text-[11px] uppercase tracking-wide text-emerald-700 dark:text-emerald-300">Sales Order Balance</div>
+              <div className="text-xl font-bold text-emerald-700 dark:text-emerald-300" data-testid="dc-sum-so-balance">{Math.max(0, (row?.ordered ?? 0) - (row?.alreadyDispatched ?? 0))}</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">SO Qty − Already Dispatched</div>
+            </div>
+            <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
+              <div className="text-[11px] uppercase tracking-wide text-slate-500">Selected Job Card Qty</div>
+              <div className="text-xl font-bold" data-testid="dc-sum-jc-qty">{currentJC.qty}</div>
+              <div className="text-[11px] text-slate-500 mt-0.5 font-mono">{currentJC.number}</div>
+            </div>
+            <div className="rounded-lg border border-teal-300 dark:border-teal-700 p-3 bg-teal-50 dark:bg-teal-900/20">
+              <div className="text-[11px] uppercase tracking-wide text-teal-700 dark:text-teal-300">Available on this JC</div>
+              <div className="text-xl font-bold text-teal-700 dark:text-teal-300" data-testid="dc-sum-jc-available">{jcAvailable}</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">Ready {jcCompletedNow} − Dispatched {jcAlreadyDispatchedNow}</div>
             </div>
           </div>
         )}
 
         {row && (
-          <div className="mt-4 border border-slate-200 dark:border-slate-700 rounded-lg overflow-x-auto">
+          <div className="mt-4 border border-slate-200 dark:border-slate-700 rounded-lg overflow-x-auto" data-testid="dc-partial-panel">
+            <div className="flex items-center justify-between px-3 py-2 bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-700 text-xs">
+              <div className="font-semibold text-slate-700 dark:text-slate-200">Partial Dispatch — enter any quantity up to the Available JC qty</div>
+              {(() => {
+                const jcRemaining = Math.max(0, row.jcCompleted - row.jcAlreadyDispatched);
+                const soBalance = currentSO ? Math.max(0, row.ordered - row.alreadyDispatched) : Infinity;
+                const cap = Math.min(soBalance, jcRemaining);
+                return (
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" onClick={() => updateRow({ currentQty: Math.floor(cap / 2) })} data-testid="dc-fill-half">Half ({Math.floor(cap / 2)})</Button>
+                    <Button size="sm" variant="outline" onClick={() => updateRow({ currentQty: cap })} data-testid="dc-fill-full">Full ({cap})</Button>
+                  </div>
+                );
+              })()}
+            </div>
             <Table>
               <thead>
                 <tr>
                   <Th>Item</Th>
                   <Th className="text-right">SO Qty</Th>
-                  <Th className="text-right">SO Dispatched</Th>
-                  <Th className="text-right">JC Completed</Th>
+                  <Th className="text-right">Already Dispatched</Th>
+                  <Th className="text-right">SO Balance</Th>
+                  <Th className="text-right">JC Available</Th>
                   <Th className="text-right">This Dispatch</Th>
-                  <Th className="text-right">Cap</Th>
+                  <Th className="text-right">Balance After</Th>
                   <Th className="text-right">Rate</Th>
                   <Th className="text-right">GST%</Th>
                   <Th className="text-right">Amount</Th>
@@ -419,16 +451,19 @@ export function Challans() {
               </thead>
               <tbody>
                 {(() => {
-                  const soBalance = Math.max(0, row.ordered - row.alreadyDispatched);
+                  const soBalance = currentSO ? Math.max(0, row.ordered - row.alreadyDispatched) : row.jcCompleted;
                   const jcRemaining = Math.max(0, row.jcCompleted - row.jcAlreadyDispatched);
                   const cap = Math.min(soBalance, jcRemaining);
                   const over = row.currentQty > cap;
+                  const soBalanceAfter = Math.max(0, soBalance - row.currentQty);
+                  const jcBalanceAfter = Math.max(0, jcRemaining - row.currentQty);
                   return (
                     <tr className={over ? "bg-rose-50 dark:bg-rose-900/20" : ""}>
                       <Td className="font-medium">{row.name}</Td>
                       <Td className="text-right">{row.ordered}</Td>
                       <Td className="text-right">{row.alreadyDispatched}</Td>
-                      <Td className="text-right">{row.jcCompleted}</Td>
+                      <Td className="text-right font-medium">{soBalance === Infinity ? "—" : soBalance}</Td>
+                      <Td className="text-right font-medium text-teal-700">{jcRemaining}</Td>
                       <Td className="text-right">
                         <Input
                           type="number"
@@ -443,7 +478,10 @@ export function Challans() {
                           data-testid="dc-current-qty"
                         />
                       </Td>
-                      <Td className={"text-right font-semibold " + (over ? "text-rose-600" : "text-emerald-600")} data-testid="dc-cap">{cap}</Td>
+                      <Td className={"text-right font-semibold " + (over ? "text-rose-600" : "text-emerald-600")} data-testid="dc-balance-after">
+                        <div>SO: {currentSO ? soBalanceAfter : "—"}</div>
+                        <div className="text-teal-700 text-[11px]">JC: {jcBalanceAfter}{jcBalanceAfter === 0 && row.currentQty > 0 ? " · will Complete" : ""}</div>
+                      </Td>
                       <Td className="text-right">
                         <Input type="number" value={row.rate} onChange={(e: any) => updateRow({ rate: Number(e.target.value) || 0 })} className="w-24 text-right py-1 h-8"/>
                       </Td>
