@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useStore, uid } from "../lib/store";
 import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Badge, Empty } from "../components/ui";
-import type { DeliveryChallan, SalesOrder } from "../lib/types";
+import type { DeliveryChallan, SalesOrder, JobCard, ProductionEntry, ProductionStage } from "../lib/types";
 import { IconPlus, IconEdit, IconTrash, IconPrint } from "../components/icons";
 import { calcDocTotalsWithFreight, fmtINR, nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
 import { userCan } from "../lib/permissions";
@@ -9,9 +9,10 @@ import { userCan } from "../lib/permissions";
 interface DispatchRow {
   name: string;
   ordered: number;
-  alreadyDispatched: number;
+  alreadyDispatched: number;   // total qty dispatched for this SO+item across all DCs
+  jcCompleted: number;         // qty already completed on the selected JC (Dispatch Ready reached)
+  jcAlreadyDispatched: number; // qty already dispatched linked to this JC
   currentQty: number;
-  balance: number;
   rate: number;
   gst: number;
 }
@@ -26,23 +27,55 @@ function sumDispatched(challans: DeliveryChallan[], salesOrderId: string, itemNa
     .reduce((s, i) => s + (Number(i.qty) || 0), 0);
 }
 
-function buildDispatchRows(so: SalesOrder | undefined, challans: DeliveryChallan[], excludeChallanId?: string, existingItems?: DeliveryChallan["items"]): DispatchRow[] {
-  if (!so) return [];
-  return so.items.map(soi => {
-    const already = sumDispatched(challans, so.id, soi.name, excludeChallanId);
-    const balance = Math.max(0, soi.qty - already);
-    const existing = existingItems?.find(x => x.name === soi.name);
-    return {
-      name: soi.name,
-      ordered: soi.qty,
-      alreadyDispatched: already,
-      currentQty: existing?.qty ?? Math.min(balance, soi.qty),
-      balance,
-      rate: existing?.rate ?? soi.rate,
-      gst: existing?.gst ?? soi.gst,
-    };
-  });
+// Sum of qty already dispatched against a specific JC (across all DCs), used to enforce JC-cap.
+function sumDispatchedFromJC(challans: DeliveryChallan[], jobCardId: string, excludeChallanId?: string) {
+  return challans
+    .filter(c => c.jobCardId === jobCardId && c.id !== excludeChallanId)
+    .flatMap(c => c.items || [])
+    .reduce((s, i) => s + (Number(i.qty) || 0), 0);
 }
+
+// A JC's "completed" qty for dispatch = the qty that has reached the final Dispatch Ready stage.
+// If the JC status is already "Completed", the full qty is considered dispatch-ready.
+function jobCardCompletedQty(jc: JobCard, entries: ProductionEntry[]) {
+  if (jc.status === "Completed") return jc.qty;
+  const dispatchReady = entries
+    .filter(e => e.jobCardId === jc.id && e.stage === ("Dispatch Ready" as ProductionStage))
+    .reduce((s, e) => s + (Number(e.todayQty) || 0), 0);
+  return Math.min(jc.qty, dispatchReady);
+}
+
+function buildDispatchRow(
+  so: SalesOrder,
+  jc: JobCard,
+  entries: ProductionEntry[],
+  challans: DeliveryChallan[],
+  excludeChallanId?: string,
+  existing?: DeliveryChallan["items"],
+): DispatchRow | null {
+  // A JC targets exactly one product name. Find the matching SO item.
+  const soi = so.items.find(i => i.name === jc.product);
+  if (!soi) return null;
+  const already = sumDispatched(challans, so.id, soi.name, excludeChallanId);
+  const soBalance = Math.max(0, soi.qty - already);
+  const jcCompleted = jobCardCompletedQty(jc, entries);
+  const jcAlreadyDispatched = sumDispatchedFromJC(challans, jc.id, excludeChallanId);
+  const jcRemaining = Math.max(0, jcCompleted - jcAlreadyDispatched);
+  const cap = Math.min(soBalance, jcRemaining);
+  const existingRow = existing?.find(x => x.name === soi.name);
+  return {
+    name: soi.name,
+    ordered: soi.qty,
+    alreadyDispatched: already,
+    jcCompleted,
+    jcAlreadyDispatched,
+    currentQty: existingRow?.qty ?? cap,
+    rate: existingRow?.rate ?? soi.rate,
+    gst: existingRow?.gst ?? soi.gst,
+  };
+}
+
+const STAGES: ProductionStage[] = ["LV Winding", "HV Winding", "Primary Winding", "Secondary Winding 1", "Secondary Winding 2", "Secondary Winding 3", "Core Coil Assembly", "Tanking", "Finishing", "Testing Ready", "Dispatch Ready"];
 
 export function Challans() {
   const { db, setDB, log, currentUser } = useStore();
@@ -52,6 +85,7 @@ export function Challans() {
   const canPrint = userCan(currentUser, "challans", "print");
   const [open, setOpen] = useState(false);
   const [edit, setEdit] = useState<DeliveryChallan | null>(null);
+  const [balancePrompt, setBalancePrompt] = useState<{ so: SalesOrder; parentJc: JobCard; balance: number } | null>(null);
 
   const blank = (): DeliveryChallan => ({
     id: "", number: nextNumber("DC", db.challans), date: todayISO(),
@@ -60,37 +94,52 @@ export function Challans() {
     vehicle: "", driver: "", transport: "", acknowledged: false, createdAt: new Date().toISOString(),
   });
   const [form, setForm] = useState<DeliveryChallan>(blank());
-  const [rows, setRows] = useState<DispatchRow[]>([]);
+  const [row, setRow] = useState<DispatchRow | null>(null);
 
   const currentSO = db.salesOrders.find(s => s.id === form.salesOrderId);
+  const currentJC = db.jobCards.find(j => j.id === form.jobCardId);
+
+  // Only JCs whose completed qty is not yet fully dispatched are eligible.
+  const dispatchableJobCards = useMemo(() => {
+    return db.jobCards.filter(j => {
+      if (!j.salesOrderId) return false;
+      const completed = jobCardCompletedQty(j, db.productionEntries);
+      if (completed <= 0) return false;
+      const dispatched = sumDispatchedFromJC(db.challans, j.id, edit?.id);
+      return dispatched < completed;
+    });
+  }, [db.jobCards, db.productionEntries, db.challans, edit?.id]);
 
   const totals = useMemo(() => {
-    const items = rows.map(r => ({ qty: r.currentQty, rate: r.rate, gst: r.gst }));
+    const items = row ? [{ qty: row.currentQty, rate: row.rate, gst: row.gst }] : [];
     return calcDocTotalsWithFreight(items, Number(form.freight) || 0);
-  }, [rows, form.freight]);
+  }, [row, form.freight]);
   const grandTotal = totals.total;
 
   const openNew = () => {
     setEdit(null);
     setForm(blank());
-    setRows([]);
+    setRow(null);
     setOpen(true);
   };
   const openEdit = (c: DeliveryChallan) => {
     setEdit(c);
     setForm({ ...c });
+    const jc = db.jobCards.find(j => j.id === c.jobCardId);
     const so = db.salesOrders.find(s => s.id === c.salesOrderId);
-    setRows(buildDispatchRows(so, db.challans, c.id, c.items));
+    if (jc && so) setRow(buildDispatchRow(so, jc, db.productionEntries, db.challans, c.id, c.items));
+    else setRow(null);
     setOpen(true);
   };
 
   const applyJobCard = (jobCardId: string) => {
     const jc = db.jobCards.find(j => j.id === jobCardId);
-    if (!jc) { setForm(f => ({ ...f, jobCardId: "" })); return; }
+    if (!jc) { setForm(f => ({ ...f, jobCardId: "", salesOrderId: "", customerId: "" })); setRow(null); return; }
     const so = db.salesOrders.find(s => s.id === jc.salesOrderId);
     if (!so) {
       setForm(f => ({ ...f, jobCardId }));
-      alert("Selected Job Card is not linked to a Sales Order.");
+      setRow(null);
+      alert("Selected Job Card is not linked to a Sales Order. Please link the JC to an SO first.");
       return;
     }
     setForm(f => ({
@@ -100,45 +149,86 @@ export function Challans() {
       customerId: so.customerId,
       freight: so.freight ?? f.freight ?? 0,
     }));
-    setRows(buildDispatchRows(so, db.challans, edit?.id));
+    setRow(buildDispatchRow(so, jc, db.productionEntries, db.challans, edit?.id));
   };
 
-  const applySalesOrder = (soId: string) => {
-    const so = db.salesOrders.find(s => s.id === soId);
-    setForm(f => ({
-      ...f,
-      salesOrderId: soId,
-      customerId: so?.customerId || f.customerId,
-      jobCardId: "",
-      freight: so?.freight ?? f.freight ?? 0,
-    }));
-    setRows(buildDispatchRows(so, db.challans, edit?.id));
-  };
-
-  const updateRow = (idx: number, patch: Partial<DispatchRow>) => {
-    setRows(prev => prev.map((r, i) => i === idx ? { ...r, ...patch } : r));
+  const updateRow = (patch: Partial<DispatchRow>) => {
+    setRow(prev => prev ? { ...prev, ...patch } : prev);
   };
 
   const save = () => {
-    if (!currentSO) return alert("Please select a Sales Order or Job Card first.");
-    // Validate over-dispatch
-    for (const r of rows) {
-      if (r.currentQty < 0) return alert(`${r.name}: Dispatch qty cannot be negative.`);
-      if (r.currentQty > r.balance) {
-        return alert(`${r.name}: Current dispatch (${r.currentQty}) exceeds balance (${r.balance}). Reduce the qty.`);
-      }
+    if (!currentJC) return alert("Job Card is required — dispatch is only allowed against a Job Card. If none exists, please create a Job Card in Production first.");
+    if (!currentSO || !row) return alert("Job Card must be linked to a Sales Order with a matching product.");
+    // Cap = min(SO balance for item, JC completed remaining)
+    const soBalance = Math.max(0, row.ordered - row.alreadyDispatched);
+    const jcRemaining = Math.max(0, row.jcCompleted - row.jcAlreadyDispatched);
+    const cap = Math.min(soBalance, jcRemaining);
+    if (row.currentQty <= 0) return alert(`Enter a Current Dispatch quantity greater than 0.`);
+    if (row.currentQty > cap) {
+      const reason = jcRemaining < soBalance
+        ? `only ${jcRemaining} unit(s) are completed on Job Card ${currentJC.number}`
+        : `only ${soBalance} unit(s) remain on Sales Order ${currentSO.number}`;
+      return alert(`Cannot dispatch ${row.currentQty} unit(s) of "${row.name}" — ${reason}. Please reduce the qty.`);
     }
-    const dispatchItems = rows.filter(r => r.currentQty > 0).map(r => ({
-      name: r.name, qty: r.currentQty, rate: r.rate, gst: r.gst,
-    }));
-    if (dispatchItems.length === 0) return alert("Enter a Current Dispatch quantity for at least one item.");
-
+    const dispatchItems = [{ name: row.name, qty: row.currentQty, rate: row.rate, gst: row.gst }];
     const payload: DeliveryChallan = { ...form, items: dispatchItems };
 
-    if (edit) setDB(d => ({ ...d, challans: d.challans.map(x => x.id === edit.id ? payload : x) }));
-    else setDB(d => ({ ...d, challans: [{ ...payload, id: uid() }, ...d.challans] }));
-    log(`${edit ? "Updated" : "Created"} DC ${form.number}`, "Delivery Challan");
+    // Total dispatched against this JC after this save (excluding current edit id, then + currentQty)
+    const jcTotalDispatched = row.jcAlreadyDispatched + row.currentQty;
+    const jcFullyDispatched = jcTotalDispatched >= currentJC.qty;
+
+    setDB(d => {
+      const challans = edit
+        ? d.challans.map(x => x.id === edit.id ? payload : x)
+        : [{ ...payload, id: uid() }, ...d.challans];
+      const jobCards = jcFullyDispatched
+        ? d.jobCards.map(j => j.id === currentJC.id ? { ...j, status: "Completed" as const } : j)
+        : d.jobCards;
+      return { ...d, challans, jobCards };
+    });
+    log(`${edit ? "Updated" : "Created"} DC ${form.number}${jcFullyDispatched ? ` · Job Card ${currentJC.number} fully dispatched` : ""}`, "Delivery Challan");
+
+    // After save, if SO still has balance across all items, offer to create a new JC.
+    // Compute SO balance (all items) including this dispatch.
+    const newDispatchedForItem = row.alreadyDispatched + row.currentQty;
+    const totalSoOrdered = currentSO.items.reduce((s, i) => s + i.qty, 0);
+    // For total dispatched: for the current item use newDispatchedForItem; other items use pre-save already dispatched.
+    const totalSoDispatched = currentSO.items.reduce((s, i) => {
+      if (i.name === row.name) return s + newDispatchedForItem;
+      return s + sumDispatched(db.challans, currentSO.id, i.name, edit?.id);
+    }, 0);
+    const soBalanceAfter = Math.max(0, totalSoOrdered - totalSoDispatched);
+
     setOpen(false);
+
+    if (jcFullyDispatched && soBalanceAfter > 0) {
+      setBalancePrompt({ so: currentSO, parentJc: currentJC, balance: soBalanceAfter });
+    }
+  };
+
+  const createBalanceJobCard = () => {
+    if (!balancePrompt) return;
+    const { so, parentJc, balance } = balancePrompt;
+    const newJc: JobCard = {
+      id: uid(),
+      number: nextNumber("JC", db.jobCards),
+      date: todayISO(),
+      salesOrderId: so.id,
+      bomId: parentJc.bomId,
+      qcFormatId: parentJc.qcFormatId,
+      product: parentJc.product,
+      qty: balance,
+      serialStart: "",
+      reservedItems: [],
+      stageQuantities: STAGES.map(s => ({ stage: s, multiplier: 1, totalQty: balance })),
+      stages: STAGES.map(s => ({ stage: s, status: "pending" as const })),
+      status: "Open",
+      createdAt: new Date().toISOString(),
+    };
+    setDB(d => ({ ...d, jobCards: [newJc, ...d.jobCards] }));
+    log(`Auto-created Job Card ${newJc.number} for SO ${so.number} balance (${balance} nos)`, "Job Card");
+    setBalancePrompt(null);
+    alert(`Job Card ${newJc.number} created for the remaining ${balance} nos of "${parentJc.product}". Continue production in the Production module.`);
   };
 
   const remove = (c: DeliveryChallan) => {
@@ -149,11 +239,10 @@ export function Challans() {
 
   const printDC = (c: DeliveryChallan) => {
     const so = db.salesOrders.find(s => s.id === c.salesOrderId);
+    const jc = db.jobCards.find(j => j.id === c.jobCardId);
     const cust = db.parties.find(p => p.id === c.customerId);
     const dItems = c.items || [];
     const t = calcDocTotalsWithFreight(dItems.map(i => ({ qty: i.qty, rate: i.rate, gst: i.gst })), Number(c.freight) || 0);
-    const fr = t.freight;
-    const grand = t.total;
     const rowsHtml = dItems.map((i, idx) => {
       const ordered = so?.items.find(x => x.name === i.name)?.qty ?? 0;
       const otherDispatched = sumDispatched(db.challans, c.salesOrderId, i.name, c.id);
@@ -172,7 +261,7 @@ export function Challans() {
     }).join("");
     const body = `
       <div class="box"><div class="section-title">Consignee</div><b>${cust?.name || ""}</b><br/>${cust?.address || ""}${cust?.city ? `, ${cust.city}` : ""}<br/>GST: ${cust?.gst || ""}<br/>Contact: ${cust?.mobile || ""}</div>
-      <div class="box"><div class="section-title">Dispatch Details</div><b>Sales Order:</b> ${so?.number || "-"}<br/><b>Vehicle:</b> ${c.vehicle || "-"} | <b>Driver:</b> ${c.driver || "-"}<br/><b>Transport:</b> ${c.transport || "-"}<br/><b>Acknowledgement:</b> ${c.acknowledged ? "Received" : "Pending"}</div>
+      <div class="box"><div class="section-title">Dispatch Details</div><b>Sales Order:</b> ${so?.number || "-"} &nbsp; | &nbsp; <b>Job Card:</b> ${jc?.number || "-"}<br/><b>Vehicle:</b> ${c.vehicle || "-"} | <b>Driver:</b> ${c.driver || "-"}<br/><b>Transport:</b> ${c.transport || "-"}<br/><b>Acknowledgement:</b> ${c.acknowledged ? "Received" : "Pending"}</div>
       <table>
         <thead><tr>
           <th>#</th><th>Item</th>
@@ -188,9 +277,9 @@ export function Challans() {
       </table>
       <table style="margin-top:8px;max-width:340px;margin-left:auto">
         <tr><td>Sub Total</td><td class="right">${fmtINR(t.sub)}</td></tr>
-        <tr><td>Freight</td><td class="right">${fmtINR(fr)}</td></tr>
+        <tr><td>Freight</td><td class="right">${fmtINR(t.freight)}</td></tr>
         <tr><td>GST</td><td class="right">${fmtINR(t.gst)}</td></tr>
-        <tr><td><b>Total</b></td><td class="right"><b>${fmtINR(grand)}</b></td></tr>
+        <tr><td><b>Total</b></td><td class="right"><b>${fmtINR(t.total)}</b></td></tr>
       </table>
       <div class="signs"><div class="sign-box">Receiver Signature</div><div class="sign-box">Dispatch</div><div class="sign-box">Authorized Signatory</div></div>
     `;
@@ -198,28 +287,33 @@ export function Challans() {
     printArea(html, c.number);
   };
 
+  // Live JC-cap indicators for the form banner
+  const jcCompletedNow = currentJC ? jobCardCompletedQty(currentJC, db.productionEntries) : 0;
+  const jcAlreadyDispatchedNow = currentJC ? sumDispatchedFromJC(db.challans, currentJC.id, edit?.id) : 0;
+  const jcAvailable = Math.max(0, jcCompletedNow - jcAlreadyDispatchedNow);
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <div><h1 className="text-2xl font-bold">Delivery Challan</h1><p className="text-sm text-slate-500">Dispatch tracking with partial dispatch and balance</p></div>
+        <div><h1 className="text-2xl font-bold">Delivery Challan</h1><p className="text-sm text-slate-500">Dispatch tracking with partial dispatch, JC-gated qty and balance</p></div>
         {canCreate && <Button onClick={openNew} data-testid="new-challan-btn"><IconPlus size={14}/> New Challan</Button>}
       </div>
       <Card>
         <Table>
-          <thead><tr><Th>#</Th><Th>Date</Th><Th>SO</Th><Th>Customer</Th><Th>Items</Th><Th>Total</Th><Th>Vehicle</Th><Th>Ack</Th><Th></Th></tr></thead>
+          <thead><tr><Th>#</Th><Th>Date</Th><Th>SO</Th><Th>Job Card</Th><Th>Customer</Th><Th>Items</Th><Th>Total</Th><Th>Vehicle</Th><Th>Ack</Th><Th></Th></tr></thead>
           <tbody>
             {db.challans.map(c => {
               const totalsC = calcDocTotalsWithFreight((c.items || []).map(i => ({ qty: i.qty, rate: i.rate, gst: i.gst })), Number(c.freight) || 0);
-              const grandC = totalsC.total;
               const totalUnits = (c.items || []).reduce((s, i) => s + i.qty, 0);
               return (
                 <tr key={c.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                   <Td className="font-mono text-xs">{c.number}</Td>
                   <Td>{c.date}</Td>
                   <Td>{db.salesOrders.find(s => s.id === c.salesOrderId)?.number || "—"}</Td>
+                  <Td>{db.jobCards.find(j => j.id === c.jobCardId)?.number || "—"}</Td>
                   <Td>{db.parties.find(p => p.id === c.customerId)?.name}</Td>
                   <Td className="text-xs">{(c.items || []).length ? `${(c.items || []).length} line · Qty ${totalUnits}` : "—"}</Td>
-                  <Td className="font-semibold">{fmtINR(grandC)}</Td>
+                  <Td className="font-semibold">{fmtINR(totalsC.total)}</Td>
                   <Td>{c.vehicle}</Td>
                   <Td><Badge color={c.acknowledged ? "green" : "yellow"}>{c.acknowledged ? "Yes" : "Pending"}</Badge></Td>
                   <Td><div className="flex gap-1">
@@ -239,88 +333,102 @@ export function Challans() {
         <div className="grid sm:grid-cols-3 gap-3">
           <div><Label>Challan No.</Label><Input value={form.number} disabled/></div>
           <div><Label>Date</Label><Input type="date" value={form.date} onChange={(e: any) => setForm({...form, date: e.target.value})}/></div>
-          <div><Label>Job Card</Label>
+          <div>
+            <Label>Job Card *</Label>
             <Select value={form.jobCardId || ""} onChange={(e: any) => applyJobCard(e.target.value)} data-testid="dc-jobcard-select">
               <option value="">— Select Job Card —</option>
-              {db.jobCards.map(j => {
+              {dispatchableJobCards.map(j => {
                 const so = db.salesOrders.find(s => s.id === j.salesOrderId);
-                return <option key={j.id} value={j.id}>{j.number} · {j.product} · Qty {j.qty}{so ? ` · ${so.number}` : ""}</option>;
+                const completed = jobCardCompletedQty(j, db.productionEntries);
+                const disp = sumDispatchedFromJC(db.challans, j.id, edit?.id);
+                const avail = Math.max(0, completed - disp);
+                return <option key={j.id} value={j.id}>{j.number} · {j.product} · Ready {completed}/{j.qty} · Available {avail}{so ? ` · ${so.number}` : ""}</option>;
               })}
             </Select>
           </div>
-          <div><Label>Sales Order</Label>
-            <Select value={form.salesOrderId} onChange={(e: any) => applySalesOrder(e.target.value)} data-testid="dc-so-select">
-              <option value="">— Select —</option>
-              {db.salesOrders.map(s => <option key={s.id} value={s.id}>{s.number}</option>)}
-            </Select>
+          <div>
+            <Label>Sales Order (auto)</Label>
+            <Input value={currentSO?.number || ""} disabled placeholder="Auto-set from Job Card" data-testid="dc-so-display" />
           </div>
-          <div className="sm:col-span-2"><Label>Customer</Label>
-            <Select value={form.customerId} onChange={(e: any) => setForm({...form, customerId: e.target.value})}>
-              <option value="">— Select —</option>
-              {db.parties.filter(p => p.type === "customer").map(p => <option key={p.id} value={p.id}>{p.name}{p.city ? ` · ${p.city}` : ""}</option>)}
-            </Select>
+          <div className="sm:col-span-2">
+            <Label>Customer</Label>
+            <Input value={db.parties.find(p => p.id === form.customerId)?.name || ""} disabled placeholder="Auto-set from Sales Order" />
           </div>
         </div>
 
-        {rows.length > 0 && (
+        {!currentJC && (
+          <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-700 p-3 text-sm text-amber-800 dark:text-amber-200" data-testid="dc-no-jc-warning">
+            <b>Job Card is required.</b> Dispatch is only allowed against a Job Card and up to its completed quantity. If no Job Card exists for this Sales Order, please create one in <b>Production</b> first.
+            {dispatchableJobCards.length === 0 && <div className="mt-1 text-xs">Also: no Job Cards currently have completed (Dispatch Ready) quantity available for dispatch.</div>}
+          </div>
+        )}
+
+        {currentJC && (
+          <div className="mt-4 rounded-lg border border-teal-300 bg-teal-50 dark:bg-teal-900/20 dark:border-teal-700 p-3 text-sm" data-testid="dc-jc-info">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+              <span><b>Job Card:</b> <span className="font-mono">{currentJC.number}</span></span>
+              <span><b>Product:</b> {currentJC.product}</span>
+              <span><b>JC Qty:</b> {currentJC.qty}</span>
+              <span><b>Completed (Dispatch Ready):</b> {jcCompletedNow}</span>
+              <span><b>Already Dispatched from JC:</b> {jcAlreadyDispatchedNow}</span>
+              <Badge color={jcAvailable > 0 ? "green" : "red"}>Available to Dispatch: {jcAvailable}</Badge>
+            </div>
+          </div>
+        )}
+
+        {row && (
           <div className="mt-4 border border-slate-200 dark:border-slate-700 rounded-lg overflow-x-auto">
             <Table>
               <thead>
                 <tr>
                   <Th>Item</Th>
-                  <Th className="text-right">Ordered</Th>
-                  <Th className="text-right">Already Dispatched</Th>
-                  <Th className="text-right">Current Dispatch</Th>
-                  <Th className="text-right">Balance</Th>
+                  <Th className="text-right">SO Qty</Th>
+                  <Th className="text-right">SO Dispatched</Th>
+                  <Th className="text-right">JC Completed</Th>
+                  <Th className="text-right">This Dispatch</Th>
+                  <Th className="text-right">Cap</Th>
                   <Th className="text-right">Rate</Th>
                   <Th className="text-right">GST%</Th>
                   <Th className="text-right">Amount</Th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r, i) => {
-                  const remainingAfter = Math.max(0, r.balance - r.currentQty);
-                  const over = r.currentQty > r.balance;
+                {(() => {
+                  const soBalance = Math.max(0, row.ordered - row.alreadyDispatched);
+                  const jcRemaining = Math.max(0, row.jcCompleted - row.jcAlreadyDispatched);
+                  const cap = Math.min(soBalance, jcRemaining);
+                  const over = row.currentQty > cap;
                   return (
-                    <tr key={i} className={over ? "bg-rose-50 dark:bg-rose-900/20" : ""}>
-                      <Td className="font-medium">{r.name}</Td>
-                      <Td className="text-right">{r.ordered}</Td>
-                      <Td className="text-right">{r.alreadyDispatched}</Td>
+                    <tr className={over ? "bg-rose-50 dark:bg-rose-900/20" : ""}>
+                      <Td className="font-medium">{row.name}</Td>
+                      <Td className="text-right">{row.ordered}</Td>
+                      <Td className="text-right">{row.alreadyDispatched}</Td>
+                      <Td className="text-right">{row.jcCompleted}</Td>
                       <Td className="text-right">
                         <Input
                           type="number"
-                          value={r.currentQty}
+                          value={row.currentQty}
                           min={0}
-                          max={r.balance}
+                          max={cap}
                           onChange={(e: any) => {
                             const v = Number(e.target.value) || 0;
-                            updateRow(i, { currentQty: Math.max(0, v) });
+                            updateRow({ currentQty: Math.max(0, v) });
                           }}
                           className={"w-24 text-right py-1 h-8 " + (over ? "border-rose-500" : "")}
-                          data-testid={`dc-current-${i}`}
+                          data-testid="dc-current-qty"
                         />
                       </Td>
-                      <Td className={"text-right font-semibold " + (over ? "text-rose-600" : "text-emerald-600")}>{remainingAfter}</Td>
+                      <Td className={"text-right font-semibold " + (over ? "text-rose-600" : "text-emerald-600")} data-testid="dc-cap">{cap}</Td>
                       <Td className="text-right">
-                        <Input
-                          type="number"
-                          value={r.rate}
-                          onChange={(e: any) => updateRow(i, { rate: Number(e.target.value) || 0 })}
-                          className="w-24 text-right py-1 h-8"
-                        />
+                        <Input type="number" value={row.rate} onChange={(e: any) => updateRow({ rate: Number(e.target.value) || 0 })} className="w-24 text-right py-1 h-8"/>
                       </Td>
                       <Td className="text-right">
-                        <Input
-                          type="number"
-                          value={r.gst}
-                          onChange={(e: any) => updateRow(i, { gst: Number(e.target.value) || 0 })}
-                          className="w-16 text-right py-1 h-8"
-                        />
+                        <Input type="number" value={row.gst} onChange={(e: any) => updateRow({ gst: Number(e.target.value) || 0 })} className="w-16 text-right py-1 h-8"/>
                       </Td>
-                      <Td className="text-right font-medium">{fmtINR(r.currentQty * r.rate)}</Td>
+                      <Td className="text-right font-medium">{fmtINR(row.currentQty * row.rate)}</Td>
                     </tr>
                   );
-                })}
+                })()}
               </tbody>
             </Table>
           </div>
@@ -353,8 +461,24 @@ export function Challans() {
 
         <div className="mt-5 flex justify-end gap-2">
           <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-          <Button onClick={save} data-testid="dc-save-btn">{edit ? "Update" : "Create"}</Button>
+          <Button onClick={save} disabled={!currentJC} data-testid="dc-save-btn">{edit ? "Update" : "Create"}</Button>
         </div>
+      </Modal>
+
+      <Modal open={!!balancePrompt} onClose={() => setBalancePrompt(null)} title="Sales Order still has balance" size="md">
+        {balancePrompt && (
+          <div className="space-y-3 text-sm">
+            <div className="rounded-lg border border-emerald-300 bg-emerald-50 dark:bg-emerald-900/20 dark:border-emerald-700 p-3">
+              <b>Job Card {balancePrompt.parentJc.number} is now fully dispatched and marked Completed.</b>
+              <div className="mt-1">Sales Order <span className="font-mono">{balancePrompt.so.number}</span> still has <b>{balancePrompt.balance}</b> nos of <b>{balancePrompt.parentJc.product}</b> pending.</div>
+            </div>
+            <p className="text-slate-600 dark:text-slate-300">Do you want to create a new Job Card for the remaining quantity so production can continue?</p>
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-700">
+              <Button variant="outline" onClick={() => setBalancePrompt(null)} data-testid="dc-balance-later">Later</Button>
+              <Button onClick={createBalanceJobCard} data-testid="dc-balance-create-jc"><IconPlus size={14}/> Create Job Card for {balancePrompt.balance} nos</Button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );
