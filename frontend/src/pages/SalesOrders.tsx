@@ -113,20 +113,20 @@ export function SalesOrders() {
   }, [monthBuckets, relevantChallans]);
 
   const topCustomersFull = useMemo(() => {
-    const map = new Map<string, { customerId: string; name: string; qty: number; value: number; dcCount: number }>();
-    relevantChallans.forEach(c => {
-      const items = (c.items || []);
-      const qty = items.reduce((a, b) => a + (Number(b.qty) || 0), 0);
-      const val = items.reduce((a, b) => a + (Number(b.qty) || 0) * (Number(b.rate) || 0), 0) + (Number(c.freight) || 0);
-      const name = db.parties.find(p => p.id === c.customerId)?.name || "—";
-      const existing = map.get(c.customerId);
-      if (existing) { existing.qty += qty; existing.value += val; existing.dcCount += 1; }
-      else map.set(c.customerId, { customerId: c.customerId, name, qty, value: val, dcCount: 1 });
+    // Based on SALES ORDERS (ordered qty × rate + freight)
+    const map = new Map<string, { customerId: string; name: string; qty: number; value: number; soCount: number }>();
+    list.forEach(o => {
+      const qty = o.items.reduce((a, b) => a + (Number(b.qty) || 0), 0);
+      const val = o.items.reduce((a, b) => a + (Number(b.qty) || 0) * (Number(b.rate) || 0), 0) + (Number(o.freight) || 0);
+      const name = db.parties.find(p => p.id === o.customerId)?.name || "—";
+      const existing = map.get(o.customerId);
+      if (existing) { existing.qty += qty; existing.value += val; existing.soCount += 1; }
+      else map.set(o.customerId, { customerId: o.customerId, name, qty, value: val, soCount: 1 });
     });
     return Array.from(map.values())
       .sort((a, b) => customerMetric === "value" ? b.value - a.value : b.qty - a.qty)
       .slice(0, 10);
-  }, [relevantChallans, db.parties, customerMetric]);
+  }, [list, db.parties, customerMetric]);
 
   const topCustomers = useMemo(() =>
     topCustomersFull.map(x => ({
@@ -386,7 +386,7 @@ export function SalesOrders() {
         <Card>
           <CardHeader
             title={customerMetric === "value" ? "Top 10 Customers (₹K)" : "Top 10 Customers (Nos)"}
-            subtitle="From actual Delivery Challans dispatched · click any bar for details"
+            subtitle="From Sales Orders · click any bar for details"
             right={
               <div className="flex items-center gap-1 text-[11px]">
                 <button
@@ -759,12 +759,17 @@ export function SalesOrders() {
         {customerDrill && (() => {
           const agg = topCustomersFull.find(x => x.customerId === customerDrill);
           const cust = db.parties.find(p => p.id === customerDrill);
-          const custDCs = relevantChallans.filter(c => c.customerId === customerDrill)
+          const custSOs = list.filter(o => o.customerId === customerDrill)
             .slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-          const custSOIds = new Set(custDCs.map(c => c.salesOrderId).filter(Boolean));
-          const custSOs = list.filter(o => custSOIds.has(o.id) || o.customerId === customerDrill);
-          const totalQty = custDCs.reduce((s, c) => s + (c.items || []).reduce((a, i) => a + (Number(i.qty) || 0), 0), 0);
-          const totalValue = custDCs.reduce((s, c) => {
+          const custSOIds = new Set(custSOs.map(o => o.id));
+          const custDCs = relevantChallans.filter(c => c.customerId === customerDrill || custSOIds.has(c.salesOrderId))
+            .slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+          // Totals from Sales Orders (as requested)
+          const totalQty = custSOs.reduce((s, o) => s + o.items.reduce((a, i) => a + (Number(i.qty) || 0), 0), 0);
+          const totalValue = custSOs.reduce((s, o) => s + o.items.reduce((a, i) => a + (Number(i.qty) || 0) * (Number(i.rate) || 0) * (1 + (Number(i.gst) || 0) / 100), 0) + (Number(o.freight) || 0), 0);
+          // Dispatched (DC-based) for reference
+          const dcQty = custDCs.reduce((s, c) => s + (c.items || []).reduce((a, i) => a + (Number(i.qty) || 0), 0), 0);
+          const dcValue = custDCs.reduce((s, c) => {
             const items = (c.items || []);
             return s + items.reduce((a, i) => a + (Number(i.qty) || 0) * (Number(i.rate) || 0) * (1 + (Number(i.gst) || 0) / 100), 0) + (Number(c.freight) || 0);
           }, 0);
@@ -784,40 +789,18 @@ export function SalesOrders() {
                 <div className="rounded-lg border border-emerald-200 dark:border-emerald-800 p-3 bg-emerald-50 dark:bg-emerald-900/20">
                   <div className="text-[11px] uppercase tracking-wide text-emerald-700 dark:text-emerald-300">Total Sales Quantity</div>
                   <div className="text-2xl font-bold text-emerald-800 dark:text-emerald-200" data-testid="cust-drill-qty">{totalQty} <span className="text-xs font-normal">Nos</span></div>
+                  <div className="text-[10px] text-slate-500 mt-0.5">From Sales Orders</div>
                 </div>
                 <div className="rounded-lg border border-indigo-200 dark:border-indigo-800 p-3 bg-indigo-50 dark:bg-indigo-900/20">
                   <div className="text-[11px] uppercase tracking-wide text-indigo-700 dark:text-indigo-300">Total Sales Amount</div>
                   <div className="text-2xl font-bold text-indigo-800 dark:text-indigo-200" data-testid="cust-drill-value">{fmtINR(totalValue)}</div>
+                  <div className="text-[10px] text-slate-500 mt-0.5">From Sales Orders (incl GST + Freight)</div>
                 </div>
-                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
-                  <div className="text-[11px] uppercase tracking-wide text-slate-500">Delivery Challans</div>
-                  <div className="text-2xl font-bold">{custDCs.length}</div>
-                </div>
-              </div>
-
-              <div>
-                <div className="text-sm font-semibold mb-2">Delivery Challans ({custDCs.length})</div>
-                <div className="rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden max-h-72 overflow-y-auto">
-                  <Table>
-                    <thead><tr><Th>DC #</Th><Th>Date</Th><Th>SO</Th><Th className="text-right">Qty</Th><Th className="text-right">Value</Th></tr></thead>
-                    <tbody>
-                      {custDCs.length === 0 && <tr><Td colSpan={5} className="text-center text-slate-500 py-6">No DCs for this customer</Td></tr>}
-                      {custDCs.map(c => {
-                        const qty = (c.items || []).reduce((a, i) => a + (Number(i.qty) || 0), 0);
-                        const val = (c.items || []).reduce((a, i) => a + (Number(i.qty) || 0) * (Number(i.rate) || 0) * (1 + (Number(i.gst) || 0) / 100), 0) + (Number(c.freight) || 0);
-                        const so = db.salesOrders.find(s => s.id === c.salesOrderId);
-                        return (
-                          <tr key={c.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                            <Td className="font-mono text-xs">{c.number}</Td>
-                            <Td>{c.date}</Td>
-                            <Td className="font-mono text-xs">{so?.number || "—"}</Td>
-                            <Td className="text-right">{qty}</Td>
-                            <Td className="text-right font-medium">{fmtINR(val)}</Td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </Table>
+                <div className="rounded-lg border border-teal-200 dark:border-teal-800 p-3 bg-teal-50 dark:bg-teal-900/20">
+                  <div className="text-[11px] uppercase tracking-wide text-teal-700 dark:text-teal-300">Dispatched (DC)</div>
+                  <div className="text-lg font-bold text-teal-700 dark:text-teal-300">{dcQty} <span className="text-[10px] font-normal">Nos</span></div>
+                  <div className="text-xs font-semibold text-teal-700 dark:text-teal-300">{fmtINR(dcValue)}</div>
+                  <div className="text-[10px] text-slate-500 mt-0.5">{custDCs.length} DC{custDCs.length === 1 ? "" : "s"}</div>
                 </div>
               </div>
 
@@ -840,6 +823,32 @@ export function SalesOrders() {
                             <Td className="text-right">{oQty}</Td>
                             <Td className="text-right font-medium">{fmtINR(oVal)}</Td>
                             <Td><Badge color={o.status === "Delivered" ? "green" : o.status === "In Production" ? "amber" : "slate"}>{o.status}</Badge></Td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </Table>
+                </div>
+              </div>
+
+              <div>
+                <div className="text-sm font-semibold mb-2">Delivery Challans ({custDCs.length})</div>
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden max-h-72 overflow-y-auto">
+                  <Table>
+                    <thead><tr><Th>DC #</Th><Th>Date</Th><Th>SO</Th><Th className="text-right">Qty</Th><Th className="text-right">Value</Th></tr></thead>
+                    <tbody>
+                      {custDCs.length === 0 && <tr><Td colSpan={5} className="text-center text-slate-500 py-6">No DCs for this customer</Td></tr>}
+                      {custDCs.map(c => {
+                        const qty = (c.items || []).reduce((a, i) => a + (Number(i.qty) || 0), 0);
+                        const val = (c.items || []).reduce((a, i) => a + (Number(i.qty) || 0) * (Number(i.rate) || 0) * (1 + (Number(i.gst) || 0) / 100), 0) + (Number(c.freight) || 0);
+                        const so = db.salesOrders.find(s => s.id === c.salesOrderId);
+                        return (
+                          <tr key={c.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                            <Td className="font-mono text-xs">{c.number}</Td>
+                            <Td>{c.date}</Td>
+                            <Td className="font-mono text-xs">{so?.number || "—"}</Td>
+                            <Td className="text-right">{qty}</Td>
+                            <Td className="text-right font-medium">{fmtINR(val)}</Td>
                           </tr>
                         );
                       })}
