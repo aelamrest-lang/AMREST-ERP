@@ -33,6 +33,43 @@ export function SalesOrders() {
     return arr.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }, [db.salesOrders, isAdmin, currentUser]);
 
+  // ---- SO Summary (auto-derived from Delivery Challans) ----
+  const summary = useMemo(() => {
+    let inHandCount = 0, inHandQty = 0, inHandValue = 0;
+    let pendingCount = 0, pendingQty = 0, pendingValue = 0;
+    let completedCount = 0, completedQty = 0, completedValue = 0;
+
+    for (const o of list) {
+      const orderedQty = o.items.reduce((s, i) => s + (Number(i.qty) || 0), 0);
+      const orderedValue = o.items.reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.rate) || 0) * (1 + (Number(i.gst) || 0) / 100), 0) + (Number(o.freight) || 0);
+
+      // Dispatched from Delivery Challans linked to this SO
+      const dcs = db.challans.filter(c => c.salesOrderId === o.id);
+      const dispatchedQty = dcs.reduce((s, c) => s + (c.items || []).reduce((a, i) => a + (Number(i.qty) || 0), 0), 0);
+      const dispatchedValue = dcs.reduce((s, c) => s + (c.items || []).reduce((a, i) => a + (Number(i.qty) || 0) * (Number(i.rate) || 0) * (1 + (Number(i.gst) || 0) / 100), 0) + (Number(c.freight) || 0), 0);
+
+      const balanceQty = Math.max(0, orderedQty - dispatchedQty);
+      const balanceValue = Math.max(0, orderedValue - dispatchedValue);
+      const isCompleted = orderedQty > 0 && balanceQty === 0;
+
+      if (isCompleted) {
+        completedCount += 1;
+        completedQty += orderedQty;
+        completedValue += orderedValue;
+      } else {
+        inHandCount += 1;
+        inHandQty += orderedQty;
+        inHandValue += orderedValue;
+        if (balanceQty > 0) {
+          pendingCount += 1;
+          pendingQty += balanceQty;
+          pendingValue += balanceValue;
+        }
+      }
+    }
+    return { inHandCount, inHandQty, inHandValue, pendingCount, pendingQty, pendingValue, completedCount, completedQty, completedValue };
+  }, [list, db.challans]);
+
   const customers = db.parties.filter(p => p.type === "customer" && (isAdmin || p.ownerId === currentUser?.id));
 
   const blank = (): SalesOrder => ({
@@ -197,6 +234,71 @@ export function SalesOrders() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div><h1 className="text-2xl font-bold">Sales Orders</h1><p className="text-sm text-slate-500">Confirmed orders, delivery schedules and dispatch tracking</p></div>
         {canCreate && <Button onClick={openNew} data-testid="new-so-btn"><IconPlus size={14}/> New Sales Order</Button>}
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-3">
+        <div className="rounded-xl border border-indigo-200 dark:border-indigo-800 bg-gradient-to-br from-indigo-50 to-white dark:from-indigo-900/30 dark:to-slate-900 p-4" data-testid="so-summary-in-hand">
+          <div className="flex items-start justify-between">
+            <div>
+              <div className="text-[11px] uppercase tracking-wide text-indigo-700 dark:text-indigo-300 font-semibold">Total Orders in Hand</div>
+              <div className="text-3xl font-bold text-indigo-800 dark:text-indigo-200 mt-1" data-testid="so-summary-in-hand-count">{summary.inHandCount}</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">Active orders not yet fully dispatched</div>
+            </div>
+            <div className="text-2xl" aria-hidden>📥</div>
+          </div>
+          <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-indigo-100 dark:border-indigo-800/60">
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-slate-500">Order Qty</div>
+              <div className="text-base font-semibold text-slate-800 dark:text-slate-100" data-testid="so-summary-in-hand-qty">{summary.inHandQty} <span className="text-[10px] text-slate-500 font-normal">Nos</span></div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-slate-500">Order Value</div>
+              <div className="text-base font-semibold text-slate-800 dark:text-slate-100" data-testid="so-summary-in-hand-value">{fmtINR(summary.inHandValue)}</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-gradient-to-br from-amber-50 to-white dark:from-amber-900/30 dark:to-slate-900 p-4" data-testid="so-summary-pending">
+          <div className="flex items-start justify-between">
+            <div>
+              <div className="text-[11px] uppercase tracking-wide text-amber-700 dark:text-amber-300 font-semibold">Pending Orders</div>
+              <div className="text-3xl font-bold text-amber-800 dark:text-amber-200 mt-1" data-testid="so-summary-pending-count">{summary.pendingCount}</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">Orders with remaining balance qty</div>
+            </div>
+            <div className="text-2xl" aria-hidden>⏳</div>
+          </div>
+          <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-amber-100 dark:border-amber-800/60">
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-slate-500">Balance Qty</div>
+              <div className="text-base font-semibold text-slate-800 dark:text-slate-100" data-testid="so-summary-pending-qty">{summary.pendingQty} <span className="text-[10px] text-slate-500 font-normal">Nos</span></div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-slate-500">Balance Value</div>
+              <div className="text-base font-semibold text-slate-800 dark:text-slate-100" data-testid="so-summary-pending-value">{fmtINR(summary.pendingValue)}</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-emerald-200 dark:border-emerald-800 bg-gradient-to-br from-emerald-50 to-white dark:from-emerald-900/30 dark:to-slate-900 p-4" data-testid="so-summary-completed">
+          <div className="flex items-start justify-between">
+            <div>
+              <div className="text-[11px] uppercase tracking-wide text-emerald-700 dark:text-emerald-300 font-semibold">Completed Orders</div>
+              <div className="text-3xl font-bold text-emerald-800 dark:text-emerald-200 mt-1" data-testid="so-summary-completed-count">{summary.completedCount}</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">Full ordered qty dispatched</div>
+            </div>
+            <div className="text-2xl" aria-hidden>✅</div>
+          </div>
+          <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-emerald-100 dark:border-emerald-800/60">
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-slate-500">Delivered Qty</div>
+              <div className="text-base font-semibold text-slate-800 dark:text-slate-100" data-testid="so-summary-completed-qty">{summary.completedQty} <span className="text-[10px] text-slate-500 font-normal">Nos</span></div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-slate-500">Delivered Value</div>
+              <div className="text-base font-semibold text-slate-800 dark:text-slate-100" data-testid="so-summary-completed-value">{fmtINR(summary.completedValue)}</div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <Card>
