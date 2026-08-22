@@ -293,6 +293,7 @@ export function Dashboard() {
 
       <DelayedDeliveries salesOrders={salesOrders} db={db} />
       <OverduePOs db={db} />
+      <ReadyNotDispatched db={db} />
 
       <div className="grid lg:grid-cols-2 gap-5">
         <Card>
@@ -591,6 +592,87 @@ function OverduePOs({ db }: { db: any }) {
               </div>
             );
           })}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function ReadyNotDispatched({ db }: { db: any }) {
+  const [threshold, setThreshold] = useState<number>(7);
+
+  const rows = db.jobCards
+    .map((jc: any) => {
+      let ready = 0;
+      if (jc.status === "Completed") ready = jc.qty;
+      else {
+        const drEntries = db.productionEntries.filter((e: any) => e.jobCardId === jc.id && e.stage === "Dispatch Ready");
+        ready = Math.min(jc.qty, drEntries.reduce((s: number, e: any) => s + (Number(e.todayQty) || 0), 0));
+      }
+      const dispatched = db.challans
+        .filter((c: any) => c.jobCardId === jc.id)
+        .flatMap((c: any) => c.items || [])
+        .reduce((s: number, i: any) => s + (Number(i.qty) || 0), 0);
+      const remaining = Math.max(0, ready - dispatched);
+      if (remaining <= 0) return null;
+      const readyDates = db.productionEntries
+        .filter((e: any) => e.jobCardId === jc.id && e.stage === "Dispatch Ready")
+        .map((e: any) => e.date)
+        .filter(Boolean);
+      const earliestReady = readyDates.length ? readyDates.sort()[0] : jc.date;
+      const daysSinceReady = Math.max(0, Math.floor((Date.now() - new Date(earliestReady).getTime()) / (1000 * 60 * 60 * 24)));
+      const so = jc.salesOrderId ? db.salesOrders.find((s: any) => s.id === jc.salesOrderId) : null;
+      const cust = so ? db.parties.find((p: any) => p.id === so.customerId) : null;
+      return { jc, ready, dispatched, remaining, earliestReady, daysSinceReady, so, cust };
+    })
+    .filter((r: any) => r && r.daysSinceReady > threshold)
+    .sort((a: any, b: any) => b.daysSinceReady - a.daysSinceReady);
+
+  return (
+    <Card data-testid="dashboard-ready-not-dispatched">
+      <CardHeader
+        title={<span className="inline-flex items-center gap-2">Ready but Not Dispatched <span className="text-[10px] text-slate-500 font-normal">(sitting more than {threshold} day{threshold === 1 ? "" : "s"})</span></span>}
+        right={
+          <div className="flex items-center gap-2">
+            <label className="text-[11px] text-slate-500">Threshold</label>
+            <input
+              type="number"
+              min={0}
+              value={threshold}
+              onChange={(e) => setThreshold(Math.max(0, Number(e.target.value) || 0))}
+              className="w-16 text-right px-2 py-1 h-7 rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-xs"
+              data-testid="ready-not-dispatched-threshold"
+            />
+            <span className="text-[11px] text-slate-500">days</span>
+            <Badge color={rows.length ? "red" : "green"}>{rows.length}</Badge>
+          </div>
+        }
+      />
+      {rows.length === 0 ? (
+        <div className="p-4"><Empty title={`No Job Cards sitting Ready for more than ${threshold} day${threshold === 1 ? "" : "s"}`} /></div>
+      ) : (
+        <div className="p-4 space-y-2 max-h-80 overflow-y-auto">
+          {rows.map(({ jc, ready, dispatched, remaining, earliestReady, daysSinceReady, so, cust }: any) => (
+            <div key={jc.id} className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2" data-testid={`ready-not-dispatched-row-${jc.id}`}>
+              <div className="min-w-0">
+                <div className="font-medium text-slate-700 dark:text-slate-200 truncate flex items-center gap-1.5">
+                  <span aria-hidden>📦</span>
+                  <span className="font-mono text-xs mr-1 text-slate-500">{jc.number}</span>
+                  <span className="truncate">{jc.product}</span>
+                </div>
+                <div className="text-xs text-slate-500 mt-0.5">
+                  Ready <b className="text-emerald-600">{ready}</b> · Dispatched <b>{dispatched}</b> · Pending <b className="text-rose-600">{remaining}</b>
+                  {so ? <> · SO <span className="font-mono">{so.number}</span></> : null}
+                  {cust ? <> · {cust.name}</> : null}
+                </div>
+                <div className="text-[11px] text-slate-500 mt-0.5">Ready since <b>{earliestReady}</b></div>
+              </div>
+              <div className="text-right shrink-0 ml-3">
+                <Badge color={daysSinceReady > threshold * 2 ? "red" : "yellow"}>{daysSinceReady} {daysSinceReady === 1 ? "Day" : "Days"}</Badge>
+                <div className="text-[10px] text-slate-500 mt-1 uppercase tracking-wide">Sitting Idle</div>
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </Card>

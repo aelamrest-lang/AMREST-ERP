@@ -107,6 +107,7 @@ export function Challans() {
   const [open, setOpen] = useState(false);
   const [edit, setEdit] = useState<DeliveryChallan | null>(null);
   const [balancePrompt, setBalancePrompt] = useState<{ so: SalesOrder; parentJc: JobCard; balance: number } | null>(null);
+  const [viewDC, setViewDC] = useState<DeliveryChallan | null>(null);
 
   const blank = (): DeliveryChallan => ({
     id: "", number: nextNumber("DC", db.challans), date: todayISO(),
@@ -331,7 +332,15 @@ export function Challans() {
               const totalUnits = (c.items || []).reduce((s, i) => s + i.qty, 0);
               return (
                 <tr key={c.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                  <Td className="font-mono text-xs">{c.number}</Td>
+                  <Td className="font-mono text-xs">
+                    <button
+                      type="button"
+                      className="text-indigo-600 hover:underline"
+                      onClick={() => setViewDC(c)}
+                      title="View full Delivery Challan details"
+                      data-testid={`dc-view-${c.number}`}
+                    >{c.number}</button>
+                  </Td>
                   <Td>{c.date}</Td>
                   <Td>{db.salesOrders.find(s => s.id === c.salesOrderId)?.number || "—"}</Td>
                   <Td>{db.jobCards.find(j => j.id === c.jobCardId)?.number || "—"}</Td>
@@ -533,6 +542,124 @@ export function Challans() {
           <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
           <Button onClick={save} disabled={!currentJC} data-testid="dc-save-btn">{edit ? "Update" : "Create"}</Button>
         </div>
+      </Modal>
+
+      <Modal open={!!viewDC} onClose={() => setViewDC(null)} title={viewDC ? `Delivery Challan · ${viewDC.number}` : "Delivery Challan"} size="xl">
+        {viewDC && (() => {
+          const c = viewDC;
+          const so = db.salesOrders.find(s => s.id === c.salesOrderId);
+          const jc = db.jobCards.find(j => j.id === c.jobCardId);
+          const cust = db.parties.find(p => p.id === c.customerId);
+          const t = calcDocTotalsWithFreight((c.items || []).map(i => ({ qty: i.qty, rate: i.rate, gst: i.gst })), Number(c.freight) || 0);
+          const totalUnits = (c.items || []).reduce((s, i) => s + i.qty, 0);
+          return (
+            <div className="space-y-4 text-sm">
+              <div className="grid sm:grid-cols-3 gap-3">
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-slate-50 dark:bg-slate-800/40">
+                  <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Challan</div>
+                  <div><span className="text-slate-500">No.:</span> <b className="font-mono">{c.number}</b></div>
+                  <div><span className="text-slate-500">Date:</span> <b>{c.date}</b></div>
+                  <div><span className="text-slate-500">Ack:</span> <Badge color={c.acknowledged ? "green" : "yellow"}>{c.acknowledged ? "Received" : "Pending"}</Badge></div>
+                </div>
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-slate-50 dark:bg-slate-800/40 sm:col-span-2">
+                  <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Consignee</div>
+                  <div className="font-semibold text-slate-800 dark:text-slate-100">{cust?.name || "—"}</div>
+                  {cust?.address && <div className="text-xs text-slate-500">{cust.address}{cust?.city ? `, ${cust.city}` : ""}</div>}
+                  <div className="text-xs text-slate-500 mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+                    {cust?.gst && <span>GST: <b>{cust.gst}</b></span>}
+                    {cust?.mobile && <span>Mobile: <b>{cust.mobile}</b></span>}
+                    {cust?.contactPerson && <span>Contact: <b>{cust.contactPerson}</b></span>}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid sm:grid-cols-4 gap-3">
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
+                  <div className="text-[11px] text-slate-500">Sales Order</div>
+                  <div className="text-base font-semibold font-mono">{so?.number || "—"}</div>
+                </div>
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
+                  <div className="text-[11px] text-slate-500">Job Card</div>
+                  <div className="text-base font-semibold font-mono">{jc?.number || "—"}</div>
+                  {jc && <div className="text-[10px] text-slate-500 mt-0.5">{jc.product}</div>}
+                </div>
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
+                  <div className="text-[11px] text-slate-500">Dispatched Qty</div>
+                  <div className="text-base font-semibold">{totalUnits}</div>
+                </div>
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
+                  <div className="text-[11px] text-slate-500">Grand Total</div>
+                  <div className="text-base font-semibold text-emerald-600">{fmtINR(t.total)}</div>
+                </div>
+              </div>
+
+              <div>
+                <div className="text-sm font-semibold mb-2">Items Dispatched</div>
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
+                  <Table>
+                    <thead>
+                      <tr>
+                        <Th>#</Th>
+                        <Th>Item</Th>
+                        <Th className="text-right">SO Qty</Th>
+                        <Th className="text-right">Prev Dispatched</Th>
+                        <Th className="text-right">This Dispatch</Th>
+                        <Th className="text-right">SO Balance After</Th>
+                        <Th className="text-right">Rate</Th>
+                        <Th className="text-right">GST%</Th>
+                        <Th className="text-right">Amount</Th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(c.items || []).map((i, idx) => {
+                        const ordered = so?.items.find(x => x.name === i.name)?.qty ?? 0;
+                        const otherDispatched = sumDispatched(db.challans, c.salesOrderId, i.name, c.id);
+                        const balanceAfter = Math.max(0, ordered - otherDispatched - i.qty);
+                        return (
+                          <tr key={idx}>
+                            <Td>{idx + 1}</Td>
+                            <Td className="font-medium">{i.name}</Td>
+                            <Td className="text-right">{ordered || "—"}</Td>
+                            <Td className="text-right">{otherDispatched}</Td>
+                            <Td className="text-right font-medium">{i.qty}</Td>
+                            <Td className="text-right">{ordered ? balanceAfter : "—"}</Td>
+                            <Td className="text-right">{fmtINR(i.rate)}</Td>
+                            <Td className="text-right">{i.gst}%</Td>
+                            <Td className="text-right font-medium">{fmtINR(i.qty * i.rate)}</Td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </Table>
+                </div>
+              </div>
+
+              <div className="grid sm:grid-cols-2 gap-3">
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-slate-50 dark:bg-slate-800/40">
+                  <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-2">Dispatch Details</div>
+                  <div className="space-y-1 text-xs">
+                    <div><span className="text-slate-500">Vehicle:</span> <b>{c.vehicle || "—"}</b></div>
+                    <div><span className="text-slate-500">Driver:</span> <b>{c.driver || "—"}</b></div>
+                    <div><span className="text-slate-500">Transport / LR:</span> <b>{c.transport || "—"}</b></div>
+                    <div><span className="text-slate-500">Acknowledgement:</span> <b>{c.acknowledged ? "Received" : "Pending"}</b></div>
+                  </div>
+                </div>
+                <div className="rounded-lg border p-3 bg-slate-50 dark:bg-slate-800/40 dark:border-slate-700 space-y-1">
+                  <div className="flex justify-between"><span>Sub Total</span><b>{fmtINR(t.sub)}</b></div>
+                  <div className="flex justify-between"><span>Freight</span><b>{fmtINR(t.freight)}</b></div>
+                  <div className="flex justify-between"><span>GST</span><b>{fmtINR(t.gst)}</b></div>
+                  <div className="flex justify-between text-base border-t pt-1 mt-1"><span>Total</span><b className="text-emerald-600">{fmtINR(t.total)}</b></div>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-700">
+                <Button variant="outline" onClick={() => setViewDC(null)}>Close</Button>
+                {canPrint && <Button variant="outline" onClick={() => printDC(c)} data-testid="dc-view-print"><IconPrint size={14}/> Print</Button>}
+                {canEdit && <Button onClick={() => { setViewDC(null); openEdit(c); }} data-testid="dc-view-edit"><IconEdit size={14}/> Edit</Button>}
+              </div>
+            </div>
+          );
+        })()}
       </Modal>
 
       <Modal open={!!balancePrompt} onClose={() => setBalancePrompt(null)} title="Sales Order still has balance" size="md">
