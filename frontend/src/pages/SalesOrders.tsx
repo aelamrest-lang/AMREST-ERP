@@ -112,22 +112,31 @@ export function SalesOrders() {
     });
   }, [monthBuckets, relevantChallans]);
 
-  const topCustomers = useMemo(() => {
-    const map = new Map<string, { name: string; qty: number; value: number }>();
+  const topCustomersFull = useMemo(() => {
+    const map = new Map<string, { customerId: string; name: string; qty: number; value: number; dcCount: number }>();
     relevantChallans.forEach(c => {
       const items = (c.items || []);
       const qty = items.reduce((a, b) => a + (Number(b.qty) || 0), 0);
       const val = items.reduce((a, b) => a + (Number(b.qty) || 0) * (Number(b.rate) || 0), 0) + (Number(c.freight) || 0);
       const name = db.parties.find(p => p.id === c.customerId)?.name || "—";
       const existing = map.get(c.customerId);
-      if (existing) { existing.qty += qty; existing.value += val; }
-      else map.set(c.customerId, { name, qty, value: val });
+      if (existing) { existing.qty += qty; existing.value += val; existing.dcCount += 1; }
+      else map.set(c.customerId, { customerId: c.customerId, name, qty, value: val, dcCount: 1 });
     });
     return Array.from(map.values())
       .sort((a, b) => customerMetric === "value" ? b.value - a.value : b.qty - a.qty)
-      .slice(0, 5)
-      .map(x => ({ label: x.name.length > 12 ? x.name.slice(0, 12) + "…" : x.name, value: customerMetric === "value" ? Math.round(x.value / 1000) : x.qty }));
+      .slice(0, 10);
   }, [relevantChallans, db.parties, customerMetric]);
+
+  const topCustomers = useMemo(() =>
+    topCustomersFull.map(x => ({
+      label: x.name.length > 14 ? x.name.slice(0, 14) + "…" : x.name,
+      value: customerMetric === "value" ? Math.round(x.value / 1000) : x.qty,
+    })),
+    [topCustomersFull, customerMetric]);
+
+  const [customerDrill, setCustomerDrill] = useState<string | null>(null); // customerId
+  const [monthDrill, setMonthDrill] = useState<string | null>(null); // YYYY-MM key
 
   const customers = db.parties.filter(p => p.type === "customer" && (isAdmin || p.ownerId === currentUser?.id));
 
@@ -364,16 +373,20 @@ export function SalesOrders() {
         <Card>
           <CardHeader
             title="Monthly Sales (₹ thousands)"
-            subtitle="Value of Delivery Challans dispatched in the last 12 months"
+            subtitle="Value of Delivery Challans dispatched · click any bar to drill in"
           />
           <div className="p-4">
-            <BarChart data={monthlySalesData} color="#6366f1" />
+            <BarChart
+              data={monthlySalesData}
+              color="#6366f1"
+              onBarClick={(i) => setMonthDrill(monthBuckets[i].key)}
+            />
           </div>
         </Card>
         <Card>
           <CardHeader
-            title={customerMetric === "value" ? "Top Customers (₹K)" : "Top Customers (Nos)"}
-            subtitle="From actual Delivery Challans dispatched"
+            title={customerMetric === "value" ? "Top 10 Customers (₹K)" : "Top 10 Customers (Nos)"}
+            subtitle="From actual Delivery Challans dispatched · click any bar for details"
             right={
               <div className="flex items-center gap-1 text-[11px]">
                 <button
@@ -393,7 +406,11 @@ export function SalesOrders() {
           />
           <div className="p-4">
             {topCustomers.length ? (
-              <BarChart data={topCustomers} color="#f59e0b" />
+              <BarChart
+                data={topCustomers}
+                color="#f59e0b"
+                onBarClick={(i) => setCustomerDrill(topCustomersFull[i].customerId)}
+              />
             ) : <Empty title="No Delivery Challans yet" />}
           </div>
         </Card>
@@ -732,6 +749,198 @@ export function SalesOrders() {
                 {canEdit && (
                   <Button onClick={() => { setViewOrder(null); openEdit(o); }} data-testid="so-view-edit"><IconEdit size={14}/> Edit</Button>
                 )}
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
+
+      <Modal open={!!customerDrill} onClose={() => setCustomerDrill(null)} title="Customer Sales Details" size="xl">
+        {customerDrill && (() => {
+          const agg = topCustomersFull.find(x => x.customerId === customerDrill);
+          const cust = db.parties.find(p => p.id === customerDrill);
+          const custDCs = relevantChallans.filter(c => c.customerId === customerDrill)
+            .slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+          const custSOIds = new Set(custDCs.map(c => c.salesOrderId).filter(Boolean));
+          const custSOs = list.filter(o => custSOIds.has(o.id) || o.customerId === customerDrill);
+          const totalQty = custDCs.reduce((s, c) => s + (c.items || []).reduce((a, i) => a + (Number(i.qty) || 0), 0), 0);
+          const totalValue = custDCs.reduce((s, c) => {
+            const items = (c.items || []);
+            return s + items.reduce((a, i) => a + (Number(i.qty) || 0) * (Number(i.rate) || 0) * (1 + (Number(i.gst) || 0) / 100), 0) + (Number(c.freight) || 0);
+          }, 0);
+          return (
+            <div className="space-y-4 text-sm">
+              <div className="grid sm:grid-cols-3 gap-3">
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-slate-50 dark:bg-slate-800/40 sm:col-span-3">
+                  <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Customer</div>
+                  <div className="font-semibold text-slate-800 dark:text-slate-100 text-base">{agg?.name || cust?.name || "—"}</div>
+                  {cust?.address && <div className="text-xs text-slate-500">{cust.address}{cust?.city ? `, ${cust.city}` : ""}</div>}
+                  <div className="text-xs text-slate-500 mt-1 flex flex-wrap gap-x-3">
+                    {cust?.gst && <span>GST: <b>{cust.gst}</b></span>}
+                    {cust?.mobile && <span>Mobile: <b>{cust.mobile}</b></span>}
+                    {cust?.contactPerson && <span>Contact: <b>{cust.contactPerson}</b></span>}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-emerald-200 dark:border-emerald-800 p-3 bg-emerald-50 dark:bg-emerald-900/20">
+                  <div className="text-[11px] uppercase tracking-wide text-emerald-700 dark:text-emerald-300">Total Sales Quantity</div>
+                  <div className="text-2xl font-bold text-emerald-800 dark:text-emerald-200" data-testid="cust-drill-qty">{totalQty} <span className="text-xs font-normal">Nos</span></div>
+                </div>
+                <div className="rounded-lg border border-indigo-200 dark:border-indigo-800 p-3 bg-indigo-50 dark:bg-indigo-900/20">
+                  <div className="text-[11px] uppercase tracking-wide text-indigo-700 dark:text-indigo-300">Total Sales Amount</div>
+                  <div className="text-2xl font-bold text-indigo-800 dark:text-indigo-200" data-testid="cust-drill-value">{fmtINR(totalValue)}</div>
+                </div>
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
+                  <div className="text-[11px] uppercase tracking-wide text-slate-500">Delivery Challans</div>
+                  <div className="text-2xl font-bold">{custDCs.length}</div>
+                </div>
+              </div>
+
+              <div>
+                <div className="text-sm font-semibold mb-2">Delivery Challans ({custDCs.length})</div>
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden max-h-72 overflow-y-auto">
+                  <Table>
+                    <thead><tr><Th>DC #</Th><Th>Date</Th><Th>SO</Th><Th className="text-right">Qty</Th><Th className="text-right">Value</Th></tr></thead>
+                    <tbody>
+                      {custDCs.length === 0 && <tr><Td colSpan={5} className="text-center text-slate-500 py-6">No DCs for this customer</Td></tr>}
+                      {custDCs.map(c => {
+                        const qty = (c.items || []).reduce((a, i) => a + (Number(i.qty) || 0), 0);
+                        const val = (c.items || []).reduce((a, i) => a + (Number(i.qty) || 0) * (Number(i.rate) || 0) * (1 + (Number(i.gst) || 0) / 100), 0) + (Number(c.freight) || 0);
+                        const so = db.salesOrders.find(s => s.id === c.salesOrderId);
+                        return (
+                          <tr key={c.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                            <Td className="font-mono text-xs">{c.number}</Td>
+                            <Td>{c.date}</Td>
+                            <Td className="font-mono text-xs">{so?.number || "—"}</Td>
+                            <Td className="text-right">{qty}</Td>
+                            <Td className="text-right font-medium">{fmtINR(val)}</Td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </Table>
+                </div>
+              </div>
+
+              <div>
+                <div className="text-sm font-semibold mb-2">Sales Orders ({custSOs.length})</div>
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden max-h-72 overflow-y-auto">
+                  <Table>
+                    <thead><tr><Th>SO #</Th><Th>Date</Th><Th className="text-right">Ordered Qty</Th><Th className="text-right">Order Value</Th><Th>Status</Th></tr></thead>
+                    <tbody>
+                      {custSOs.length === 0 && <tr><Td colSpan={5} className="text-center text-slate-500 py-6">No SOs for this customer</Td></tr>}
+                      {custSOs.map(o => {
+                        const oQty = o.items.reduce((s, i) => s + (Number(i.qty) || 0), 0);
+                        const oVal = o.items.reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.rate) || 0) * (1 + (Number(i.gst) || 0) / 100), 0) + (Number(o.freight) || 0);
+                        return (
+                          <tr key={o.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                            <Td className="font-mono text-xs">
+                              <button className="text-indigo-600 hover:underline" onClick={() => { setCustomerDrill(null); setViewOrder(o); }}>{o.number}</button>
+                            </Td>
+                            <Td>{o.date}</Td>
+                            <Td className="text-right">{oQty}</Td>
+                            <Td className="text-right font-medium">{fmtINR(oVal)}</Td>
+                            <Td><Badge color={o.status === "Delivered" ? "green" : o.status === "In Production" ? "amber" : "slate"}>{o.status}</Badge></Td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </Table>
+                </div>
+              </div>
+
+              <div className="flex justify-end pt-2 border-t border-slate-200 dark:border-slate-700">
+                <Button variant="outline" onClick={() => setCustomerDrill(null)}>Close</Button>
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
+
+      <Modal open={!!monthDrill} onClose={() => setMonthDrill(null)} title={monthDrill ? `Sales for ${monthBuckets.find(m => m.key === monthDrill)?.label} ${monthDrill.slice(0, 4)}` : "Monthly Sales"} size="xl">
+        {monthDrill && (() => {
+          const monthDCs = relevantChallans.filter(c => c.date && c.date.slice(0, 7) === monthDrill)
+            .slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+          const monthSOIds = new Set(monthDCs.map(c => c.salesOrderId).filter(Boolean));
+          const monthSOs = list.filter(o => monthSOIds.has(o.id));
+          const totalQty = monthDCs.reduce((s, c) => s + (c.items || []).reduce((a, i) => a + (Number(i.qty) || 0), 0), 0);
+          const totalValue = monthDCs.reduce((s, c) => {
+            const items = (c.items || []);
+            return s + items.reduce((a, i) => a + (Number(i.qty) || 0) * (Number(i.rate) || 0) * (1 + (Number(i.gst) || 0) / 100), 0) + (Number(c.freight) || 0);
+          }, 0);
+          return (
+            <div className="space-y-4 text-sm">
+              <div className="grid sm:grid-cols-3 gap-3">
+                <div className="rounded-lg border border-emerald-200 dark:border-emerald-800 p-3 bg-emerald-50 dark:bg-emerald-900/20">
+                  <div className="text-[11px] uppercase tracking-wide text-emerald-700 dark:text-emerald-300">Total Sales Quantity</div>
+                  <div className="text-2xl font-bold text-emerald-800 dark:text-emerald-200" data-testid="month-drill-qty">{totalQty} <span className="text-xs font-normal">Nos</span></div>
+                </div>
+                <div className="rounded-lg border border-indigo-200 dark:border-indigo-800 p-3 bg-indigo-50 dark:bg-indigo-900/20">
+                  <div className="text-[11px] uppercase tracking-wide text-indigo-700 dark:text-indigo-300">Total Sales Amount</div>
+                  <div className="text-2xl font-bold text-indigo-800 dark:text-indigo-200" data-testid="month-drill-value">{fmtINR(totalValue)}</div>
+                </div>
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
+                  <div className="text-[11px] uppercase tracking-wide text-slate-500">Delivery Challans</div>
+                  <div className="text-2xl font-bold">{monthDCs.length}</div>
+                </div>
+              </div>
+
+              <div>
+                <div className="text-sm font-semibold mb-2">Delivery Challans ({monthDCs.length})</div>
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden max-h-72 overflow-y-auto">
+                  <Table>
+                    <thead><tr><Th>DC #</Th><Th>Date</Th><Th>Customer</Th><Th>SO</Th><Th className="text-right">Qty</Th><Th className="text-right">Value</Th></tr></thead>
+                    <tbody>
+                      {monthDCs.length === 0 && <tr><Td colSpan={6} className="text-center text-slate-500 py-6">No DCs for this month</Td></tr>}
+                      {monthDCs.map(c => {
+                        const qty = (c.items || []).reduce((a, i) => a + (Number(i.qty) || 0), 0);
+                        const val = (c.items || []).reduce((a, i) => a + (Number(i.qty) || 0) * (Number(i.rate) || 0) * (1 + (Number(i.gst) || 0) / 100), 0) + (Number(c.freight) || 0);
+                        const so = db.salesOrders.find(s => s.id === c.salesOrderId);
+                        const cust = db.parties.find(p => p.id === c.customerId);
+                        return (
+                          <tr key={c.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                            <Td className="font-mono text-xs">{c.number}</Td>
+                            <Td>{c.date}</Td>
+                            <Td className="truncate max-w-[200px]">{cust?.name || "—"}</Td>
+                            <Td className="font-mono text-xs">{so?.number || "—"}</Td>
+                            <Td className="text-right">{qty}</Td>
+                            <Td className="text-right font-medium">{fmtINR(val)}</Td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </Table>
+                </div>
+              </div>
+
+              <div>
+                <div className="text-sm font-semibold mb-2">Sales Orders in this month's dispatches ({monthSOs.length})</div>
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden max-h-72 overflow-y-auto">
+                  <Table>
+                    <thead><tr><Th>SO #</Th><Th>Date</Th><Th>Customer</Th><Th className="text-right">Ordered Qty</Th><Th className="text-right">Order Value</Th></tr></thead>
+                    <tbody>
+                      {monthSOs.length === 0 && <tr><Td colSpan={5} className="text-center text-slate-500 py-6">No SOs to show</Td></tr>}
+                      {monthSOs.map(o => {
+                        const oQty = o.items.reduce((s, i) => s + (Number(i.qty) || 0), 0);
+                        const oVal = o.items.reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.rate) || 0) * (1 + (Number(i.gst) || 0) / 100), 0) + (Number(o.freight) || 0);
+                        return (
+                          <tr key={o.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                            <Td className="font-mono text-xs">
+                              <button className="text-indigo-600 hover:underline" onClick={() => { setMonthDrill(null); setViewOrder(o); }}>{o.number}</button>
+                            </Td>
+                            <Td>{o.date}</Td>
+                            <Td className="truncate max-w-[200px]">{db.parties.find(p => p.id === o.customerId)?.name || "—"}</Td>
+                            <Td className="text-right">{oQty}</Td>
+                            <Td className="text-right font-medium">{fmtINR(oVal)}</Td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </Table>
+                </div>
+              </div>
+
+              <div className="flex justify-end pt-2 border-t border-slate-200 dark:border-slate-700">
+                <Button variant="outline" onClick={() => setMonthDrill(null)}>Close</Button>
               </div>
             </div>
           );
