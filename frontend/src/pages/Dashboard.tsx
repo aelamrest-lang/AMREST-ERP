@@ -178,17 +178,7 @@ export function Dashboard() {
         <KPI label="Material Shortages" value={String(shortages.length)} color="rose" icon={<IconBox size={22}/>} hint={`from ${pendingJobCards.length} pending JC`} />
       </div>
 
-      <div className="grid lg:grid-cols-2 gap-5">
-        <Card>
-          <CardHeader title="Monthly Sales (₹ thousands)" subtitle={`Value of Delivery Challans · ${fyLabel(fyStartYear)} · click a month for the DC list`} />
-          <div className="p-4">
-            <BarChart
-              data={months}
-              color="#6366f1"
-              onBarClick={(i) => setDrill({ type: "sales", monthKey: monthBuckets[i].key, monthLabel: `${monthBuckets[i].label} ${monthBuckets[i].date.getFullYear()}` })}
-            />
-          </div>
-        </Card>
+      <div className="grid lg:grid-cols-1 gap-5">
         <Card>
           <div className="p-5">
             <h3 className="text-lg font-bold uppercase tracking-wide text-slate-900 dark:text-slate-100">Monthly Production</h3>
@@ -203,42 +193,10 @@ export function Dashboard() {
         </Card>
       </div>
 
-      <div className="grid lg:grid-cols-3 gap-5">
+      <div className="grid lg:grid-cols-2 gap-5">
         <Card>
           <CardHeader title="Inventory by Category" />
           <div className="p-5"><DonutChart data={inventoryByCategory} /></div>
-        </Card>
-        <Card>
-          <CardHeader
-            title={customerMetric === "value" ? "Top Customers (₹K)" : "Top Customers (Nos)"}
-            subtitle="From actual Delivery Challans dispatched in current FY"
-            right={
-              <div className="flex items-center gap-1 text-[11px]">
-                <button
-                  type="button"
-                  onClick={() => setCustomerMetric("value")}
-                  className={"px-2 py-0.5 rounded " + (customerMetric === "value" ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300")}
-                  data-testid="top-customers-metric-value"
-                >Value</button>
-                <button
-                  type="button"
-                  onClick={() => setCustomerMetric("qty")}
-                  className={"px-2 py-0.5 rounded " + (customerMetric === "qty" ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300")}
-                  data-testid="top-customers-metric-qty"
-                >Qty</button>
-              </div>
-            }
-          />
-          <div className="p-4">
-            {topCustomers.length ? (
-              <BarChart
-                data={topCustomers}
-                color="#f59e0b"
-                onBarClick={(i) => setDrill({ type: "customer", customerId: topCustomersList[i].customerId })}
-              />
-            ) : <Empty title="No Delivery Challans yet in this FY" />}
-            <div className="mt-2 text-[11px] text-slate-500">Based on actual dispatch. Click any bar to see all Sales Orders from that customer.</div>
-          </div>
         </Card>
         <Card>
           <button

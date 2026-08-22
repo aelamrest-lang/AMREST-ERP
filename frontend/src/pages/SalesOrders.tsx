@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { useStore, uid } from "../lib/store";
-import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Badge, Empty } from "../components/ui";
+import { Card, CardHeader, Button, Input, Select, Label, Modal, Table, Th, Td, Badge, Empty } from "../components/ui";
+import { BarChart } from "../components/charts";
 import { FinishedGoodCombobox } from "../components/FinishedGoodCombobox";
 import { NewFinishedGoodModal } from "../components/NewFinishedGoodModal";
 import type { SalesOrder, DeliverySchedule } from "../lib/types";
@@ -50,7 +51,9 @@ export function SalesOrders() {
 
       const balanceQty = Math.max(0, orderedQty - dispatchedQty);
       const balanceValue = Math.max(0, orderedValue - dispatchedValue);
-      const isCompleted = orderedQty > 0 && balanceQty === 0;
+      // An SO is Completed when the full ordered qty has been dispatched,
+      // OR when a user manually marks its status as "Delivered".
+      const isCompleted = (orderedQty > 0 && balanceQty === 0) || o.status === "Delivered";
 
       if (isCompleted) {
         completedCount += 1;
@@ -69,6 +72,62 @@ export function SalesOrders() {
     }
     return { inHandCount, inHandQty, inHandValue, pendingCount, pendingQty, pendingValue, completedCount, completedQty, completedValue };
   }, [list, db.challans]);
+
+  // ---- Monthly Sales (from DCs) + Top Customers (from DCs) ----
+  // Filter to SOs owned by user (if not admin), then use those SO IDs for DC filtering.
+  const ownedSoIds = useMemo(() => new Set(list.map(o => o.id)), [list]);
+  const relevantChallans = useMemo(
+    () => db.challans.filter(c => ownedSoIds.has(c.salesOrderId) || (isAdmin && !c.salesOrderId)),
+    [db.challans, ownedSoIds, isAdmin]
+  );
+
+  const [customerMetric, setCustomerMetric] = useState<"value" | "qty">("value");
+
+  const now = new Date();
+  const monthBuckets = useMemo(() => {
+    const arr: { key: string; label: string; date: Date }[] = [];
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      arr.push({
+        key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+        label: d.toLocaleString("en", { month: "short" }),
+        date: d,
+      });
+    }
+    return arr;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const monthlySalesData = useMemo(() => {
+    return monthBuckets.map(m => {
+      const total = relevantChallans
+        .filter(c => c.date && c.date.slice(0, 7) === m.key)
+        .reduce((s, c) => {
+          const items = (c.items || []);
+          const sub = items.reduce((a, b) => a + (Number(b.qty) || 0) * (Number(b.rate) || 0), 0);
+          const gst = items.reduce((a, b) => a + (Number(b.qty) || 0) * (Number(b.rate) || 0) * ((Number(b.gst) || 0) / 100), 0);
+          return s + sub + gst + (Number(c.freight) || 0);
+        }, 0);
+      return { label: m.label, value: Math.round(total / 1000) };
+    });
+  }, [monthBuckets, relevantChallans]);
+
+  const topCustomers = useMemo(() => {
+    const map = new Map<string, { name: string; qty: number; value: number }>();
+    relevantChallans.forEach(c => {
+      const items = (c.items || []);
+      const qty = items.reduce((a, b) => a + (Number(b.qty) || 0), 0);
+      const val = items.reduce((a, b) => a + (Number(b.qty) || 0) * (Number(b.rate) || 0), 0) + (Number(c.freight) || 0);
+      const name = db.parties.find(p => p.id === c.customerId)?.name || "—";
+      const existing = map.get(c.customerId);
+      if (existing) { existing.qty += qty; existing.value += val; }
+      else map.set(c.customerId, { name, qty, value: val });
+    });
+    return Array.from(map.values())
+      .sort((a, b) => customerMetric === "value" ? b.value - a.value : b.qty - a.qty)
+      .slice(0, 5)
+      .map(x => ({ label: x.name.length > 12 ? x.name.slice(0, 12) + "…" : x.name, value: customerMetric === "value" ? Math.round(x.value / 1000) : x.qty }));
+  }, [relevantChallans, db.parties, customerMetric]);
 
   const customers = db.parties.filter(p => p.type === "customer" && (isAdmin || p.ownerId === currentUser?.id));
 
@@ -299,6 +358,45 @@ export function SalesOrders() {
             </div>
           </div>
         </div>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader
+            title="Monthly Sales (₹ thousands)"
+            subtitle="Value of Delivery Challans dispatched in the last 12 months"
+          />
+          <div className="p-4">
+            <BarChart data={monthlySalesData} color="#6366f1" />
+          </div>
+        </Card>
+        <Card>
+          <CardHeader
+            title={customerMetric === "value" ? "Top Customers (₹K)" : "Top Customers (Nos)"}
+            subtitle="From actual Delivery Challans dispatched"
+            right={
+              <div className="flex items-center gap-1 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => setCustomerMetric("value")}
+                  className={"px-2 py-0.5 rounded " + (customerMetric === "value" ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300")}
+                  data-testid="so-top-customers-metric-value"
+                >Value</button>
+                <button
+                  type="button"
+                  onClick={() => setCustomerMetric("qty")}
+                  className={"px-2 py-0.5 rounded " + (customerMetric === "qty" ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300")}
+                  data-testid="so-top-customers-metric-qty"
+                >Qty</button>
+              </div>
+            }
+          />
+          <div className="p-4">
+            {topCustomers.length ? (
+              <BarChart data={topCustomers} color="#f59e0b" />
+            ) : <Empty title="No Delivery Challans yet" />}
+          </div>
+        </Card>
       </div>
 
       <Card>
