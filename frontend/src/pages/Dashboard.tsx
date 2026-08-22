@@ -171,9 +171,7 @@ export function Dashboard() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KPI label="Total Sales Value" value={fmtINR(orderTotal)} color="emerald" icon={<IconShop size={22}/>} />
-        <KPI label="Pending Quotations" value={String(pendingQuotations)} color="amber" icon={<IconFile size={22}/>} hint={`${quotations.length} total`} />
+      <div className="grid grid-cols-2 lg:grid-cols-2 gap-4">
         <KPI label="Production In Progress" value={String(productionInProg)} color="indigo" icon={<IconFactory size={22}/>} hint={`${db.jobCards.length} job cards`} />
         <KPI label="Material Shortages" value={String(shortages.length)} color="rose" icon={<IconBox size={22}/>} hint={`from ${pendingJobCards.length} pending JC`} />
       </div>
