@@ -16,7 +16,11 @@ export function Dashboard() {
   const quotations = myFilter(db.quotations);
   const salesOrders = myFilter(db.salesOrders);
 
-  const orderTotal = salesOrders.reduce((s, o) => s + o.items.reduce((a, b) => a + b.qty * b.rate * (1 + b.gst / 100), 0), 0);
+  // Total Sales Value = value of actual Delivery Challans (dispatched), not open Sales Orders.
+  const orderTotal = db.challans.reduce((s, c) => {
+    const items = (c.items || []) as Array<{ qty: number; rate: number; gst: number }>;
+    return s + items.reduce((a, b) => a + (Number(b.qty) || 0) * (Number(b.rate) || 0) * (1 + (Number(b.gst) || 0) / 100), 0) + (Number(c.freight) || 0);
+  }, 0);
   const pendingQuotations = quotations.filter(q => q.status === "Quotation Sent" || q.status === "Negotiation").length;
   const lowStock = db.items.filter(i => i.currentStock <= i.minStock);
 
@@ -88,22 +92,18 @@ export function Dashboard() {
   const [shortageListOpen, setShortageListOpen] = useState(false);
   const productionInProg = db.jobCards.filter(j => j.status === "In Progress").length;
 
-  // ---- Monthly Sales from Delivery Challans ----
-  const soValue = (soId: string): { qty: number; value: number } => {
-    const so = db.salesOrders.find(o => o.id === soId);
-    if (!so) return { qty: 0, value: 0 };
-    let qty = 0, value = 0;
-    so.items.forEach(it => {
-      qty += Number(it.qty) || 0;
-      value += (Number(it.qty) || 0) * (Number(it.rate) || 0);
-    });
-    return { qty, value };
+  // ---- Monthly Sales from Delivery Challans (actual dispatched qty × rate, not full SO) ----
+  const dcValue = (c: any): number => {
+    const items = (c.items || []) as Array<{ qty: number; rate: number; gst: number }>;
+    const sub = items.reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.rate) || 0), 0);
+    const gst = items.reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.rate) || 0) * ((Number(i.gst) || 0) / 100), 0);
+    return sub + gst + (Number(c.freight) || 0);
   };
 
   const months = monthBuckets.map(m => {
     const total = db.challans
       .filter(c => c.date && c.date.slice(0, 7) === m.key)
-      .reduce((s, c) => s + soValue(c.salesOrderId).value, 0);
+      .reduce((s, c) => s + dcValue(c), 0);
     return { label: m.label, value: Math.round(total / 1000) }; // in ₹K
   });
 
@@ -122,20 +122,21 @@ export function Dashboard() {
     color: ["#6366f1", "#f59e0b", "#10b981"][i],
   }));
 
-  // ---- Top Customers from Sales Order Total Value (within FY) ----
+  // ---- Top Customers from Delivery Challans (actual dispatched, within FY) ----
   interface CustomerAgg { customerId: string; name: string; totalQty: number; totalValue: number; orders: number }
   const customerAggMap = new Map<string, CustomerAgg>();
-  salesOrders.filter(o => isInFy(o.date)).forEach(o => {
-    const totQty = o.items.reduce((a, b) => a + (Number(b.qty) || 0), 0);
-    const totVal = o.items.reduce((a, b) => a + (Number(b.qty) || 0) * (Number(b.rate) || 0), 0);
-    const existing = customerAggMap.get(o.customerId);
+  db.challans.filter((c: any) => isInFy(c.date)).forEach((c: any) => {
+    const items = (c.items || []) as Array<{ qty: number; rate: number; gst: number }>;
+    const dcQty = items.reduce((a, b) => a + (Number(b.qty) || 0), 0);
+    const dcVal = items.reduce((a, b) => a + (Number(b.qty) || 0) * (Number(b.rate) || 0), 0) + (Number(c.freight) || 0);
+    const existing = customerAggMap.get(c.customerId);
     if (existing) {
-      existing.totalQty += totQty; existing.totalValue += totVal; existing.orders += 1;
+      existing.totalQty += dcQty; existing.totalValue += dcVal; existing.orders += 1;
     } else {
-      customerAggMap.set(o.customerId, {
-        customerId: o.customerId,
-        name: db.parties.find(p => p.id === o.customerId)?.name || "—",
-        totalQty: totQty, totalValue: totVal, orders: 1,
+      customerAggMap.set(c.customerId, {
+        customerId: c.customerId,
+        name: db.parties.find(p => p.id === c.customerId)?.name || "—",
+        totalQty: dcQty, totalValue: dcVal, orders: 1,
       });
     }
   });
@@ -210,6 +211,7 @@ export function Dashboard() {
         <Card>
           <CardHeader
             title={customerMetric === "value" ? "Top Customers (₹K)" : "Top Customers (Nos)"}
+            subtitle="From actual Delivery Challans dispatched in current FY"
             right={
               <div className="flex items-center gap-1 text-[11px]">
                 <button
@@ -234,8 +236,8 @@ export function Dashboard() {
                 color="#f59e0b"
                 onBarClick={(i) => setDrill({ type: "customer", customerId: topCustomersList[i].customerId })}
               />
-            ) : <Empty title="No Sales Orders yet" />}
-            <div className="mt-2 text-[11px] text-slate-500">Click any bar to see all Sales Orders from that customer.</div>
+            ) : <Empty title="No Delivery Challans yet in this FY" />}
+            <div className="mt-2 text-[11px] text-slate-500">Based on actual dispatch. Click any bar to see all Sales Orders from that customer.</div>
           </div>
         </Card>
         <Card>

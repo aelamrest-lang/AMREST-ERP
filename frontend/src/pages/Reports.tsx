@@ -15,10 +15,18 @@ export function Reports() {
   const sos = myFilter(db.salesOrders);
   const qts = myFilter(db.quotations);
 
-  const salesValue = sos.reduce((s, o) => s + o.items.reduce((a, b) => a + b.qty * b.rate, 0), 0);
-  const salesGST = sos.reduce((s, o) => s + o.items.reduce((a, b) => a + b.qty * b.rate * b.gst / 100, 0), 0);
-  const purchaseValue = db.purchaseOrders.reduce((s, p) => s + p.items.reduce((a, b) => a + b.qty * b.rate, 0), 0);
-  const stockValue = db.items.reduce((s, i) => s + i.currentStock * i.purchaseRate, 0);
+  // Only DCs owned by user (or all for admin) count as this user's sales.
+  const soIdsForUser = new Set(sos.map((o: any) => o.id));
+  const dcs = db.challans.filter((c: any) => isAdmin || soIdsForUser.has(c.salesOrderId));
+
+  // Sales = value of ACTUAL Delivery Challans (dispatched), not open Sales Orders.
+  const salesValue = dcs.reduce((s: number, c: any) => {
+    const items = (c.items || []);
+    return s + items.reduce((a: number, b: any) => a + (Number(b.qty) || 0) * (Number(b.rate) || 0), 0) + (Number(c.freight) || 0);
+  }, 0);
+  const salesGST = dcs.reduce((s: number, c: any) => s + (c.items || []).reduce((a: number, b: any) => a + (Number(b.qty) || 0) * (Number(b.rate) || 0) * (Number(b.gst) || 0) / 100, 0), 0);
+  const purchaseValue = db.purchaseOrders.reduce((s: number, p: any) => s + p.items.reduce((a: number, b: any) => a + b.qty * b.rate, 0), 0);
+  const stockValue = db.items.reduce((s: number, i: any) => s + i.currentStock * i.purchaseRate, 0);
   const profit = salesValue - purchaseValue;
 
   const monthly = useMemo(() => {
@@ -26,13 +34,14 @@ export function Reports() {
     const now = new Date();
     for (let i = 11; i >= 0; i--) {
       const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const total = sos
-        .filter(o => { const od = new Date(o.date); return od.getFullYear() === d.getFullYear() && od.getMonth() === d.getMonth(); })
-        .reduce((s, o) => s + o.items.reduce((a, b) => a + b.qty * b.rate, 0), 0);
+      const total = dcs
+        .filter((c: any) => { const od = new Date(c.date); return od.getFullYear() === d.getFullYear() && od.getMonth() === d.getMonth(); })
+        .reduce((s: number, c: any) => s + (c.items || []).reduce((a: number, b: any) => a + (Number(b.qty) || 0) * (Number(b.rate) || 0), 0) + (Number(c.freight) || 0), 0);
       arr.push({ label: d.toLocaleString("en", { month: "short" }), value: Math.round(total / 1000) });
     }
     return arr;
-  }, [sos]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [db.challans]);
 
   const tabs = [
     { id: "sales", label: "Sales" },
