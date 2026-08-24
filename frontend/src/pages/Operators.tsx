@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useStore, uid } from "../lib/store";
 import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Badge, Empty } from "../components/ui";
+import { BarChart } from "../components/charts";
 import type { Operator, ProductionStage } from "../lib/types";
 import { IconPlus, IconEdit, IconTrash, IconPrint, IconSearch } from "../components/icons";
 import { fmtINR, printArea, professionalDocument, todayISO } from "../lib/utils";
@@ -246,6 +247,30 @@ function OperatorLedger() {
   const grandQty = rows.reduce((s, r) => s + (Number(r.todayQty) || 0), 0);
   const grandAmount = rows.reduce((s, r) => s + r.totalAmount, 0);
 
+  // ---- Operator Performance Chart ----
+  const [perfMetric, setPerfMetric] = useState<"qty" | "amount">("qty");
+  const [perfMinQty, setPerfMinQty] = useState<number>(0);
+  const [perfMinAmount, setPerfMinAmount] = useState<number>(0);
+  const [perfDrill, setPerfDrill] = useState<string | null>(null); // operator name
+
+  const rankedOperators = useMemo(() => {
+    return summary
+      .filter(s => s.qty >= perfMinQty && s.amount >= perfMinAmount)
+      .slice()
+      .sort((a, b) => perfMetric === "qty" ? b.qty - a.qty : b.amount - a.amount);
+  }, [summary, perfMetric, perfMinQty, perfMinAmount]);
+
+  const perfChartData = useMemo(() => rankedOperators.slice(0, 12).map(o => ({
+    label: o.name.length > 12 ? o.name.slice(0, 12) + "…" : o.name,
+    value: perfMetric === "qty" ? o.qty : Math.round(o.amount / 100), // ₹ in hundreds for readable bars
+  })), [rankedOperators, perfMetric]);
+
+  const perfDrillEntries = useMemo(() => {
+    if (!perfDrill) return [];
+    return rows.filter(r => r.operatorName === perfDrill)
+      .slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  }, [rows, perfDrill]);
+
   const monthLabel = new Date(`${month}-01`).toLocaleString("en-IN", { month: "long", year: "numeric" });
   const selectedOps = db.operators.filter(o => operatorIds.has(o.id));
   const opFilterLabel = operatorIds.size === 0
@@ -381,6 +406,128 @@ function OperatorLedger() {
           <div><div className="text-slate-500 text-xs">{useRange ? "Total Amount" : "Total Monthly Amount"}</div><b className="text-xl text-emerald-600">{fmtINR(grandAmount)}</b></div>
         </div>
       </Card>
+
+      <Card className="mb-3">
+        <div className="p-3 border-b border-slate-100 dark:border-slate-800 flex flex-wrap items-end gap-3">
+          <div>
+            <div className="font-semibold">Operator Performance Chart</div>
+            <p className="text-xs text-slate-500">Ranked top → lowest for the filtered period. Click a bar or row for details.</p>
+          </div>
+          <div className="ml-auto flex items-end gap-2 flex-wrap">
+            <div className="flex items-center gap-1 text-[11px]">
+              <button
+                type="button"
+                onClick={() => setPerfMetric("qty")}
+                className={"px-2 py-1 rounded " + (perfMetric === "qty" ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300")}
+                data-testid="perf-metric-qty"
+              >By Qty</button>
+              <button
+                type="button"
+                onClick={() => setPerfMetric("amount")}
+                className={"px-2 py-1 rounded " + (perfMetric === "amount" ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300")}
+                data-testid="perf-metric-amount"
+              >By Amount</button>
+            </div>
+            <div>
+              <Label className="text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">Min Qty</Label>
+              <Input type="number" value={perfMinQty} min={0} onChange={(e: any) => setPerfMinQty(Number(e.target.value) || 0)} className="h-8 py-1 w-24" data-testid="perf-min-qty" />
+            </div>
+            <div>
+              <Label className="text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">Min Amount (₹)</Label>
+              <Input type="number" value={perfMinAmount} min={0} onChange={(e: any) => setPerfMinAmount(Number(e.target.value) || 0)} className="h-8 py-1 w-32" data-testid="perf-min-amount" />
+            </div>
+            {(perfMinQty > 0 || perfMinAmount > 0) && (
+              <Button size="sm" variant="outline" onClick={() => { setPerfMinQty(0); setPerfMinAmount(0); }} data-testid="perf-clear">Clear</Button>
+            )}
+          </div>
+        </div>
+        <div className="p-4 grid lg:grid-cols-2 gap-4">
+          <div>
+            {perfChartData.length === 0 ? <Empty title="No operators match the current filters" /> : (
+              <BarChart
+                data={perfChartData}
+                color={perfMetric === "qty" ? "#6366f1" : "#f59e0b"}
+                onBarClick={(i) => setPerfDrill(rankedOperators[i]?.name || null)}
+              />
+            )}
+            <div className="mt-1 text-[11px] text-slate-500">{perfMetric === "amount" ? "Values shown as ₹ ÷ 100 for readability." : "Values are total quantity produced."}</div>
+          </div>
+          <div className="overflow-x-auto">
+            <Table>
+              <thead><tr><Th>#</Th><Th>Operator</Th><Th className="text-right">Entries</Th><Th className="text-right">Total Qty</Th><Th className="text-right">Total Amount</Th></tr></thead>
+              <tbody>
+                {rankedOperators.length === 0 && <tr><Td colSpan={5}><Empty title="No operators match" /></Td></tr>}
+                {rankedOperators.map((o, i) => (
+                  <tr
+                    key={o.name}
+                    onClick={() => setPerfDrill(o.name)}
+                    className={"cursor-pointer hover:bg-indigo-50/40 dark:hover:bg-indigo-900/20 " + (i === 0 ? "bg-emerald-50/40 dark:bg-emerald-900/10" : "")}
+                    data-testid={`perf-row-${o.name}`}
+                  >
+                    <Td className="font-mono text-xs">{i + 1}</Td>
+                    <Td className="font-medium text-indigo-600 hover:underline">{o.name}</Td>
+                    <Td className="text-right">{o.entries}</Td>
+                    <Td className="text-right font-semibold">{o.qty}</Td>
+                    <Td className="text-right font-semibold text-emerald-600">{fmtINR(o.amount)}</Td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          </div>
+        </div>
+      </Card>
+
+      <Modal open={!!perfDrill} onClose={() => setPerfDrill(null)} title={perfDrill ? `${perfDrill} — Performance Details` : "Operator"} size="xl">
+        {perfDrill && (() => {
+          const drillQty = perfDrillEntries.reduce((s, r) => s + (Number(r.todayQty) || 0), 0);
+          const drillAmount = perfDrillEntries.reduce((s, r) => s + r.totalAmount, 0);
+          const drillUniqueJC = new Set(perfDrillEntries.map(e => e.jobCardId)).size;
+          return (
+            <div className="space-y-4 text-sm">
+              <div className="grid sm:grid-cols-4 gap-3">
+                <div className="rounded-lg border border-emerald-200 dark:border-emerald-800 p-3 bg-emerald-50 dark:bg-emerald-900/20">
+                  <div className="text-[11px] uppercase tracking-wide text-emerald-700 dark:text-emerald-300">Total Qty</div>
+                  <div className="text-xl font-bold text-emerald-800 dark:text-emerald-200">{drillQty}</div>
+                </div>
+                <div className="rounded-lg border border-indigo-200 dark:border-indigo-800 p-3 bg-indigo-50 dark:bg-indigo-900/20">
+                  <div className="text-[11px] uppercase tracking-wide text-indigo-700 dark:text-indigo-300">Total Amount</div>
+                  <div className="text-xl font-bold text-indigo-800 dark:text-indigo-200">{fmtINR(drillAmount)}</div>
+                </div>
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
+                  <div className="text-[11px] uppercase tracking-wide text-slate-500">Entries</div>
+                  <div className="text-xl font-bold">{perfDrillEntries.length}</div>
+                </div>
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
+                  <div className="text-[11px] uppercase tracking-wide text-slate-500">Job Cards Worked</div>
+                  <div className="text-xl font-bold">{drillUniqueJC}</div>
+                </div>
+              </div>
+              <div className="rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden max-h-[420px] overflow-y-auto">
+                <Table>
+                  <thead><tr><Th>Date</Th><Th>Job Card No.</Th><Th>Product</Th><Th>Stage</Th><Th className="text-right">Qty</Th><Th className="text-right">Price/Unit (₹)</Th><Th className="text-right">Amount (₹)</Th></tr></thead>
+                  <tbody>
+                    {perfDrillEntries.length === 0 && <tr><Td colSpan={7}><Empty title="No entries" /></Td></tr>}
+                    {perfDrillEntries.map(r => (
+                      <tr key={r.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                        <Td>{r.date}</Td>
+                        <Td className="font-mono text-xs">{r.jobCardNumber || "—"}</Td>
+                        <Td>{r.productName || "—"}</Td>
+                        <Td>{r.stage}</Td>
+                        <Td className="text-right font-semibold">{r.todayQty}</Td>
+                        <Td className="text-right">{fmtINR(r.priceEach || 0)}</Td>
+                        <Td className="text-right font-semibold text-emerald-600">{fmtINR(r.totalAmount)}</Td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </Table>
+              </div>
+              <div className="flex justify-end pt-2 border-t border-slate-200 dark:border-slate-700">
+                <Button variant="outline" onClick={() => setPerfDrill(null)}>Close</Button>
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
 
       <Card>
         <Table>
