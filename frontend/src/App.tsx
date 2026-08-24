@@ -36,6 +36,10 @@ function Shell() {
     setRoute(r);
   }, []);
   useEffect(() => { localStorage.setItem("amrest_route", route); }, [route]);
+  useEffect(() => {
+    (window as any).__amrestSetRoute = (r: Route) => setRoute(r);
+    return () => { delete (window as any).__amrestSetRoute; };
+  }, []);
 
   if (hydrating) {
     return (

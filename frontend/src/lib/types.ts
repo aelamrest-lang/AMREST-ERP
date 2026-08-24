@@ -346,6 +346,7 @@ export interface JobCard {
   serialStart?: string;
   reservedItems: { itemId: string; qty: number }[];
   stageQuantities?: { stage: ProductionStage; multiplier: number; totalQty: number }[];
+  stagePrices?: Record<string, number>; // key: ProductionStage → ₹ per unit fixed at JC level
   stages: { stage: ProductionStage; status: "pending" | "in-progress" | "done"; worker?: string; date?: string }[];
   status: "Open" | "In Progress" | "Completed";
   createdAt: string;

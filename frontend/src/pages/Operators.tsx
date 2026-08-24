@@ -178,18 +178,46 @@ function OperatorLedger() {
   const canExport = userCan(currentUser, "operators", "export");
   const currentMonth = todayISO().slice(0, 7);
   const [month, setMonth] = useState(currentMonth);
+  const [dateFrom, setDateFrom] = useState<string>("");
+  const [dateTo, setDateTo] = useState<string>("");
   const [operatorId, setOperatorId] = useState<string>("");
+  const [operatorSearch, setOperatorSearch] = useState<string>("");
+
+  // Helper: resolve the effective ₹/unit for a production entry.
+  //  1) Entry.priceEach captured at save time (source of truth)
+  //  2) Fallback → the linked Job Card's stagePrices[stage]
+  //  3) Fallback → company-level Stage Prices master
+  const resolvePriceEach = (e: any): number => {
+    if (Number(e.priceEach) > 0) return Number(e.priceEach);
+    const jc = db.jobCards.find(j => j.id === e.jobCardId);
+    const jcPrice = jc?.stagePrices?.[e.stage];
+    if (typeof jcPrice === "number" && jcPrice > 0) return jcPrice;
+    const settingsPrice = db.settings.stagePrices?.[e.stage];
+    if (typeof settingsPrice === "number" && settingsPrice > 0) return settingsPrice;
+    return 0;
+  };
+
+  // Range filtering — if either date range field is set, use range; otherwise fall back to month.
+  const useRange = !!(dateFrom || dateTo);
 
   const rows = useMemo(() => {
     return db.productionEntries
-      .filter(e => e.date.startsWith(month))
+      .filter(e => {
+        if (useRange) {
+          if (dateFrom && e.date < dateFrom) return false;
+          if (dateTo && e.date > dateTo) return false;
+          return true;
+        }
+        return e.date.startsWith(month);
+      })
       .filter(e => !operatorId || e.operatorId === operatorId)
-      .map(e => ({
-        ...e,
-        totalAmount: (Number(e.todayQty) || 0) * (Number(e.priceEach) || 0),
-      }))
-      .sort((a, b) => a.date.localeCompare(b.date) || a.operatorName.localeCompare(b.operatorName));
-  }, [db.productionEntries, month, operatorId]);
+      .map(e => {
+        const priceEach = resolvePriceEach(e);
+        return { ...e, priceEach, totalAmount: (Number(e.todayQty) || 0) * priceEach };
+      })
+      .sort((a, b) => a.date.localeCompare(b.date) || (a.operatorName || "").localeCompare(b.operatorName || ""));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [db.productionEntries, db.jobCards, db.settings.stagePrices, month, dateFrom, dateTo, operatorId, useRange]);
 
   const summary = useMemo(() => {
     const byOperator = new Map<string, { name: string; qty: number; amount: number; entries: number }>();
@@ -267,17 +295,34 @@ function OperatorLedger() {
   return (
     <div>
       <Card className="mb-3">
-        <div className="p-3 flex flex-wrap items-end gap-3">
+        <div className="p-3 flex flex-wrap items-end gap-3" data-testid="ledger-filters">
           <div>
             <Label>Month</Label>
-            <Input type="month" value={month} onChange={(e: any) => setMonth(e.target.value)} data-testid="ledger-month" />
+            <Input type="month" value={month} onChange={(e: any) => { setMonth(e.target.value); setDateFrom(""); setDateTo(""); }} data-testid="ledger-month" disabled={useRange} />
           </div>
-          <div className="min-w-[220px]">
+          <div className="border-l border-slate-200 dark:border-slate-700 pl-3 flex gap-2 items-end">
+            <div>
+              <Label className="text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">Date From</Label>
+              <Input type="date" value={dateFrom} onChange={(e: any) => setDateFrom(e.target.value)} data-testid="ledger-date-from" />
+            </div>
+            <div>
+              <Label className="text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">Date To</Label>
+              <Input type="date" value={dateTo} onChange={(e: any) => setDateTo(e.target.value)} data-testid="ledger-date-to" />
+            </div>
+            {useRange && <Button size="sm" variant="outline" onClick={() => { setDateFrom(""); setDateTo(""); }} data-testid="ledger-date-clear">Clear Range</Button>}
+          </div>
+          <div className="min-w-[240px]">
             <Label>Operator</Label>
             <Select value={operatorId} onChange={(e: any) => setOperatorId(e.target.value)} data-testid="ledger-operator">
               <option value="">All Operators</option>
-              {db.operators.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+              {db.operators
+                .filter(o => !operatorSearch.trim() || o.name.toLowerCase().includes(operatorSearch.trim().toLowerCase()) || (o.department || "").toLowerCase().includes(operatorSearch.trim().toLowerCase()))
+                .map(o => <option key={o.id} value={o.id}>{o.name}{o.department ? ` · ${o.department}` : ""}</option>)}
             </Select>
+          </div>
+          <div className="min-w-[180px]">
+            <Label>Search Operator</Label>
+            <Input type="search" value={operatorSearch} onChange={(e: any) => setOperatorSearch(e.target.value)} placeholder="Type name / dept..." data-testid="ledger-operator-search" />
           </div>
           <div className="ml-auto flex gap-2">
             {canExport && <Button variant="outline" onClick={exportCSV}>Export CSV</Button>}
@@ -288,10 +333,10 @@ function OperatorLedger() {
 
       <Card className="mb-3">
         <div className="p-3 grid sm:grid-cols-4 gap-3 text-sm">
-          <div><div className="text-slate-500 text-xs">Period</div><b>{monthLabel}</b></div>
+          <div><div className="text-slate-500 text-xs">Period</div><b>{useRange ? `${dateFrom || "…"} → ${dateTo || "…"}` : monthLabel}</b></div>
           <div><div className="text-slate-500 text-xs">Operator</div><b>{filterOp?.name || "All"}</b></div>
-          <div><div className="text-slate-500 text-xs">Total Quantity</div><b>{grandQty}</b></div>
-          <div><div className="text-slate-500 text-xs">Total Amount</div><b className="text-emerald-600">{fmtINR(grandAmount)}</b></div>
+          <div><div className="text-slate-500 text-xs">Total Production Qty</div><b className="text-xl">{grandQty}</b></div>
+          <div><div className="text-slate-500 text-xs">{useRange ? "Total Amount" : "Total Monthly Amount"}</div><b className="text-xl text-emerald-600">{fmtINR(grandAmount)}</b></div>
         </div>
       </Card>
 
@@ -300,36 +345,52 @@ function OperatorLedger() {
           <thead>
             <tr>
               <Th>Date</Th>
-              <Th>Operator Name</Th>
+              <Th>Operator</Th>
+              <Th>Job Card No.</Th>
+              <Th>Product</Th>
               <Th>Production Stage</Th>
-              <Th>Job Card / Product</Th>
-              <Th className="text-right">Qty Completed</Th>
-              <Th>Shift</Th>
-              <Th className="text-right">Price Each (₹)</Th>
+              <Th className="text-right">Qty</Th>
+              <Th className="text-right">Price / Unit (₹)</Th>
               <Th className="text-right">Total Amount (₹)</Th>
             </tr>
           </thead>
           <tbody>
-            {rows.map(r => (
-              <tr key={r.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                <Td className="whitespace-nowrap">{r.date}</Td>
-                <Td className="font-medium">{r.operatorName || "—"}</Td>
-                <Td>{r.stage}</Td>
-                <Td>
-                  <div className="font-mono text-xs text-slate-500">{r.jobCardNumber}</div>
-                  <div>{r.productName}</div>
-                </Td>
-                <Td className="text-right font-semibold">{r.todayQty}</Td>
-                <Td>{r.shift}</Td>
-                <Td className="text-right">{fmtINR(Number(r.priceEach) || 0)}</Td>
-                <Td className="text-right font-semibold text-emerald-600">{fmtINR(r.totalAmount)}</Td>
-              </tr>
-            ))}
+            {rows.map(r => {
+              const jc = db.jobCards.find(j => j.id === r.jobCardId);
+              const gotoJC = () => {
+                if (!jc) return;
+                try { localStorage.setItem("amrest_goto_jc_id", jc.id); } catch { /* noop */ }
+                const goto = (window as any).__amrestSetRoute;
+                if (typeof goto === "function") goto("production");
+                else window.location.reload();
+              };
+              return (
+                <tr key={r.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                  <Td className="whitespace-nowrap">{r.date}</Td>
+                  <Td className="font-medium">{r.operatorName || "—"}</Td>
+                  <Td className="font-mono text-xs">
+                    {jc ? (
+                      <button
+                        type="button"
+                        className="text-indigo-600 hover:underline"
+                        onClick={gotoJC}
+                        title="Open Job Card in Production"
+                        data-testid={`ledger-jc-link-${jc.number}`}
+                      >{jc.number}</button>
+                    ) : (r.jobCardNumber || "—")}
+                  </Td>
+                  <Td>{r.productName || "—"}</Td>
+                  <Td>{r.stage}</Td>
+                  <Td className="text-right font-semibold">{r.todayQty}</Td>
+                  <Td className="text-right">{fmtINR(r.priceEach || 0)}</Td>
+                  <Td className="text-right font-semibold text-emerald-600">{fmtINR(r.totalAmount)}</Td>
+                </tr>
+              );
+            })}
             {rows.length > 0 && (
               <tr className="bg-slate-50 dark:bg-slate-800/40 font-semibold">
-                <Td colSpan={4}>Grand Total</Td>
+                <Td colSpan={5}>Grand Total</Td>
                 <Td className="text-right">{grandQty}</Td>
-                <Td></Td>
                 <Td></Td>
                 <Td className="text-right text-emerald-700">{fmtINR(grandAmount)}</Td>
               </tr>

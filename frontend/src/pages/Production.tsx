@@ -81,6 +81,18 @@ export function JobCards() {
   });
   const [form, setForm] = useState<JobCard>(blank());
 
+  // Look up the most recently created Job Card with the same product name and inherit its stage prices.
+  const inheritStagePrices = (product: string): Record<string, number> => {
+    if (!product) return {};
+    const norm = product.trim().toLowerCase();
+    const match = db.jobCards
+      .filter(j => (j.product || "").trim().toLowerCase() === norm && j.stagePrices)
+      .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))[0];
+    if (match?.stagePrices) return { ...match.stagePrices };
+    // Fallback to company-level Stage Prices master
+    return { ...(db.settings.stagePrices || {}) };
+  };
+
   const openNew = () => {
     const f = blank();
     const bom = db.boms.find(b => b.id === f.bomId);
@@ -88,6 +100,7 @@ export function JobCards() {
       f.reservedItems = bom.materials.filter(m => m.itemId).map(m => ({ itemId: m.itemId!, qty: m.qty * f.qty }));
       f.number = `${f.number.split(" - ")[0]} - ${bom.name}`;
     }
+    f.stagePrices = inheritStagePrices(f.product);
     setEdit(null); setForm(f); setOpen(true);
   };
   const openEdit = (j: JobCard) => {
@@ -198,6 +211,10 @@ export function JobCards() {
     }));
   };
 
+  const updateStagePrice = (stage: string, price: number) => {
+    setForm(f => ({ ...f, stagePrices: { ...(f.stagePrices || {}), [stage]: Number(price) || 0 } }));
+  };
+
   const printJobCard = (j: JobCard) => {
     const so = db.salesOrders.find(s => s.id === j.salesOrderId);
     const bom = db.boms.find(b => b.id === j.bomId);
@@ -286,7 +303,31 @@ export function JobCards() {
               {db.salesOrders.map(s => <option key={s.id} value={s.id}>{s.number}</option>)}
             </Select>
           </div>
-          <div className="sm:col-span-2"><Label>Product</Label><Input value={form.product} onChange={(e: any) => setForm({...form, product: e.target.value})}/></div>
+          <div className="sm:col-span-2">
+            <Label>Product</Label>
+            <Input
+              value={form.product}
+              onChange={(e: any) => {
+                const newProduct = e.target.value;
+                setForm(f => {
+                  const next = { ...f, product: newProduct };
+                  // Only inherit on new JC or when current stagePrices are empty (respect explicit edits)
+                  if (!edit && (!f.stagePrices || Object.values(f.stagePrices).every(v => !v))) {
+                    next.stagePrices = inheritStagePrices(newProduct);
+                  }
+                  return next;
+                });
+              }}
+              onBlur={(e: any) => {
+                if (edit) return;
+                const p = e.target.value;
+                const inherited = inheritStagePrices(p);
+                if (Object.values(inherited).some(v => v > 0)) {
+                  setForm(f => ({ ...f, stagePrices: { ...inherited, ...(f.stagePrices || {}) } }));
+                }
+              }}
+            />
+          </div>
           <div><Label>Quantity</Label><Input type="number" value={form.qty} onChange={(e: any) => updateQty(Number(e.target.value))}/></div>
           <div><Label>Unique No. / Serial Start</Label><Input value={form.serialStart || ""} placeholder="e.g. DTR250001" onChange={(e: any) => setForm({...form, serialStart: e.target.value})}/></div>
           <div className="sm:col-span-2"><Label>BOM</Label>
@@ -329,7 +370,7 @@ export function JobCards() {
           <h4 className="font-semibold text-sm mb-2">Production Stage Quantity Calculation</h4>
           <div className="rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
             <Table>
-              <thead><tr><Th>Stage</Th><Th>Job Qty</Th><Th>Multiplier</Th><Th>Total Stage Qty</Th></tr></thead>
+              <thead><tr><Th>Stage</Th><Th>Job Qty</Th><Th>Multiplier</Th><Th>Total Stage Qty</Th><Th>Price / Unit (₹)</Th></tr></thead>
               <tbody>
                 {(form.stageQuantities || defaultStageQuantities(form.qty)).map(row => (
                   <tr key={row.stage}>
@@ -337,12 +378,24 @@ export function JobCards() {
                     <Td>{form.qty}</Td>
                     <Td><Input className="max-w-32" type="number" min="0" step="0.01" value={row.multiplier} onChange={(e: any) => updateStageMultiplier(row.stage, Number(e.target.value))} /></Td>
                     <Td className="font-semibold text-indigo-600">{row.totalQty}</Td>
+                    <Td>
+                      <Input
+                        className="max-w-32"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={(form.stagePrices || {})[row.stage] ?? 0}
+                        onChange={(e: any) => updateStagePrice(row.stage, Number(e.target.value))}
+                        placeholder="0"
+                        data-testid={`jc-stage-price-${row.stage}`}
+                      />
+                    </Td>
                   </tr>
                 ))}
               </tbody>
             </Table>
           </div>
-          <p className="mt-2 text-xs text-slate-500">Total Stage Qty = Job Qty x Stage Multiplier. Set a multiplier of <b>0</b> to skip that stage — it will not appear in the Production dropdown.</p>
+          <p className="mt-2 text-xs text-slate-500">Total Stage Qty = Job Qty x Stage Multiplier. Set a multiplier of <b>0</b> to skip that stage — it will not appear in the Production dropdown. Enter <b>Price / Unit</b> to auto-fill Price Each on Production Entries; new Job Cards for the same product auto-inherit these prices.</p>
         </div>
 
         <div className="mt-5 flex justify-end gap-2"><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={save}>{edit ? "Update" : "Create & Reserve Stock"}</Button></div>
@@ -368,6 +421,22 @@ export function ProductionDashboard() {
   const [stagePriceDraft, setStagePriceDraft] = useState<Record<string, number>>(db.settings.stagePrices || {});
   const [remarks, setRemarks] = useState("");
   const [entryWarning, setEntryWarning] = useState("");
+
+  // Handle deep-link from Operator Ledger: read amrest_goto_jc_id and scroll+highlight.
+  useEffect(() => {
+    const targetId = localStorage.getItem("amrest_goto_jc_id");
+    if (!targetId) return;
+    localStorage.removeItem("amrest_goto_jc_id");
+    // Wait for cards to render
+    setTimeout(() => {
+      const el = document.getElementById(`jc-${targetId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+        el.classList.add("ring-2", "ring-indigo-500");
+        setTimeout(() => el.classList.remove("ring-2", "ring-indigo-500"), 2500);
+      }
+    }, 300);
+  }, []);
 
   const inProg = db.jobCards.filter(j => j.status !== "Completed");
   const completed = db.jobCards.filter(j => j.status === "Completed").length;
@@ -573,9 +642,14 @@ export function ProductionDashboard() {
                 setEntryStage(newStage);
                 setEntryQty(0);
                 setOperatorId("");
-                // Auto-fill price from Stage Prices master (fallback: keep existing)
-                const stagePrice = (db.settings.stagePrices || {})[newStage];
-                if (typeof stagePrice === "number" && stagePrice > 0) setPriceEach(stagePrice);
+                // Prefer JC-level stage price, then company-level Stage Prices master
+                const currentJc = db.jobCards.find(j => j.id === entryJobId);
+                const jcPrice = (currentJc?.stagePrices || {})[newStage];
+                const settingsPrice = (db.settings.stagePrices || {})[newStage];
+                const priceToUse = (typeof jcPrice === "number" && jcPrice > 0)
+                  ? jcPrice
+                  : (typeof settingsPrice === "number" && settingsPrice > 0) ? settingsPrice : 0;
+                if (priceToUse > 0) setPriceEach(priceToUse);
               }}
               data-testid="prod-entry-stage-select"
             >
