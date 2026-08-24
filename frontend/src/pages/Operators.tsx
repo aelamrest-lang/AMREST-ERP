@@ -180,8 +180,19 @@ function OperatorLedger() {
   const [month, setMonth] = useState(currentMonth);
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
-  const [operatorId, setOperatorId] = useState<string>("");
+  const [operatorIds, setOperatorIds] = useState<Set<string>>(new Set());
+  const [operatorPickerOpen, setOperatorPickerOpen] = useState(false);
   const [operatorSearch, setOperatorSearch] = useState<string>("");
+
+  const toggleOperator = (id: string) => {
+    setOperatorIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const selectAllOperators = () => setOperatorIds(new Set(db.operators.map(o => o.id)));
+  const clearOperators = () => setOperatorIds(new Set());
 
   // Helper: resolve the effective ₹/unit for a production entry.
   //  1) Entry.priceEach captured at save time (source of truth)
@@ -210,14 +221,14 @@ function OperatorLedger() {
         }
         return e.date.startsWith(month);
       })
-      .filter(e => !operatorId || e.operatorId === operatorId)
+      .filter(e => operatorIds.size === 0 || (e.operatorId && operatorIds.has(e.operatorId)))
       .map(e => {
         const priceEach = resolvePriceEach(e);
         return { ...e, priceEach, totalAmount: (Number(e.todayQty) || 0) * priceEach };
       })
       .sort((a, b) => a.date.localeCompare(b.date) || (a.operatorName || "").localeCompare(b.operatorName || ""));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [db.productionEntries, db.jobCards, db.settings.stagePrices, month, dateFrom, dateTo, operatorId, useRange]);
+  }, [db.productionEntries, db.jobCards, db.settings.stagePrices, month, dateFrom, dateTo, operatorIds, useRange]);
 
   const summary = useMemo(() => {
     const byOperator = new Map<string, { name: string; qty: number; amount: number; entries: number }>();
@@ -236,10 +247,15 @@ function OperatorLedger() {
   const grandAmount = rows.reduce((s, r) => s + r.totalAmount, 0);
 
   const monthLabel = new Date(`${month}-01`).toLocaleString("en-IN", { month: "long", year: "numeric" });
-  const filterOp = db.operators.find(o => o.id === operatorId);
+  const selectedOps = db.operators.filter(o => operatorIds.has(o.id));
+  const opFilterLabel = operatorIds.size === 0
+    ? "All Operators"
+    : operatorIds.size === 1
+      ? (selectedOps[0]?.name || "1 selected")
+      : `${operatorIds.size} operators`;
 
   const printLedger = () => {
-    const opFilterText = filterOp ? filterOp.name : "All Operators";
+    const opFilterText = opFilterLabel;
     const body = `
       <div class="box">
         <div class="section-title">Operator Ledger — ${monthLabel}</div>
@@ -273,7 +289,7 @@ function OperatorLedger() {
         </tbody>
       </table>
     `;
-    const html = professionalDocument(db.settings, { title: "Operator Ledger", number: `OP-${month}-${filterOp?.name || "ALL"}`, date: todayISO(), body, accent: "#0f766e" });
+    const html = professionalDocument(db.settings, { title: "Operator Ledger", number: `OP-${month}-${operatorIds.size === 1 ? (selectedOps[0]?.name || "OP") : (operatorIds.size ? "MULTI" : "ALL")}`, date: todayISO(), body, accent: "#0f766e" });
     printArea(html, `Operator-Ledger-${month}`);
   };
 
@@ -288,7 +304,7 @@ function OperatorLedger() {
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url; a.download = `operator-ledger-${month}${filterOp ? `-${filterOp.name}` : ""}.csv`;
+    a.href = url; a.download = `operator-ledger-${month}${operatorIds.size === 1 ? `-${selectedOps[0]?.name}` : (operatorIds.size ? "-multi" : "")}.csv`;
     a.click(); URL.revokeObjectURL(url);
   };
 
@@ -311,18 +327,44 @@ function OperatorLedger() {
             </div>
             {useRange && <Button size="sm" variant="outline" onClick={() => { setDateFrom(""); setDateTo(""); }} data-testid="ledger-date-clear">Clear Range</Button>}
           </div>
-          <div className="min-w-[240px]">
-            <Label>Operator</Label>
-            <Select value={operatorId} onChange={(e: any) => setOperatorId(e.target.value)} data-testid="ledger-operator">
-              <option value="">All Operators</option>
-              {db.operators
-                .filter(o => !operatorSearch.trim() || o.name.toLowerCase().includes(operatorSearch.trim().toLowerCase()) || (o.department || "").toLowerCase().includes(operatorSearch.trim().toLowerCase()))
-                .map(o => <option key={o.id} value={o.id}>{o.name}{o.department ? ` · ${o.department}` : ""}</option>)}
-            </Select>
-          </div>
-          <div className="min-w-[180px]">
-            <Label>Search Operator</Label>
-            <Input type="search" value={operatorSearch} onChange={(e: any) => setOperatorSearch(e.target.value)} placeholder="Type name / dept..." data-testid="ledger-operator-search" />
+          <div className="min-w-[260px] relative">
+            <Label>Operators (multi-select)</Label>
+            <button
+              type="button"
+              onClick={() => setOperatorPickerOpen(v => !v)}
+              className="w-full flex items-center justify-between rounded-md border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-3 py-1.5 text-sm text-left hover:border-indigo-400"
+              data-testid="ledger-operator-picker"
+            >
+              <span className={operatorIds.size ? "text-slate-800 dark:text-slate-100" : "text-slate-400"}>
+                {opFilterLabel}
+              </span>
+              <span className="text-slate-400 text-xs">{operatorPickerOpen ? "▲" : "▼"}</span>
+            </button>
+            {operatorPickerOpen && (
+              <div className="absolute z-40 mt-1 w-full max-h-72 overflow-auto rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg" data-testid="ledger-operator-picker-panel">
+                <div className="p-2 border-b border-slate-100 dark:border-slate-800 flex gap-2">
+                  <Input type="search" value={operatorSearch} onChange={(e: any) => setOperatorSearch(e.target.value)} placeholder="Search operator..." className="h-7 py-0 text-xs" data-testid="ledger-operator-picker-search"/>
+                  <button type="button" className="text-[11px] text-indigo-600 hover:underline" onClick={selectAllOperators} data-testid="ledger-op-select-all">All</button>
+                  <button type="button" className="text-[11px] text-slate-500 hover:underline" onClick={clearOperators} data-testid="ledger-op-clear">Clear</button>
+                </div>
+                {db.operators
+                  .filter(o => !operatorSearch.trim() || o.name.toLowerCase().includes(operatorSearch.trim().toLowerCase()) || (o.department || "").toLowerCase().includes(operatorSearch.trim().toLowerCase()))
+                  .map(o => (
+                    <label key={o.id} className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={operatorIds.has(o.id)}
+                        onChange={() => toggleOperator(o.id)}
+                        className="h-4 w-4 accent-indigo-600"
+                        data-testid={`ledger-op-check-${o.name}`}
+                      />
+                      <span className="flex-1">{o.name}</span>
+                      {o.department && <span className="text-[10px] text-slate-500">{o.department}</span>}
+                    </label>
+                  ))}
+                {db.operators.length === 0 && <div className="px-3 py-2 text-xs text-slate-500">No operators defined</div>}
+              </div>
+            )}
           </div>
           <div className="ml-auto flex gap-2">
             {canExport && <Button variant="outline" onClick={exportCSV}>Export CSV</Button>}
@@ -334,7 +376,7 @@ function OperatorLedger() {
       <Card className="mb-3">
         <div className="p-3 grid sm:grid-cols-4 gap-3 text-sm">
           <div><div className="text-slate-500 text-xs">Period</div><b>{useRange ? `${dateFrom || "…"} → ${dateTo || "…"}` : monthLabel}</b></div>
-          <div><div className="text-slate-500 text-xs">Operator</div><b>{filterOp?.name || "All"}</b></div>
+          <div><div className="text-slate-500 text-xs">Operator</div><b>{opFilterLabel}</b></div>
           <div><div className="text-slate-500 text-xs">Total Production Qty</div><b className="text-xl">{grandQty}</b></div>
           <div><div className="text-slate-500 text-xs">{useRange ? "Total Amount" : "Total Monthly Amount"}</div><b className="text-xl text-emerald-600">{fmtINR(grandAmount)}</b></div>
         </div>
@@ -356,29 +398,11 @@ function OperatorLedger() {
           </thead>
           <tbody>
             {rows.map(r => {
-              const jc = db.jobCards.find(j => j.id === r.jobCardId);
-              const gotoJC = () => {
-                if (!jc) return;
-                try { localStorage.setItem("amrest_goto_jc_id", jc.id); } catch { /* noop */ }
-                const goto = (window as any).__amrestSetRoute;
-                if (typeof goto === "function") goto("production");
-                else window.location.reload();
-              };
               return (
                 <tr key={r.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                   <Td className="whitespace-nowrap">{r.date}</Td>
                   <Td className="font-medium">{r.operatorName || "—"}</Td>
-                  <Td className="font-mono text-xs">
-                    {jc ? (
-                      <button
-                        type="button"
-                        className="text-indigo-600 hover:underline"
-                        onClick={gotoJC}
-                        title="Open Job Card in Production"
-                        data-testid={`ledger-jc-link-${jc.number}`}
-                      >{jc.number}</button>
-                    ) : (r.jobCardNumber || "—")}
-                  </Td>
+                  <Td className="font-mono text-xs">{r.jobCardNumber || "—"}</Td>
                   <Td>{r.productName || "—"}</Td>
                   <Td>{r.stage}</Td>
                   <Td className="text-right font-semibold">{r.todayQty}</Td>
@@ -402,18 +426,35 @@ function OperatorLedger() {
 
       {summary.length > 1 && (
         <Card className="mt-4">
-          <div className="p-3 border-b border-slate-200 dark:border-slate-800 font-semibold">Operator-wise Summary — {monthLabel}</div>
+          <div className="p-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+            <div className="font-semibold">
+              {operatorIds.size >= 2 ? "Operator Comparison" : "Operator-wise Summary"} — {useRange ? `${dateFrom || "…"} → ${dateTo || "…"}` : monthLabel}
+            </div>
+            <div className="text-xs text-slate-500">{summary.length} operator{summary.length === 1 ? "" : "s"} in view</div>
+          </div>
           <Table>
-            <thead><tr><Th>Operator</Th><Th className="text-right">Entries</Th><Th className="text-right">Total Qty</Th><Th className="text-right">Total Amount (₹)</Th></tr></thead>
+            <thead><tr><Th>#</Th><Th>Operator</Th><Th className="text-right">Entries</Th><Th className="text-right">Total Qty</Th><Th className="text-right">Total Amount (₹)</Th><Th className="text-right">Share of Amount</Th></tr></thead>
             <tbody>
-              {summary.map((s, i) => (
-                <tr key={i}>
-                  <Td className="font-medium">{s.name}</Td>
-                  <Td className="text-right">{s.entries}</Td>
-                  <Td className="text-right">{s.qty}</Td>
-                  <Td className="text-right font-semibold text-emerald-600">{fmtINR(s.amount)}</Td>
-                </tr>
-              ))}
+              {summary.map((s, i) => {
+                const share = grandAmount > 0 ? (s.amount / grandAmount) * 100 : 0;
+                return (
+                  <tr key={i} className={i === 0 ? "bg-emerald-50/40 dark:bg-emerald-900/10" : ""}>
+                    <Td className="font-mono text-xs">{i + 1}</Td>
+                    <Td className="font-medium">{s.name}</Td>
+                    <Td className="text-right">{s.entries}</Td>
+                    <Td className="text-right">{s.qty}</Td>
+                    <Td className="text-right font-semibold text-emerald-600">{fmtINR(s.amount)}</Td>
+                    <Td>
+                      <div className="flex items-center gap-2 justify-end">
+                        <div className="w-24 h-2 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                          <div className="h-full bg-indigo-500" style={{ width: `${Math.min(100, share)}%` }} />
+                        </div>
+                        <span className="text-xs w-10 text-right">{share.toFixed(1)}%</span>
+                      </div>
+                    </Td>
+                  </tr>
+                );
+              })}
             </tbody>
           </Table>
         </Card>
