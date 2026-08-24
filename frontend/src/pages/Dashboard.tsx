@@ -107,13 +107,12 @@ export function Dashboard() {
     return { label: m.label, value: Math.round(total / 1000) }; // in ₹K
   });
 
-  // ---- Monthly Production from Completed Job Cards only ----
+  // ---- Monthly Production from Delivery Challan dispatched qty (grouped by DC date) ----
   const monthlyProduction = monthBuckets.map(m => {
-    const completedUnits = db.jobCards
-      .filter(j => j.status === "Completed")
-      .filter(j => (j.date || "").slice(0, 7) === m.key)
-      .reduce((sum, j) => sum + (Number(j.qty) || 0), 0);
-    return { label: m.label, value: completedUnits };
+    const dispatchedUnits = db.challans
+      .filter(c => c.date && c.date.slice(0, 7) === m.key)
+      .reduce((sum, c) => sum + (c.items || []).reduce((a, i) => a + (Number(i.qty) || 0), 0), 0);
+    return { label: m.label, value: dispatchedUnits };
   });
 
   const inventoryByCategory = ["Raw Material", "Semi-Finished", "Finished Goods"].map((c, i) => ({
@@ -180,7 +179,7 @@ export function Dashboard() {
         <Card>
           <div className="p-5">
             <h3 className="text-lg font-bold uppercase tracking-wide text-slate-900 dark:text-slate-100">Monthly Production</h3>
-            <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">Total Completed Job Cards · {fyLabel(fyStartYear)} · click a month to view completed job cards</p>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">Total Dispatched via Delivery Challans · {fyLabel(fyStartYear)} · click a month to view DCs</p>
             <div className="mt-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 p-5">
               <ProductionBarChart
                 data={monthlyProduction}
@@ -1149,38 +1148,42 @@ function DashboardDrillDown({
   }
 
   if (drill.type === "production") {
-    const rows = db.jobCards
-      .filter((j: any) => j.status === "Completed" && (j.date || "").slice(0, 7) === drill.monthKey)
+    const rows = db.challans
+      .filter((c: any) => c.date && (c.date || "").slice(0, 7) === drill.monthKey)
       .sort((a: any, b: any) => (b.date || "").localeCompare(a.date || ""));
-    const totalQty = rows.reduce((a: number, j: any) => a + (Number(j.qty) || 0), 0);
+    const totalQty = rows.reduce((a: number, c: any) => a + (c.items || []).reduce((s: number, i: any) => s + (Number(i.qty) || 0), 0), 0);
     return (
-      <Modal open={true} onClose={onClose} title={`Completed Job Cards · ${drill.monthLabel}`} size="xl">
+      <Modal open={true} onClose={onClose} title={`Delivery Challans · ${drill.monthLabel}`} size="xl">
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3 text-sm">
             <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
-              <div className="text-xs text-slate-500">Completed Job Cards</div>
+              <div className="text-xs text-slate-500">Delivery Challans</div>
               <div className="text-xl font-bold">{rows.length}</div>
             </div>
             <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
-              <div className="text-xs text-slate-500">Total Units Produced</div>
+              <div className="text-xs text-slate-500">Total Dispatched Qty</div>
               <div className="text-xl font-bold">{totalQty}</div>
             </div>
           </div>
           <div className="rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700">
             <Table>
-              <thead><tr><Th>JC #</Th><Th>Date</Th><Th>Product</Th><Th className="text-right">Qty</Th><Th>Linked SO</Th></tr></thead>
+              <thead><tr><Th>DC #</Th><Th>Date</Th><Th>Customer</Th><Th>Linked SO</Th><Th>Linked JC</Th><Th className="text-right">Qty</Th></tr></thead>
               <tbody>
                 {rows.length === 0 ? (
-                  <tr><Td colSpan={5}><Empty title="No completed Job Cards in this month" /></Td></tr>
-                ) : rows.map((j: any) => {
-                  const so = db.salesOrders.find((o: any) => o.id === j.salesOrderId);
+                  <tr><Td colSpan={6}><Empty title="No Delivery Challans in this month" /></Td></tr>
+                ) : rows.map((c: any) => {
+                  const so = db.salesOrders.find((o: any) => o.id === c.salesOrderId);
+                  const jc = db.jobCards.find((j: any) => j.id === c.jobCardId);
+                  const cust = db.parties.find((p: any) => p.id === c.customerId);
+                  const qty = (c.items || []).reduce((s: number, i: any) => s + (Number(i.qty) || 0), 0);
                   return (
-                    <tr key={j.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                      <Td className="font-mono text-xs">{j.number}</Td>
-                      <Td>{j.date}</Td>
-                      <Td>{j.product}</Td>
-                      <Td className="text-right font-semibold">{j.qty}</Td>
+                    <tr key={c.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                      <Td className="font-mono text-xs">{c.number}</Td>
+                      <Td>{c.date}</Td>
+                      <Td className="truncate max-w-[200px]">{cust?.name || "—"}</Td>
                       <Td className="font-mono text-xs text-slate-500">{so?.number || "—"}</Td>
+                      <Td className="font-mono text-xs text-slate-500">{jc?.number || "—"}</Td>
+                      <Td className="text-right font-semibold">{qty}</Td>
                     </tr>
                   );
                 })}
