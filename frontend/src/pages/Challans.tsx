@@ -194,6 +194,18 @@ export function Challans() {
     const jcTotalDispatched = row.jcAlreadyDispatched + row.currentQty;
     const jcFullyDispatched = jcTotalDispatched >= currentJC.qty;
 
+    // Check if the SO becomes fully dispatched → auto-mark "Delivered"
+    let soFullyDispatched = false;
+    if (currentSO) {
+      const newDispatchedForItemPreview = row.alreadyDispatched + row.currentQty;
+      const totalSoOrderedPreview = currentSO.items.reduce((s, i) => s + i.qty, 0);
+      const totalSoDispatchedPreview = currentSO.items.reduce((s, i) => {
+        if (i.name === row.name) return s + newDispatchedForItemPreview;
+        return s + sumDispatched(db.challans, currentSO.id, i.name, edit?.id);
+      }, 0);
+      soFullyDispatched = totalSoOrderedPreview > 0 && totalSoDispatchedPreview >= totalSoOrderedPreview;
+    }
+
     setDB(d => {
       const challans = edit
         ? d.challans.map(x => x.id === edit.id ? payload : x)
@@ -201,9 +213,12 @@ export function Challans() {
       const jobCards = jcFullyDispatched
         ? d.jobCards.map(j => j.id === currentJC.id ? { ...j, status: "Completed" as const } : j)
         : d.jobCards;
-      return { ...d, challans, jobCards };
+      const salesOrders = (soFullyDispatched && currentSO)
+        ? d.salesOrders.map(o => o.id === currentSO.id ? { ...o, status: "Delivered" as const } : o)
+        : d.salesOrders;
+      return { ...d, challans, jobCards, salesOrders };
     });
-    log(`${edit ? "Updated" : "Created"} DC ${form.number}${jcFullyDispatched ? ` · Job Card ${currentJC.number} fully dispatched` : ""}`, "Delivery Challan");
+    log(`${edit ? "Updated" : "Created"} DC ${form.number}${jcFullyDispatched ? ` · Job Card ${currentJC.number} fully dispatched` : ""}${soFullyDispatched && currentSO ? ` · Sales Order ${currentSO.number} auto-marked Delivered` : ""}`, "Delivery Challan");
 
     // After save, if SO still has balance across all items, offer to create a new JC.
     let soBalanceAfter = 0;

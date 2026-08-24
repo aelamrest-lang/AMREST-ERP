@@ -17,6 +17,18 @@ import {
 const SO_STATUSES: SalesOrder["status"][] = ["Pending", "Confirmed", "In Production", "Dispatched", "Delivered"];
 const GST_OPTIONS = [0, 5, 12, 18, 28];
 
+function Row({ label, children, strong = false }: { label: string; children: React.ReactNode; strong?: boolean }) {
+  const cells = Array.isArray(children) ? children : [children];
+  return (
+    <tr>
+      <td className={"px-3 py-1.5 border-r border-slate-100 dark:border-slate-800 sticky left-0 bg-white dark:bg-slate-900 z-10 " + (strong ? "font-semibold" : "text-slate-500")}>{label}</td>
+      {cells.map((c, i) => (
+        <td key={i} className={"px-3 py-1.5 border-l border-slate-100 dark:border-slate-800 " + (strong ? "font-semibold" : "")}>{c}</td>
+      ))}
+    </tr>
+  );
+}
+
 export function SalesOrders() {
   const { db, setDB, currentUser, log } = useStore();
   const isAdmin = currentUser?.role === "admin";
@@ -160,6 +172,18 @@ export function SalesOrders() {
 
   const clearFilters = () => { setDateFrom(""); setDateTo(""); setCustomerFilter(""); setProductQuery(""); };
   const activeFilterCount = [dateFrom, dateTo, customerFilter, productQuery.trim()].filter(Boolean).length;
+
+  // ---- Compare selection ----
+  const [compareSet, setCompareSet] = useState<Set<string>>(new Set());
+  const [compareOpen, setCompareOpen] = useState(false);
+  const toggleCompare = (id: string) => {
+    setCompareSet(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const compareOrders = useMemo(() => list.filter(o => compareSet.has(o.id)), [list, compareSet]);
 
   const customers = db.parties.filter(p => p.type === "customer" && (isAdmin || p.ownerId === currentUser?.id));
 
@@ -472,6 +496,17 @@ export function SalesOrders() {
             </datalist>
           </div>
           <div className="flex items-center gap-2 self-end pb-0.5">
+            {compareSet.size > 0 && (
+              <Button
+                size="sm"
+                variant={compareSet.size >= 2 ? "solid" : "outline"}
+                onClick={() => { if (compareSet.size >= 2) setCompareOpen(true); else alert("Select at least 2 Sales Orders to compare."); }}
+                data-testid="so-compare-btn"
+              >Compare ({compareSet.size})</Button>
+            )}
+            {compareSet.size > 0 && (
+              <Button size="sm" variant="ghost" onClick={() => setCompareSet(new Set())} data-testid="so-compare-clear">Clear</Button>
+            )}
             {activeFilterCount > 0 && (
               <>
                 <Badge color="indigo">{filteredList.length} of {list.length} shown</Badge>
@@ -481,10 +516,10 @@ export function SalesOrders() {
           </div>
         </div>
         <Table>
-          <thead><tr><Th>#</Th><Th>Date</Th><Th>Customer</Th><Th>Product(s) &amp; Qty</Th><Th>Delivery</Th><Th>Schedule</Th><Th>Total</Th><Th>Status</Th><Th></Th></tr></thead>
+          <thead><tr><Th className="w-8"></Th><Th>#</Th><Th>Date</Th><Th>Customer</Th><Th>Product(s) &amp; Qty</Th><Th>Delivery</Th><Th>Schedule</Th><Th>Total</Th><Th>Status</Th><Th></Th></tr></thead>
           <tbody>
             {filteredList.length === 0 && (
-              <tr><Td colSpan={9}><Empty title={activeFilterCount ? "No Sales Orders match the current filters" : "No Sales Orders yet"} /></Td></tr>
+              <tr><Td colSpan={10}><Empty title={activeFilterCount ? "No Sales Orders match the current filters" : "No Sales Orders yet"} /></Td></tr>
             )}
             {filteredList.map(o => {
               const t = calcDocTotalsWithFreight(o.items, Number(o.freight) || 0);
@@ -498,6 +533,16 @@ export function SalesOrders() {
               const extra = o.items.length - 1;
               return (
                 <tr key={o.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 align-top">
+                  <Td>
+                    <input
+                      type="checkbox"
+                      checked={compareSet.has(o.id)}
+                      onChange={() => toggleCompare(o.id)}
+                      className="h-4 w-4 accent-indigo-600 cursor-pointer"
+                      data-testid={`so-compare-check-${o.number}`}
+                      title="Select to compare"
+                    />
+                  </Td>
                   <Td className="font-mono text-xs">
                     <button
                       className="text-indigo-600 hover:underline"
@@ -1016,6 +1061,89 @@ export function SalesOrders() {
 
               <div className="flex justify-end pt-2 border-t border-slate-200 dark:border-slate-700">
                 <Button variant="outline" onClick={() => setMonthDrill(null)}>Close</Button>
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
+
+      <Modal open={compareOpen} onClose={() => setCompareOpen(false)} title={`Compare Sales Orders (${compareOrders.length})`} size="xl">
+        {compareOrders.length >= 2 && (() => {
+          // Union of all product names across selected SOs (row keys)
+          const allProducts = Array.from(new Set(compareOrders.flatMap(o => o.items.map(i => i.name)))).sort();
+          const soStats = compareOrders.map(o => {
+            const orderedQty = o.items.reduce((s, i) => s + (Number(i.qty) || 0), 0);
+            const orderedValue = o.items.reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.rate) || 0) * (1 + (Number(i.gst) || 0) / 100), 0) + (Number(o.freight) || 0);
+            const dcs = db.challans.filter(c => c.salesOrderId === o.id);
+            const dispatchedQty = dcs.reduce((s, c) => s + (c.items || []).reduce((a, i) => a + (Number(i.qty) || 0), 0), 0);
+            const balance = Math.max(0, orderedQty - dispatchedQty);
+            return { o, orderedQty, orderedValue, dispatchedQty, balance, dcCount: dcs.length, cust: db.parties.find(p => p.id === o.customerId) };
+          });
+          return (
+            <div className="space-y-4 text-sm">
+              <div className="rounded-lg border border-slate-200 dark:border-slate-700 overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-50 dark:bg-slate-800/60">
+                    <tr>
+                      <th className="text-left px-3 py-2 border-r border-slate-200 dark:border-slate-700 sticky left-0 bg-slate-50 dark:bg-slate-800/60 z-10">Attribute</th>
+                      {soStats.map(({ o }) => (
+                        <th key={o.id} className="text-left px-3 py-2 border-l border-slate-200 dark:border-slate-700 min-w-[180px]">
+                          <span className="font-mono text-indigo-600">{o.number}</span>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    <Row label="SO Date">{soStats.map(({ o }) => <span key={o.id}>{o.date}</span>)}</Row>
+                    <Row label="Customer">{soStats.map(({ o, cust }) => <span key={o.id}>{cust?.name || "—"}</span>)}</Row>
+                    <Row label="Delivery Date">{soStats.map(({ o }) => <span key={o.id}>{o.deliveryDate || "—"}</span>)}</Row>
+                    <Row label="Status">{soStats.map(({ o }) => <Badge key={o.id} color={o.status === "Delivered" ? "green" : o.status === "In Production" ? "amber" : "slate"}>{o.status}</Badge>)}</Row>
+                    <Row label="Line Items">{soStats.map(({ o }) => <span key={o.id}>{o.items.length}</span>)}</Row>
+                    <Row label="Ordered Qty" strong>{soStats.map(({ o, orderedQty }) => <span key={o.id}>{orderedQty} Nos</span>)}</Row>
+                    <Row label="Dispatched Qty">{soStats.map(({ o, dispatchedQty }) => <span key={o.id}>{dispatchedQty} Nos</span>)}</Row>
+                    <Row label="Balance Qty" strong>{soStats.map(({ o, balance }) => <span key={o.id} className={balance === 0 ? "text-emerald-600" : "text-amber-700"}>{balance} Nos</span>)}</Row>
+                    <Row label="Order Value" strong>{soStats.map(({ o, orderedValue }) => <span key={o.id}>{fmtINR(orderedValue)}</span>)}</Row>
+                    <Row label="Delivery Challans">{soStats.map(({ o, dcCount }) => <span key={o.id}>{dcCount} DC{dcCount === 1 ? "" : "s"}</span>)}</Row>
+                    <Row label="Freight">{soStats.map(({ o }) => <span key={o.id}>{fmtINR(Number(o.freight) || 0)}</span>)}</Row>
+                  </tbody>
+                </table>
+              </div>
+
+              <div>
+                <div className="text-sm font-semibold mb-2">Product-wise Comparison</div>
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead className="bg-slate-50 dark:bg-slate-800/60">
+                      <tr>
+                        <th className="text-left px-3 py-2 sticky left-0 bg-slate-50 dark:bg-slate-800/60 z-10">Product</th>
+                        {soStats.map(({ o }) => (
+                          <th key={o.id} className="text-right px-3 py-2 min-w-[140px]"><span className="font-mono text-indigo-600">{o.number}</span></th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {allProducts.map(pname => (
+                        <tr key={pname}>
+                          <td className="px-3 py-1.5 font-medium sticky left-0 bg-white dark:bg-slate-900 z-10">{pname}</td>
+                          {soStats.map(({ o }) => {
+                            const it = o.items.find(i => i.name === pname);
+                            return (
+                              <td key={o.id} className="px-3 py-1.5 text-right">
+                                {it ? (
+                                  <span>{it.qty} × <span className="text-slate-500">{fmtINR(it.rate)}</span></span>
+                                ) : <span className="text-slate-300">—</span>}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-700">
+                <Button variant="outline" onClick={() => setCompareOpen(false)}>Close</Button>
               </div>
             </div>
           );
