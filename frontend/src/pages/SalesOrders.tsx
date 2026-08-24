@@ -138,6 +138,29 @@ export function SalesOrders() {
   const [customerDrill, setCustomerDrill] = useState<string | null>(null); // customerId
   const [monthDrill, setMonthDrill] = useState<string | null>(null); // YYYY-MM key
 
+  // ---- Filters on the SO list (do NOT affect summary/charts above) ----
+  const [dateFrom, setDateFrom] = useState<string>("");
+  const [dateTo, setDateTo] = useState<string>("");
+  const [customerFilter, setCustomerFilter] = useState<string>("");
+  const [productQuery, setProductQuery] = useState<string>("");
+
+  const filteredList = useMemo(() => {
+    return list.filter(o => {
+      if (dateFrom && (o.date || "") < dateFrom) return false;
+      if (dateTo && (o.date || "") > dateTo) return false;
+      if (customerFilter && o.customerId !== customerFilter) return false;
+      if (productQuery.trim()) {
+        const q = productQuery.trim().toLowerCase();
+        const hit = o.items.some(i => (i.name || "").toLowerCase().includes(q));
+        if (!hit) return false;
+      }
+      return true;
+    });
+  }, [list, dateFrom, dateTo, customerFilter, productQuery]);
+
+  const clearFilters = () => { setDateFrom(""); setDateTo(""); setCustomerFilter(""); setProductQuery(""); };
+  const activeFilterCount = [dateFrom, dateTo, customerFilter, productQuery.trim()].filter(Boolean).length;
+
   const customers = db.parties.filter(p => p.type === "customer" && (isAdmin || p.ownerId === currentUser?.id));
 
   const blank = (): SalesOrder => ({
@@ -417,10 +440,53 @@ export function SalesOrders() {
       </div>
 
       <Card>
+        <div className="p-3 border-b border-slate-100 dark:border-slate-800 flex flex-wrap items-end gap-2" data-testid="so-filters">
+          <div className="flex flex-col">
+            <Label className="text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">Date From</Label>
+            <Input type="date" value={dateFrom} onChange={(e: any) => setDateFrom(e.target.value)} className="h-8 py-1" data-testid="so-filter-date-from" />
+          </div>
+          <div className="flex flex-col">
+            <Label className="text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">Date To</Label>
+            <Input type="date" value={dateTo} onChange={(e: any) => setDateTo(e.target.value)} className="h-8 py-1" data-testid="so-filter-date-to" />
+          </div>
+          <div className="flex flex-col min-w-[220px]">
+            <Label className="text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">Customer</Label>
+            <Select value={customerFilter} onChange={(e: any) => setCustomerFilter(e.target.value)} className="h-8 py-1" data-testid="so-filter-customer">
+              <option value="">All Customers</option>
+              {db.parties.filter(p => p.type === "customer").map(p => <option key={p.id} value={p.id}>{p.name}{p.city ? ` · ${p.city}` : ""}</option>)}
+            </Select>
+          </div>
+          <div className="flex flex-col min-w-[220px] flex-1">
+            <Label className="text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">Product</Label>
+            <Input
+              type="text"
+              value={productQuery}
+              onChange={(e: any) => setProductQuery(e.target.value)}
+              placeholder="Search by product name..."
+              className="h-8 py-1"
+              data-testid="so-filter-product"
+              list="so-filter-product-list"
+            />
+            <datalist id="so-filter-product-list">
+              {Array.from(new Set(db.items.filter(i => i.category === "Finished Goods").map(i => i.name))).slice(0, 200).map(n => <option key={n} value={n} />)}
+            </datalist>
+          </div>
+          <div className="flex items-center gap-2 self-end pb-0.5">
+            {activeFilterCount > 0 && (
+              <>
+                <Badge color="indigo">{filteredList.length} of {list.length} shown</Badge>
+                <Button size="sm" variant="outline" onClick={clearFilters} data-testid="so-filter-clear">Clear ({activeFilterCount})</Button>
+              </>
+            )}
+          </div>
+        </div>
         <Table>
           <thead><tr><Th>#</Th><Th>Date</Th><Th>Customer</Th><Th>Product(s) &amp; Qty</Th><Th>Delivery</Th><Th>Schedule</Th><Th>Total</Th><Th>Status</Th><Th></Th></tr></thead>
           <tbody>
-            {list.map(o => {
+            {filteredList.length === 0 && (
+              <tr><Td colSpan={9}><Empty title={activeFilterCount ? "No Sales Orders match the current filters" : "No Sales Orders yet"} /></Td></tr>
+            )}
+            {filteredList.map(o => {
               const t = calcDocTotalsWithFreight(o.items, Number(o.freight) || 0);
               const totalWithFreight = t.total;
               const oq = totalOrderQty(o);
