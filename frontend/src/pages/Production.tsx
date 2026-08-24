@@ -364,6 +364,8 @@ export function ProductionDashboard() {
   const [shift, setShift] = useState<"Day" | "Night" | "General">("Day");
   const [machineName, setMachineName] = useState("");
   const [operatorDrill, setOperatorDrill] = useState<string | null>(null);
+  const [stagePricesOpen, setStagePricesOpen] = useState(false);
+  const [stagePriceDraft, setStagePriceDraft] = useState<Record<string, number>>(db.settings.stagePrices || {});
   const [remarks, setRemarks] = useState("");
   const [entryWarning, setEntryWarning] = useState("");
 
@@ -499,6 +501,33 @@ export function ProductionDashboard() {
         <Card><div className="p-4"><h3 className="font-semibold mb-3">Machine Wise Output</h3>{groupRows(db.productionEntries, "machineName")}</div></Card>
       </div>
 
+      <Card>
+        <div className="p-4">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div>
+              <h3 className="font-semibold">Stage Prices (₹ per unit)</h3>
+              <p className="text-xs text-slate-500 mt-0.5">Fix a default rate for each production stage. Auto-fills "Price Each" when creating a Production Entry.</p>
+            </div>
+            {canEditProduction && (
+              <Button size="sm" variant="outline" onClick={() => { setStagePriceDraft(db.settings.stagePrices || {}); setStagePricesOpen(true); }} data-testid="stage-prices-edit-btn">
+                <IconEdit size={14}/> Edit Stage Prices
+              </Button>
+            )}
+          </div>
+          <div className="mt-3 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2">
+            {STAGES.map(s => {
+              const price = (db.settings.stagePrices || {})[s] || 0;
+              return (
+                <div key={s} className="rounded-lg border border-slate-200 dark:border-slate-700 p-2 bg-slate-50 dark:bg-slate-800/40" data-testid={`stage-price-tile-${s}`}>
+                  <div className="text-[10px] uppercase tracking-wide text-slate-500 truncate" title={s}>{s}</div>
+                  <div className={"text-sm font-semibold " + (price > 0 ? "text-slate-800 dark:text-slate-100" : "text-slate-400")}>{price > 0 ? `₹${price}` : "— Not set"}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </Card>
+
       <div className="space-y-3">
         {inProg.map(j => (
           <div key={j.id} id={`jc-${j.id}`} className="rounded-xl transition-shadow scroll-mt-4">
@@ -539,7 +568,15 @@ export function ProductionDashboard() {
           <div><Label>Production Stage</Label>
             <Select
               value={entryStage}
-              onChange={(e: any) => { setEntryStage(e.target.value); setEntryQty(0); setOperatorId(""); }}
+              onChange={(e: any) => {
+                const newStage = e.target.value as ProductionStage;
+                setEntryStage(newStage);
+                setEntryQty(0);
+                setOperatorId("");
+                // Auto-fill price from Stage Prices master (fallback: keep existing)
+                const stagePrice = (db.settings.stagePrices || {})[newStage];
+                if (typeof stagePrice === "number" && stagePrice > 0) setPriceEach(stagePrice);
+              }}
               data-testid="prod-entry-stage-select"
             >
               {enabledStages.length > 0
@@ -590,6 +627,40 @@ export function ProductionDashboard() {
         {entryWarning && <div className="mt-3 rounded-lg bg-rose-50 text-rose-700 px-3 py-2 text-sm">{entryWarning}</div>}
         {productionComplete && <div className="mt-3 rounded-lg bg-emerald-50 text-emerald-700 px-3 py-2 text-sm">Production Quantity Completed</div>}
         <div className="mt-5 flex justify-end gap-2"><Button variant="outline" onClick={() => setEntryOpen(false)}>Cancel</Button><Button onClick={saveProductionEntry}>Save Production Entry</Button></div>
+      </Modal>
+
+      <Modal open={stagePricesOpen} onClose={() => setStagePricesOpen(false)} title="Edit Stage Prices" size="lg">
+        <div className="space-y-3 text-sm">
+          <p className="text-xs text-slate-500">Enter a fixed rate (₹ per unit) for each production stage. When you create a Production Entry for a stage, its price auto-fills from here.</p>
+          <div className="grid sm:grid-cols-2 gap-3">
+            {STAGES.map(s => (
+              <div key={s}>
+                <Label>{s}</Label>
+                <Input
+                  type="number"
+                  value={stagePriceDraft[s] ?? 0}
+                  onChange={(e: any) => setStagePriceDraft(prev => ({ ...prev, [s]: Number(e.target.value) || 0 }))}
+                  placeholder="0"
+                  data-testid={`stage-price-input-${s}`}
+                />
+              </div>
+            ))}
+          </div>
+          <div className="pt-3 border-t border-slate-200 dark:border-slate-700 flex justify-between items-center">
+            <Button variant="ghost" onClick={() => setStagePriceDraft(Object.fromEntries(STAGES.map(s => [s, 0])))} data-testid="stage-prices-reset">Reset All to 0</Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setStagePricesOpen(false)}>Cancel</Button>
+              <Button
+                onClick={() => {
+                  setDB(d => ({ ...d, settings: { ...d.settings, stagePrices: stagePriceDraft } }));
+                  log("Updated Stage Prices master", "Production");
+                  setStagePricesOpen(false);
+                }}
+                data-testid="stage-prices-save"
+              >Save</Button>
+            </div>
+          </div>
+        </div>
       </Modal>
 
       <Modal open={!!operatorDrill} onClose={() => setOperatorDrill(null)} title={operatorDrill ? `Operator: ${operatorDrill}` : "Operator"} size="xl">

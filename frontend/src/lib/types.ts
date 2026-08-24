@@ -451,6 +451,7 @@ export interface CompanySettings {
   fyStart: string;
   documentFormats?: DocumentFormat[];
   expectedSales?: Record<string, number>; // key: "YYYY-MM" → ₹ expected sales for that month
+  stagePrices?: Record<string, number>; // key: ProductionStage → ₹ per unit
 }
 
 export interface DocumentTerm {
