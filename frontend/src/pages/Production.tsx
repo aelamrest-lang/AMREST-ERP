@@ -363,6 +363,7 @@ export function ProductionDashboard() {
   const [priceEach, setPriceEach] = useState(0);
   const [shift, setShift] = useState<"Day" | "Night" | "General">("Day");
   const [machineName, setMachineName] = useState("");
+  const [operatorDrill, setOperatorDrill] = useState<string | null>(null);
   const [remarks, setRemarks] = useState("");
   const [entryWarning, setEntryWarning] = useState("");
 
@@ -494,13 +495,14 @@ export function ProductionDashboard() {
       </Card>
 
       <div className="grid lg:grid-cols-2 gap-4">
-        <Card><div className="p-4"><h3 className="font-semibold mb-3">Operator Wise Output</h3>{groupRows(db.productionEntries, "operatorName")}</div></Card>
+        <Card><div className="p-4"><h3 className="font-semibold mb-3">Operator Wise Output</h3>{groupRows(db.productionEntries, "operatorName", (name) => setOperatorDrill(name))}</div></Card>
         <Card><div className="p-4"><h3 className="font-semibold mb-3">Machine Wise Output</h3>{groupRows(db.productionEntries, "machineName")}</div></Card>
       </div>
 
       <div className="space-y-3">
         {inProg.map(j => (
-          <Card key={j.id}>
+          <div key={j.id} id={`jc-${j.id}`} className="rounded-xl transition-shadow scroll-mt-4">
+          <Card>
             <div className="p-4">
               <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
                 <div>
@@ -526,6 +528,7 @@ export function ProductionDashboard() {
               </div>
             </div>
           </Card>
+          </div>
         ))}
         {inProg.length === 0 && <Card><Empty title="No active production" subtitle="Create a job card to start"/></Card>}
       </div>
@@ -588,14 +591,121 @@ export function ProductionDashboard() {
         {productionComplete && <div className="mt-3 rounded-lg bg-emerald-50 text-emerald-700 px-3 py-2 text-sm">Production Quantity Completed</div>}
         <div className="mt-5 flex justify-end gap-2"><Button variant="outline" onClick={() => setEntryOpen(false)}>Cancel</Button><Button onClick={saveProductionEntry}>Save Production Entry</Button></div>
       </Modal>
+
+      <Modal open={!!operatorDrill} onClose={() => setOperatorDrill(null)} title={operatorDrill ? `Operator: ${operatorDrill}` : "Operator"} size="xl">
+        {operatorDrill && (() => {
+          const rows = db.productionEntries
+            .filter(e => (e.operatorName || "Not Set") === operatorDrill)
+            .slice()
+            .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+          const totalQty = rows.reduce((s, e) => s + (Number(e.todayQty) || 0), 0);
+          const uniqueJCs = new Set(rows.map(e => e.jobCardId)).size;
+          const scrollToJC = (jcId: string) => {
+            setOperatorDrill(null);
+            setTimeout(() => {
+              const el = document.getElementById(`jc-${jcId}`);
+              if (el) {
+                el.scrollIntoView({ behavior: "smooth", block: "start" });
+                el.classList.add("ring-2", "ring-indigo-500");
+                setTimeout(() => el.classList.remove("ring-2", "ring-indigo-500"), 2500);
+              }
+            }, 200);
+          };
+          return (
+            <div className="space-y-4 text-sm">
+              <div className="grid sm:grid-cols-3 gap-3">
+                <div className="rounded-lg border border-emerald-200 dark:border-emerald-800 p-3 bg-emerald-50 dark:bg-emerald-900/20">
+                  <div className="text-[11px] uppercase tracking-wide text-emerald-700 dark:text-emerald-300">Total Output</div>
+                  <div className="text-2xl font-bold text-emerald-800 dark:text-emerald-200">{totalQty}</div>
+                </div>
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
+                  <div className="text-[11px] uppercase tracking-wide text-slate-500">Production Entries</div>
+                  <div className="text-2xl font-bold">{rows.length}</div>
+                </div>
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
+                  <div className="text-[11px] uppercase tracking-wide text-slate-500">Job Cards Worked</div>
+                  <div className="text-2xl font-bold">{uniqueJCs}</div>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden max-h-[420px] overflow-y-auto">
+                <Table>
+                  <thead>
+                    <tr>
+                      <Th>Date</Th>
+                      <Th>Job Card #</Th>
+                      <Th>Product</Th>
+                      <Th>Stage</Th>
+                      <Th className="text-right">Qty</Th>
+                      <Th>Machine</Th>
+                      <Th>Shift</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.length === 0 && <tr><Td colSpan={7}><Empty title="No production entries" /></Td></tr>}
+                    {rows.map(e => {
+                      const jc = db.jobCards.find(j => j.id === e.jobCardId);
+                      return (
+                        <tr key={e.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                          <Td>{e.date}</Td>
+                          <Td className="font-mono text-xs">
+                            {jc ? (
+                              <button
+                                type="button"
+                                className="text-indigo-600 hover:underline"
+                                onClick={() => scrollToJC(jc.id)}
+                                title="Jump to this Job Card"
+                                data-testid={`op-drill-jc-${jc.number}`}
+                              >{jc.number}</button>
+                            ) : "—"}
+                          </Td>
+                          <Td>{jc?.product || "—"}</Td>
+                          <Td>{e.stage}</Td>
+                          <Td className="text-right font-semibold">{e.todayQty}</Td>
+                          <Td>{e.machineName || "—"}</Td>
+                          <Td>{e.shift || "—"}</Td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </Table>
+              </div>
+
+              <div className="flex justify-end pt-2 border-t border-slate-200 dark:border-slate-700">
+                <Button variant="outline" onClick={() => setOperatorDrill(null)}>Close</Button>
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
     </div>
   );
 }
 
-function groupRows(entries: ProductionEntry[], field: "operatorName" | "machineName") {
+function groupRows(entries: ProductionEntry[], field: "operatorName" | "machineName", onClick?: (name: string) => void) {
   const map = new Map<string, number>();
   entries.forEach(e => map.set(e[field] || "Not Set", (map.get(e[field] || "Not Set") || 0) + e.todayQty));
   const rows = Array.from(map.entries()).slice(0, 8);
   if (!rows.length) return <Empty title="No data" />;
-  return <div className="space-y-2">{rows.map(([name, qty]) => <div key={name} className="flex justify-between text-sm border-b border-slate-100 dark:border-slate-800 pb-2"><span>{name}</span><b>{qty}</b></div>)}</div>;
+  return (
+    <div className="space-y-2">
+      {rows.map(([name, qty]) => onClick ? (
+        <button
+          key={name}
+          type="button"
+          onClick={() => onClick(name)}
+          className="w-full flex justify-between items-center text-sm border-b border-slate-100 dark:border-slate-800 pb-2 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 px-1 rounded transition-colors cursor-pointer"
+          data-testid={`operator-row-${name}`}
+        >
+          <span className="text-indigo-600 hover:underline">{name}</span>
+          <b>{qty}</b>
+        </button>
+      ) : (
+        <div key={name} className="flex justify-between text-sm border-b border-slate-100 dark:border-slate-800 pb-2">
+          <span>{name}</span>
+          <b>{qty}</b>
+        </div>
+      ))}
+    </div>
+  );
 }
