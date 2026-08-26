@@ -30,6 +30,7 @@ const navGroups: { label: string; items: { id: Route; label: string; icon: any }
     { id: "jobcards", label: "Job Cards", icon: IconClipboard },
     { id: "production", label: "Production", icon: IconFactory },
     { id: "operators", label: "Operators & Ledger", icon: IconUser },
+    { id: "mfgtime", label: "Manufacturing Time", icon: IconChart },
     { id: "testing", label: "QC Testing", icon: IconClipboard },
     { id: "challans", label: "Delivery Challan", icon: IconTruck },
   ]},

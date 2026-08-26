@@ -453,6 +453,8 @@ export interface CompanySettings {
   documentFormats?: DocumentFormat[];
   expectedSales?: Record<string, number>; // key: "YYYY-MM" → ₹ expected sales for that month
   stagePrices?: Record<string, number>; // key: ProductionStage → ₹ per unit
+  stageDays?: Record<string, number>; // key: ProductionStage → working days per stage (Mfg Time Calculator)
+  itemLeadTimeDays?: Record<string, number>; // key: itemId → default purchase lead time (days)
 }
 
 export interface DocumentTerm {
