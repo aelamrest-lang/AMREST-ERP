@@ -38,6 +38,7 @@ export interface Item {
   code?: string;
   name: string;
   category: "Raw Material" | "Finished Goods" | "Semi-Finished";
+  productCategory?: string; // e.g. Transformer, CT & PT, Epoxy Item — used by Costing Sheets
   unit: string;
   hsn?: string;
   gstRate: number;
@@ -82,6 +83,8 @@ export interface CostingSheet {
   marginPct: number;
   labourPct?: number;
   officePct?: number;
+  usdExchangeRate?: number; // ₹ per 1 USD (for USD Sale Price display)
+  productCategory?: string; // e.g. Transformer, CT & PT, Epoxy Item
   status: "draft" | "pending" | "approved" | "rejected";
   locked?: boolean;
   ownerId: string;
@@ -458,6 +461,7 @@ export interface CompanySettings {
   rawMaterialProcurementDays?: number; // editable RM procurement window (days)
   itemLeadTimeDays?: Record<string, number>; // key: itemId → default purchase lead time (days)
   mfgTimeByProduct?: Record<string, { procurementDays: number; stageCapacity: Record<string, number> }>;
+  productCategories?: string[]; // master list of product categories for Costing Sheets
 }
 
 export interface DocumentTerm {

@@ -59,6 +59,7 @@ export function Costings() {
     marginPct: 15,
     labourPct: 0,
     officePct: 0,
+    usdExchangeRate: 85,
     status: "draft",
     locked: false,
     ownerId: currentUser?.id || "",
@@ -154,7 +155,29 @@ export function Costings() {
       productName: it?.name || "",
       title: f.title || it?.name || "",
       gstRate: it?.gstRate ?? f.gstRate,
+      productCategory: (it as any)?.productCategory || f.productCategory || "",
     }));
+  };
+
+  // Master list of product categories with sensible defaults + user-added ones
+  const DEFAULT_PRODUCT_CATEGORIES = ["Transformer", "CT & PT", "Epoxy Item"];
+  const productCategories: string[] = Array.from(new Set([
+    ...DEFAULT_PRODUCT_CATEGORIES,
+    ...(((db.settings as any).productCategories || []) as string[]),
+    ...db.items.map(i => (i as any).productCategory).filter(Boolean),
+  ]));
+  const promptNewCategory = () => {
+    const name = window.prompt("Enter new Product Category name:");
+    if (!name || !name.trim()) return;
+    const trimmed = name.trim();
+    setDB(d => ({
+      ...d,
+      settings: {
+        ...d.settings,
+        productCategories: Array.from(new Set([...((d.settings as any).productCategories || []), trimmed])),
+      } as any,
+    }));
+    setForm(f => ({ ...f, productCategory: trimmed }));
   };
 
   const createInlineFinishedGood = () => {
@@ -229,6 +252,13 @@ export function Costings() {
       setDB(d => ({ ...d, costings: [payload, ...d.costings] }));
       log(`Created costing ${payload.number}`, "Costing");
     }
+    // Persist chosen Product Category back to the underlying Item for auto-fill next time.
+    if (payload.productItemId && payload.productCategory) {
+      setDB(d => ({
+        ...d,
+        items: d.items.map(i => i.id === payload.productItemId ? ({ ...i, productCategory: payload.productCategory }) : i),
+      }));
+    }
     setOpen(false);
   };
 
@@ -250,6 +280,7 @@ export function Costings() {
       marginPct: c.marginPct,
       labourPct: c.labourPct || 0,
       officePct: c.officePct || 0,
+      usdExchangeRate: c.usdExchangeRate ?? 85,
       materials: c.materials.map(m => ({ ...m })),
     });
     setOpen(true);
@@ -309,7 +340,10 @@ export function Costings() {
         <tr><td>Total Costing</td><td class="right"><b>${fmtINR(t.totalCost)}</b></td></tr>
         <tr><td>Profit %</td><td class="right">${fmt2(c.marginPct)}%</td></tr>
         <tr><td>Profit</td><td class="right">${fmtINR(t.profit)}</td></tr>
-        <tr><td><b>Sale Price</b></td><td class="right"><b>${fmtINR(t.salePrice)}</b></td></tr>
+        <tr><td><b>Sale Price (INR)</b></td><td class="right"><b>${fmtINR(t.salePrice)}</b></td></tr>
+        ${(c.usdExchangeRate || 0) > 0 ? `
+        <tr><td>Exchange Rate</td><td class="right">₹${fmt2(c.usdExchangeRate || 0)} = 1 USD</td></tr>
+        <tr><td><b>Sale Price (USD)</b></td><td class="right"><b>$${fmt2(t.salePrice / (c.usdExchangeRate || 1))}</b></td></tr>` : ""}
       </table>
     `;
     const html = professionalDocument(db.settings, { title: "Costing Sheet", number: c.number, date: c.createdAt.slice(0, 10), body, accent: "#0891b2" });
@@ -379,7 +413,7 @@ export function Costings() {
               />
             </Th>
             <Th className="w-6"></Th>
-            <Th>#</Th><Th>Date</Th><Th>Product</Th><Th>Title</Th><Th className="text-right">Total Cost</Th><Th className="text-right">Margin</Th><Th className="text-right">Sale Price</Th><Th>Version</Th><Th>Status</Th><Th></Th>
+            <Th>#</Th><Th>Date</Th><Th>Product</Th><Th>Category</Th><Th>Title</Th><Th className="text-right">Total Cost</Th><Th className="text-right">Margin</Th><Th className="text-right">Sale Price (INR)</Th><Th className="text-right">Sale Price (USD)</Th><Th>Version</Th><Th>Status</Th><Th></Th>
           </tr></thead>
           <tbody>
             {list.map(c => {
@@ -414,10 +448,20 @@ export function Costings() {
                   </Td>
                   <Td>{c.createdAt.slice(0, 10)}</Td>
                   <Td className="font-medium">{c.productName || "—"}</Td>
+                  <Td>
+                    {(() => {
+                      const item = c.productItemId ? db.items.find(i => i.id === c.productItemId) : undefined;
+                      const cat = c.productCategory || (item as any)?.productCategory;
+                      return cat ? <Badge color="slate">{cat}</Badge> : <span className="text-slate-400">—</span>;
+                    })()}
+                  </Td>
                   <Td>{c.title}</Td>
                   <Td className="text-right">{fmtINR(t.totalCost)}</Td>
                   <Td className="text-right">{fmt2(c.marginPct)}%</Td>
                   <Td className="text-right font-semibold text-emerald-600">{fmtINR(t.salePrice)}</Td>
+                  <Td className="text-right font-semibold text-amber-600" data-testid={`costing-usd-${c.id}`}>
+                    {(c.usdExchangeRate || 0) > 0 ? `$${fmt2(t.salePrice / (c.usdExchangeRate || 1))}` : <span className="text-slate-300">—</span>}
+                  </Td>
                   <Td>
                     <Badge color="blue">v{c.version || 1}</Badge>
                     {(c.history?.length || 0) > 0 && (
@@ -468,8 +512,7 @@ export function Costings() {
                 {finishedGoods.map(fg => <option key={fg.id} value={fg.id}>{fg.name}</option>)}
               </Select>
             ) : (
-              <div className="rounded-lg border border-indigo-200 dark:border-indigo-700 p-3 bg-indigo-50/60 dark:bg-indigo-900/20 grid sm:grid-cols-2 gap-2">
-                <div className="sm:col-span-2"><Label>Product Name *</Label><Input value={newItem.name || ""} onChange={(e: any) => setNewItem(v => ({ ...v, name: e.target.value }))} data-testid="costing-new-item-name" /></div>
+              <div className="rounded-lg border border-indigo-200 dark:border-indigo-700 p-3 bg-indigo-50/60 dark:bg-indigo-900/20 grid sm:grid-cols-2 gap-2">                <div className="sm:col-span-2"><Label>Product Name *</Label><Input value={newItem.name || ""} onChange={(e: any) => setNewItem(v => ({ ...v, name: e.target.value }))} data-testid="costing-new-item-name" /></div>
                 <div><Label>Unit</Label>
                   <Select value={newItem.unit || "Nos"} onChange={(e: any) => setNewItem(v => ({ ...v, unit: e.target.value }))}>
                     {UNIT_OPTIONS.map(u => <option key={u} value={u}>{u}</option>)}
@@ -481,6 +524,27 @@ export function Costings() {
                 </div>
               </div>
             )}
+          </div>
+
+          <div className="sm:col-span-2">
+            <div className="flex items-center justify-between">
+              <Label>Product Category</Label>
+              <button
+                type="button"
+                onClick={promptNewCategory}
+                className="text-xs text-indigo-600 hover:underline"
+                data-testid="costing-new-category-btn"
+              >+ Create New Category</button>
+            </div>
+            <Select
+              value={form.productCategory || ""}
+              onChange={(e: any) => setForm(f => ({ ...f, productCategory: e.target.value }))}
+              data-testid="costing-category-select"
+            >
+              <option value="">— Select Category —</option>
+              {productCategories.map(c => <option key={c} value={c}>{c}</option>)}
+            </Select>
+            <div className="text-[10px] text-slate-500 mt-0.5">Category is remembered on the product — next time you pick this product it will auto-fill.</div>
           </div>
           <div className="sm:col-span-2"><Label>Title / Description</Label><Input value={form.title} onChange={(e: any) => setForm({ ...form, title: e.target.value })} placeholder="e.g., 100 kVA 11/0.433 kV Oil Immersed Transformer" data-testid="costing-title" /></div>
           <div><Label>KVA / Rating</Label><Input value={form.kva || ""} onChange={(e: any) => setForm({ ...form, kva: e.target.value })} /></div>
@@ -582,8 +646,20 @@ export function Costings() {
               <Label>GST %</Label>
               <Input type="number" value={form.gstRate} onChange={(e: any) => setForm({ ...form, gstRate: Number(e.target.value) || 0 })} />
             </div>
+            <div>
+              <Label>Exchange Rate (₹ per 1 USD)</Label>
+              <Input
+                type="number"
+                min={0}
+                step="0.01"
+                value={form.usdExchangeRate ?? 85}
+                onChange={(e: any) => setForm({ ...form, usdExchangeRate: Number(e.target.value) || 0 })}
+                placeholder="85"
+                data-testid="costing-usd-rate"
+              />
+            </div>
             <div className="text-[11px] text-slate-500">
-              Labour &amp; Office are calculated on <b>Material Cost</b> and added into Total Costing. Profit % is applied on Total Costing (Material + Labour + Office).
+              Labour &amp; Office are calculated on <b>Material Cost</b> and added into Total Costing. Profit % is applied on Total Costing (Material + Labour + Office). USD Sale Price = INR Sale Price ÷ Exchange Rate.
             </div>
           </div>
           <div className="rounded-lg border p-3 bg-slate-50 dark:bg-slate-800/40 dark:border-slate-700 text-sm space-y-1">
@@ -593,7 +669,13 @@ export function Costings() {
             <div className="flex justify-between border-t pt-1 mt-1"><span>Total Costing</span><b>{fmtINR(totals.totalCost)}</b></div>
             <div className="flex justify-between"><span>Profit %</span><b>{fmt2(form.marginPct)}%</b></div>
             <div className="flex justify-between"><span>Profit</span><b className="text-emerald-600">{fmtINR(totals.profit)}</b></div>
-            <div className="flex justify-between text-base border-t pt-1 mt-1"><span>Sale Price</span><b className="text-indigo-700 dark:text-indigo-300">{fmtINR(totals.salePrice)}</b></div>
+            <div className="flex justify-between text-base border-t pt-1 mt-1"><span>Sale Price (INR)</span><b className="text-indigo-700 dark:text-indigo-300" data-testid="costing-sale-inr">{fmtINR(totals.salePrice)}</b></div>
+            {(form.usdExchangeRate || 0) > 0 && (
+              <>
+                <div className="flex justify-between text-xs text-slate-500"><span>Exchange Rate</span><span>₹{fmt2(form.usdExchangeRate || 0)} = 1 USD</span></div>
+                <div className="flex justify-between text-base"><span>Sale Price (USD)</span><b className="text-amber-600 dark:text-amber-300" data-testid="costing-sale-usd">${fmt2(totals.salePrice / (form.usdExchangeRate || 1))}</b></div>
+              </>
+            )}
           </div>
         </div>
 
