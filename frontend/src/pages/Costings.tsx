@@ -31,6 +31,7 @@ export function Costings() {
 
   const [search, setSearch] = useState("");
   const [productFilter, setProductFilter] = useState<string>("");
+  const [categoryFilter, setCategoryFilter] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [versionFilter, setVersionFilter] = useState<string>("");
   const [fromDate, setFromDate] = useState<string>("");
@@ -81,6 +82,11 @@ export function Costings() {
       );
     }
     if (productFilter) arr = arr.filter(c => (c.productName || c.title || "") === productFilter);
+    if (categoryFilter) arr = arr.filter(c => {
+      const item = c.productItemId ? db.items.find(i => i.id === c.productItemId) : undefined;
+      const cat = c.productCategory || (item as any)?.productCategory || "";
+      return cat === categoryFilter;
+    });
     if (statusFilter) arr = arr.filter(c => (c.locked ? "locked" : c.status) === statusFilter);
     if (versionFilter) arr = arr.filter(c => `v${c.version || 1}` === versionFilter);
     if (fromDate) arr = arr.filter(c => c.createdAt.slice(0, 10) >= fromDate);
@@ -92,7 +98,7 @@ export function Costings() {
       if (sa !== sb) return sa - sb;
       return b.createdAt.localeCompare(a.createdAt);
     });
-  }, [db.costings, isAdmin, currentUser, search, productFilter, statusFilter, versionFilter, fromDate, toDate]);
+  }, [db.costings, db.items, isAdmin, currentUser, search, productFilter, categoryFilter, statusFilter, versionFilter, fromDate, toDate]);
 
   const productOptions = useMemo(() => Array.from(new Set(db.costings.map(c => c.productName || c.title).filter(Boolean))).sort(), [db.costings]);
   const versionOptions = useMemo(() => Array.from(new Set(db.costings.map(c => `v${c.version || 1}`))).sort(), [db.costings]);
@@ -110,7 +116,7 @@ export function Costings() {
     else setSelectedIds(new Set(list.map(c => c.id)));
   };
   const clearFilters = () => {
-    setSearch(""); setProductFilter(""); setStatusFilter(""); setVersionFilter(""); setFromDate(""); setToDate("");
+    setSearch(""); setProductFilter(""); setCategoryFilter(""); setStatusFilter(""); setVersionFilter(""); setFromDate(""); setToDate("");
   };
 
   const handleDragStart = (id: string) => setDragId(id);
@@ -373,11 +379,15 @@ export function Costings() {
       </div>
 
       <Card>
-        <div className="p-3 border-b border-slate-200 dark:border-slate-800 grid sm:grid-cols-6 gap-2 text-sm">
+        <div className="p-3 border-b border-slate-200 dark:border-slate-800 grid sm:grid-cols-7 gap-2 text-sm">
           <div className="sm:col-span-2 relative">
             <IconSearch size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"/>
             <Input className="pl-9" placeholder="Search costing no / title / product..." value={search} onChange={(e: any) => setSearch(e.target.value)} data-testid="costing-search"/>
           </div>
+          <Select value={categoryFilter} onChange={(e: any) => setCategoryFilter(e.target.value)} data-testid="costing-filter-category">
+            <option value="">All Categories</option>
+            {productCategories.map(c => <option key={c} value={c}>{c}</option>)}
+          </Select>
           <Select value={productFilter} onChange={(e: any) => setProductFilter(e.target.value)} data-testid="costing-filter-product">
             <option value="">All Products</option>
             {productOptions.map(p => <option key={p} value={p}>{p}</option>)}
@@ -398,8 +408,8 @@ export function Costings() {
             <Input type="date" value={fromDate} onChange={(e: any) => setFromDate(e.target.value)} title="From date" data-testid="costing-filter-from" />
             <Input type="date" value={toDate} onChange={(e: any) => setToDate(e.target.value)} title="To date" data-testid="costing-filter-to" />
           </div>
-          {(search || productFilter || statusFilter || versionFilter || fromDate || toDate) && (
-            <button onClick={clearFilters} className="sm:col-span-6 text-left text-xs text-indigo-600 hover:underline" data-testid="costing-clear-filters">Clear all filters</button>
+          {(search || productFilter || categoryFilter || statusFilter || versionFilter || fromDate || toDate) && (
+            <button onClick={clearFilters} className="sm:col-span-7 text-left text-xs text-indigo-600 hover:underline" data-testid="costing-clear-filters">Clear all filters</button>
           )}
         </div>
         <Table>
