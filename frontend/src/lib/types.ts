@@ -457,6 +457,7 @@ export interface CompanySettings {
   stageCapacity?: Record<string, number>; // key: MfgStage → daily output (Nos/day) for Mfg Time Calculator
   rawMaterialProcurementDays?: number; // editable RM procurement window (days)
   itemLeadTimeDays?: Record<string, number>; // key: itemId → default purchase lead time (days)
+  mfgTimeByProduct?: Record<string, { procurementDays: number; stageCapacity: Record<string, number> }>;
 }
 
 export interface DocumentTerm {

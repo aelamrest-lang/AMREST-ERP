@@ -67,11 +67,14 @@ export function ManufacturingTime() {
   }, [fgId, db.items, db.boms]);
 
   // Raw Material Procurement Days (editable, default 10)
-  const persistedRmDays = (db.settings as any).rawMaterialProcurementDays;
-  const [rmDays, setRmDays] = useState<number>(typeof persistedRmDays === "number" ? persistedRmDays : 10);
+  const globalRmDays = (db.settings as any).rawMaterialProcurementDays;
+  const [rmDays, setRmDays] = useState<number>(typeof globalRmDays === "number" ? globalRmDays : 10);
 
-  // Stage Capacities (Nos/day) — persisted via settings.stageCapacity
+  // Stage Capacities (Nos/day) — persisted via settings.stageCapacity (global) or mfgTimeByProduct (per-FG)
   const [stageCapacity, setStageCapacity] = useState<Record<MfgStage, number>>({ ...DEFAULT_CAPACITY });
+  const [saveMsg, setSaveMsg] = useState<string>("");
+
+  // Load global defaults on mount
   useEffect(() => {
     const persisted = ((db.settings as any).stageCapacity || {}) as Record<string, number>;
     setStageCapacity(prev => {
@@ -82,16 +85,59 @@ export function ManufacturingTime() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // When FG changes, load its saved values (fallback to global defaults)
+  useEffect(() => {
+    if (!fgId) return;
+    const byProduct = (db.settings as any).mfgTimeByProduct || {};
+    const saved = byProduct[fgId];
+    if (saved) {
+      if (typeof saved.procurementDays === "number") setRmDays(saved.procurementDays);
+      if (saved.stageCapacity) {
+        setStageCapacity(prev => {
+          const next = { ...prev };
+          MFG_STAGES.forEach(s => {
+            const v = saved.stageCapacity?.[s];
+            if (typeof v === "number" && v > 0) next[s] = v;
+          });
+          return next;
+        });
+      }
+      setSaveMsg("Loaded saved settings for this product.");
+      setTimeout(() => setSaveMsg(""), 2000);
+    } else {
+      // Fall back to global master
+      const globalCap = (db.settings as any).stageCapacity || {};
+      setStageCapacity(prev => {
+        const next: Record<MfgStage, number> = { ...prev };
+        MFG_STAGES.forEach(s => { if (typeof globalCap[s] === "number" && globalCap[s] > 0) next[s] = globalCap[s]; });
+        return next;
+      });
+      if (typeof globalRmDays === "number") setRmDays(globalRmDays);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fgId]);
+
   const saveDefaults = () => {
-    setDB(d => ({
-      ...d,
-      settings: {
-        ...d.settings,
-        stageCapacity: { ...((d.settings as any).stageCapacity || {}), ...stageCapacity },
-        rawMaterialProcurementDays: rmDays,
-      } as any,
-    }));
-    log("Saved default Stage Capacity + RM Procurement Days", "Manufacturing Time");
+    setDB(d => {
+      const patch: any = {
+        settings: {
+          ...d.settings,
+          stageCapacity: { ...((d.settings as any).stageCapacity || {}), ...stageCapacity },
+          rawMaterialProcurementDays: rmDays,
+        },
+      };
+      if (fgId) {
+        patch.settings.mfgTimeByProduct = {
+          ...((d.settings as any).mfgTimeByProduct || {}),
+          [fgId]: { procurementDays: rmDays, stageCapacity: { ...stageCapacity } },
+        };
+      }
+      return { ...d, ...patch };
+    });
+    const label = currentFG ? ` for ${currentFG.name}` : "";
+    log(`Saved Production Time settings${label}`, "Manufacturing Time");
+    setSaveMsg(`Production time settings saved successfully${label}.`);
+    setTimeout(() => setSaveMsg(""), 3000);
   };
 
   // Compute required days per stage = ceil(qty / capacity)
@@ -125,7 +171,16 @@ export function ManufacturingTime() {
           <h1 className="text-2xl font-bold">Estimated Manufacturing Time</h1>
           <p className="text-sm text-slate-500">Capacity-based estimator · parallel/sequential production stages · working-day aware</p>
         </div>
-        <Button variant="outline" onClick={saveDefaults} data-testid="mfg-save-defaults">Save as Default</Button>
+        <div className="flex items-center gap-3">
+          {saveMsg && (
+            <span className="rounded-md bg-emerald-50 border border-emerald-200 text-emerald-700 dark:bg-emerald-900/30 dark:border-emerald-800 dark:text-emerald-300 px-3 py-1.5 text-sm font-medium" data-testid="mfg-save-msg">
+              ✓ {saveMsg}
+            </span>
+          )}
+          <Button variant="outline" onClick={saveDefaults} data-testid="mfg-save-defaults">
+            {currentFG ? `Save as Default for ${currentFG.name.length > 24 ? currentFG.name.slice(0, 24) + "…" : currentFG.name}` : "Save as Default"}
+          </Button>
+        </div>
       </div>
 
       {/* Step 1 */}
@@ -134,10 +189,13 @@ export function ManufacturingTime() {
           <h3 className="font-semibold mb-3">Step 1 · Select Finished Product</h3>
           <div className="grid sm:grid-cols-5 gap-3">
             <div className="sm:col-span-2">
-              <Label>Finished Product</Label>
+              <Label>Finished Product{fgId && ((db.settings as any).mfgTimeByProduct || {})[fgId] && <span className="ml-2 text-[10px] text-emerald-600 font-normal">(saved profile loaded)</span>}</Label>
               <Select value={fgId} onChange={(e: any) => setFgId(e.target.value)} data-testid="mfg-fg">
                 <option value="">— Select finished good —</option>
-                {finishedGoods.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+                {finishedGoods.map(i => {
+                  const has = !!((db.settings as any).mfgTimeByProduct || {})[i.id];
+                  return <option key={i.id} value={i.id}>{i.name}{has ? " · ★ saved" : ""}</option>;
+                })}
               </Select>
             </div>
             <div>
