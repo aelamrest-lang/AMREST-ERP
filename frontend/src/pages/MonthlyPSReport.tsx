@@ -156,6 +156,8 @@ export function MonthlyPSReport() {
   const [editRow, setEditRow] = useState<PSRow | null>(null);
   const [editForm, setEditForm] = useState<{ month: string; product: string; qty: string; price: string }>({ month: "", product: "", qty: "", price: "" });
   const [viewProduct, setViewProduct] = useState<string | null>(null);
+  const [viewMonth, setViewMonth] = useState<string | null>(null); // drill-down: items sold in this month
+  const [editingQtyMonth, setEditingQtyMonth] = useState<string | null>(null);
 
   // Derived lookups
   const allMonths = useMemo(() =>
@@ -465,7 +467,7 @@ export function MonthlyPSReport() {
               <div>
                 <div className="font-semibold">Monthly Summary</div>
                 <div className="text-xs text-slate-500">
-                  Edit Total Qty or Total Sales for any month to override the auto-aggregate. Overrides only apply when no product filter is active.
+                  Click <strong>Total Qty Sold</strong> to see items sold that month · click the ✎ pencil to override qty · Total Sales Amount is inline-editable. Overrides only apply when no product filter is active.
                   {productFilter !== "all" && <span className="ml-1 text-amber-600">Editing disabled — clear product filter to edit.</span>}
                 </div>
               </div>
@@ -493,22 +495,45 @@ export function MonthlyPSReport() {
                           {m.isOverridden && <span className="ml-2 text-[9px] font-semibold text-amber-700 bg-amber-100 dark:bg-amber-900/40 dark:text-amber-300 px-1.5 py-0.5 rounded" title="Values manually overridden">OVERRIDE</span>}
                         </Td>
                         <Td className="text-right">
-                          <Input
-                            type="number"
-                            defaultValue={m.qty}
-                            key={`qty-${m.month}-${m.qty}-${m.isOverridden}`}
-                            disabled={!editable}
-                            onBlur={(e: any) => {
-                              const v = e.target.value;
-                              if (Number(v) === m.autoQty) { // typing back the auto value → clear override on this field
-                                saveOverride(m.month, "qty", "");
-                              } else if (String(v) !== String(m.qty)) {
-                                saveOverride(m.month, "qty", v);
-                              }
-                            }}
-                            className="text-right py-1 h-8 min-w-32 ml-auto"
-                            data-testid={`ps-summary-qty-${m.month}`}
-                          />
+                          {editingQtyMonth === m.month && editable ? (
+                            <Input
+                              type="number"
+                              autoFocus
+                              defaultValue={m.qty}
+                              onBlur={(e: any) => {
+                                const v = e.target.value;
+                                if (Number(v) === m.autoQty) saveOverride(m.month, "qty", "");
+                                else if (String(v) !== String(m.qty)) saveOverride(m.month, "qty", v);
+                                setEditingQtyMonth(null);
+                              }}
+                              onKeyDown={(e: any) => {
+                                if (e.key === "Enter") { e.currentTarget.blur(); }
+                                else if (e.key === "Escape") { setEditingQtyMonth(null); }
+                              }}
+                              className="text-right py-1 h-8 min-w-32 ml-auto"
+                              data-testid={`ps-summary-qty-input-${m.month}`}
+                            />
+                          ) : (
+                            <div className="flex items-center justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setViewMonth(m.month)}
+                                className="text-indigo-700 font-semibold hover:underline"
+                                title="View items sold in this month"
+                                data-testid={`ps-summary-qty-${m.month}`}
+                              >{m.qty.toLocaleString("en-IN")}</button>
+                              {editable && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); setEditingQtyMonth(m.month); }}
+                                  className="text-slate-400 hover:text-indigo-600 text-xs"
+                                  title="Edit total qty (override)"
+                                  data-testid={`ps-summary-qty-edit-${m.month}`}
+                                  aria-label="Edit qty"
+                                >✎</button>
+                              )}
+                            </div>
+                          )}
                         </Td>
                         <Td className="text-right">
                           <Input
@@ -556,42 +581,7 @@ export function MonthlyPSReport() {
             </div>
           </Card>
 
-          {/* Product-wise Summary (clickable rows) */}
-          <Card>
-            <div className="p-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
-              <div className="font-semibold">Product-wise Sales</div>
-              <div className="text-xs text-slate-500">Click any product row to see the underlying sales</div>
-            </div>
-            <div className="overflow-x-auto">
-              <Table>
-                <thead>
-                  <tr>
-                    <Th>Product</Th>
-                    <Th className="text-right">Total Qty</Th>
-                    <Th className="text-right">Total Sales Amount</Th>
-                    <Th className="text-right">Share of Sales</Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {productAgg.length === 0 ? (
-                    <tr><Td colSpan={4}><Empty title="No data" /></Td></tr>
-                  ) : productAgg.map(p => (
-                    <tr
-                      key={p.product}
-                      className="hover:bg-indigo-50/50 dark:hover:bg-indigo-900/20 cursor-pointer transition-colors"
-                      onClick={() => setViewProduct(p.product)}
-                      data-testid={`ps-product-row-${p.product.replace(/\W+/g, "-").toLowerCase()}`}
-                    >
-                      <Td className="font-medium text-indigo-700 hover:underline">{p.product}</Td>
-                      <Td className="text-right">{p.qty.toLocaleString("en-IN")}</Td>
-                      <Td className="text-right font-semibold">{fmtINR(p.amount)}</Td>
-                      <Td className="text-right text-slate-500">{totalAmount > 0 ? ((p.amount / totalAmount) * 100).toFixed(1) + "%" : "-"}</Td>
-                    </tr>
-                  ))}
-                </tbody>
-              </Table>
-            </div>
-          </Card>
+          {/* Product-wise Sales card hidden — access via clicking Total Qty Sold in Monthly Summary above */}
 
           {/* Raw Rows */}
           <Card>
@@ -854,6 +844,86 @@ export function MonthlyPSReport() {
               </div>
               <div className="flex items-center justify-end pt-1">
                 <Button variant="ghost" onClick={() => setViewProduct(null)} data-testid="ps-product-view-close">Close</Button>
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
+
+      {/* Month Drill-down Modal — items sold in a specific month */}
+      <Modal open={!!viewMonth} onClose={() => setViewMonth(null)} title={viewMonth ? `Items Sold — ${monthLabel(viewMonth)}` : ""} size="lg">
+        {viewMonth && (() => {
+          const rows = persisted.filter(r => r.month === viewMonth).sort((a, b) => b.amount - a.amount);
+          const qtySum = rows.reduce((s, r) => s + r.qty, 0);
+          const amtSum = rows.reduce((s, r) => s + r.amount, 0);
+          const productBreakdown = new Map<string, { qty: number; amount: number; lines: number }>();
+          rows.forEach(r => {
+            const cur = productBreakdown.get(r.product) || { qty: 0, amount: 0, lines: 0 };
+            cur.qty += r.qty; cur.amount += r.amount; cur.lines += 1;
+            productBreakdown.set(r.product, cur);
+          });
+          const products = Array.from(productBreakdown.entries())
+            .map(([product, v]) => ({ product, ...v }))
+            .sort((a, b) => b.amount - a.amount);
+          const override = overrides[viewMonth];
+          const hasOverride = override && (override.qty !== undefined || override.amount !== undefined);
+          return (
+            <div className="space-y-3" data-testid="ps-month-view">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-lg bg-slate-50 dark:bg-slate-800 p-3 text-center">
+                  <div className="text-[10px] uppercase tracking-wide text-slate-500">Distinct Products</div>
+                  <div className="text-lg font-bold">{products.length}</div>
+                </div>
+                <div className="rounded-lg bg-blue-50 dark:bg-blue-900/20 p-3 text-center">
+                  <div className="text-[10px] uppercase tracking-wide text-blue-700">Total Qty</div>
+                  <div className="text-lg font-bold text-blue-700">{qtySum.toLocaleString("en-IN")}</div>
+                </div>
+                <div className="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 p-3 text-center">
+                  <div className="text-[10px] uppercase tracking-wide text-emerald-700">Total Sales</div>
+                  <div className="text-lg font-bold text-emerald-700">{fmtINR(amtSum)}</div>
+                </div>
+              </div>
+              {hasOverride && (
+                <div className="text-[11px] px-3 py-2 rounded-md bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800/40">
+                  Note: this month has manual overrides on the summary
+                  ({override.qty !== undefined && `Qty=${override.qty.toLocaleString("en-IN")}`}
+                  {override.qty !== undefined && override.amount !== undefined && ", "}
+                  {override.amount !== undefined && `Amount=${fmtINR(override.amount)}`}).
+                  The values below are the raw uploaded rows.
+                </div>
+              )}
+              <div className="max-h-[420px] overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700">
+                <Table>
+                  <thead className="sticky top-0 bg-white dark:bg-slate-900">
+                    <tr>
+                      <Th>Product</Th>
+                      <Th className="text-right">Qty</Th>
+                      <Th className="text-right">Total Amount</Th>
+                      <Th className="text-right">Share</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {products.length === 0 ? (
+                      <tr><Td colSpan={4}><Empty title="No items in this month" /></Td></tr>
+                    ) : products.map(p => (
+                      <tr
+                        key={p.product}
+                        className="hover:bg-indigo-50/50 dark:hover:bg-indigo-900/20 cursor-pointer"
+                        onClick={() => { setViewMonth(null); setViewProduct(p.product); }}
+                        data-testid={`ps-month-product-${p.product.replace(/\W+/g, "-").toLowerCase()}`}
+                        title="Click to open product drill-down"
+                      >
+                        <Td className="font-medium text-indigo-700 hover:underline">{p.product}</Td>
+                        <Td className="text-right">{p.qty.toLocaleString("en-IN")}</Td>
+                        <Td className="text-right font-semibold">{fmtINR(p.amount)}</Td>
+                        <Td className="text-right text-slate-500">{amtSum > 0 ? ((p.amount / amtSum) * 100).toFixed(1) + "%" : "-"}</Td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </Table>
+              </div>
+              <div className="flex items-center justify-end pt-1">
+                <Button variant="ghost" onClick={() => setViewMonth(null)} data-testid="ps-month-view-close">Close</Button>
               </div>
             </div>
           );
