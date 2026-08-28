@@ -12,6 +12,7 @@ Cloud-based Transformer Manufacturing ERP & CRM with modules for Sales CRM, Quot
 ## Implemented (highlights)
 - Sales CRM, Quotations, Proformas, Sales Orders with item-wise delivery schedules
 - Costings module with versioning, duplicate, side-by-side compare, trend chart, rate refresh
+- **NEW (28-Feb-2026):** Monthly Profit & Loss sheet — fully manual, month-wise data entry (Opening/Purchase/Closing Stock, Sales, Indirect/Direct Expenses); auto-computes Consumed Stock, Total Expenses, Profit/Loss and Profit %; FY selector (Apr–Mar); FY totals row; 3-panel bar-chart trend (Sales / Total Expenses / Profit); persisted in company settings under `monthlyPnl`. Sidebar entry under Insights.
 - **NEW (12-Feb-2026):** Labour Charges % and Office Expenses % in Costing Sheet — auto-computed on Material Cost; flow into Total Costing, Profit and Sale Price (persisted, shown in list/print/history)
 - **NEW (12-Feb-2026):** Inline "+ Create new finished good" in the FinishedGoodCombobox — one-click quick-add modal from Sales Orders, Quotations and Proformas; saves to Item Master and auto-selects into the current line
 - BOM (with copy feature), Job Cards with Secondary Winding split into 3 substages

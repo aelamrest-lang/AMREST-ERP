@@ -462,6 +462,7 @@ export interface CompanySettings {
   itemLeadTimeDays?: Record<string, number>; // key: itemId → default purchase lead time (days)
   mfgTimeByProduct?: Record<string, { procurementDays: number; stageCapacity: Record<string, number> }>;
   productCategories?: string[]; // master list of product categories for Costing Sheets
+  monthlyPnl?: Record<string, { opening: number; purchase: number; closing: number; sales: number; indirect: number; direct: number }>; // key: YYYY-MM
 }
 
 export interface DocumentTerm {
