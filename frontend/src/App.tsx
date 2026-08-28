@@ -17,6 +17,7 @@ import { JobCards, ProductionDashboard } from "./pages/Production";
 import { OperatorsPage } from "./pages/Operators";
 import { ManufacturingTime } from "./pages/ManufacturingTime";
 import { MonthlyPnL } from "./pages/MonthlyPnL";
+import { MonthlyPSReport } from "./pages/MonthlyPSReport";
 import { Costings } from "./pages/Costings";
 import { TestingPage } from "./pages/Testing";
 import { Challans } from "./pages/Challans";
@@ -81,6 +82,7 @@ function Shell() {
       {effective === "operators" && <OperatorsPage />}
       {effective === "mfgtime" && <ManufacturingTime />}
       {effective === "pnl" && <MonthlyPnL />}
+      {effective === "psreport" && <MonthlyPSReport />}
       {effective === "testing" && <TestingPage />}
       {effective === "challans" && <Challans />}
       {effective === "reports" && <Reports />}

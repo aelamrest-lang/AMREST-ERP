@@ -463,6 +463,7 @@ export interface CompanySettings {
   mfgTimeByProduct?: Record<string, { procurementDays: number; stageCapacity: Record<string, number> }>;
   productCategories?: string[]; // master list of product categories for Costing Sheets
   monthlyPnl?: Record<string, { opening: number | null; purchase: number; closing: number; sales: number; indirect: number; direct: number }>; // key: YYYY-MM; opening=null means auto-inherit from previous month's closing
+  monthlyPSRows?: Array<{ id: string; month: string; product: string; qty: number; price: number; amount: number }>; // Monthly P&S Report — Excel-uploaded product sales rows (month=YYYY-MM)
 }
 
 export interface DocumentTerm {

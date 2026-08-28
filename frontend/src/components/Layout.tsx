@@ -38,6 +38,7 @@ const navGroups: { label: string; items: { id: Route; label: string; icon: any }
     { id: "reports", label: "Reports", icon: IconChart },
     { id: "taxdash", label: "Tax Dashboard", icon: IconChart },
     { id: "pnl", label: "Monthly P&L", icon: IconChart },
+    { id: "psreport", label: "Monthly P&S Report", icon: IconChart },
   ]},
   { label: "Administration", items: [
     { id: "users", label: "Users", icon: IconUser },
