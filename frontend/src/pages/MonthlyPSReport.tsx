@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { useStore, uid } from "../lib/store";
-import { Card, Button, Input, Label, Table, Th, Td, Empty, Select, KPI } from "../components/ui";
+import { Card, Button, Input, Label, Table, Th, Td, Empty, Select, KPI, Modal } from "../components/ui";
 import { fmtINR, downloadCSV } from "../lib/utils";
 import { BarChart } from "../components/charts";
 
@@ -138,6 +138,7 @@ function SignedBarChart({ data, height = 220, color = "#10b981" }: { data: { lab
 export function MonthlyPSReport() {
   const { db, setDB, log } = useStore();
   const persisted: PSRow[] = ((db.settings as any).monthlyPSRows || []) as PSRow[];
+  const overrides: Record<string, { qty?: number; amount?: number }> = ((db.settings as any).monthlyPSOverrides || {});
 
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploadMsg, setUploadMsg] = useState<string>("");
@@ -150,6 +151,11 @@ export function MonthlyPSReport() {
   const [compareMode, setCompareMode] = useState<"month" | "year">("month");
   const [selectedMonths, setSelectedMonths] = useState<string[]>([]);
   const [selectedYears, setSelectedYears] = useState<number[]>([]);
+
+  // Modals
+  const [editRow, setEditRow] = useState<PSRow | null>(null);
+  const [editForm, setEditForm] = useState<{ month: string; product: string; qty: string; price: string }>({ month: "", product: "", qty: "", price: "" });
+  const [viewProduct, setViewProduct] = useState<string | null>(null);
 
   // Derived lookups
   const allMonths = useMemo(() =>
@@ -168,19 +174,33 @@ export function MonthlyPSReport() {
     (productFilter === "all" || r.product === productFilter)
   ), [persisted, monthFilter, productFilter]);
 
-  // Monthly aggregates from filtered
+  // Monthly aggregates from filtered — layered with manual overrides (if any)
   const monthlyAgg = useMemo(() => {
-    const map = new Map<string, { qty: number; amount: number }>();
+    const map = new Map<string, { qty: number; amount: number; isOverridden: boolean; autoQty: number; autoAmount: number }>();
     filtered.forEach(r => {
-      const cur = map.get(r.month) || { qty: 0, amount: 0 };
-      cur.qty += r.qty;
-      cur.amount += r.amount;
+      const cur = map.get(r.month) || { qty: 0, amount: 0, isOverridden: false, autoQty: 0, autoAmount: 0 };
+      cur.autoQty += r.qty;
+      cur.autoAmount += r.amount;
       map.set(r.month, cur);
+    });
+    // Layer overrides (only when no product filter is active, since overrides are month-level)
+    map.forEach((v, k) => {
+      const o = overrides[k];
+      const overrideAllowed = productFilter === "all";
+      if (overrideAllowed && o && (o.qty !== undefined || o.amount !== undefined)) {
+        v.qty = o.qty !== undefined ? o.qty : v.autoQty;
+        v.amount = o.amount !== undefined ? o.amount : v.autoAmount;
+        v.isOverridden = true;
+      } else {
+        v.qty = v.autoQty;
+        v.amount = v.autoAmount;
+        v.isOverridden = false;
+      }
     });
     return Array.from(map.entries())
       .map(([month, v]) => ({ month, ...v }))
       .sort((a, b) => a.month.localeCompare(b.month));
-  }, [filtered]);
+  }, [filtered, overrides, productFilter]);
 
   // Product aggregates from filtered
   const productAgg = useMemo(() => {
@@ -196,8 +216,9 @@ export function MonthlyPSReport() {
       .sort((a, b) => b.amount - a.amount);
   }, [filtered]);
 
-  const totalQty = filtered.reduce((s, r) => s + r.qty, 0);
-  const totalAmount = filtered.reduce((s, r) => s + r.amount, 0);
+  // Grand totals reflect any overrides shown in the Monthly Summary
+  const totalQty = monthlyAgg.reduce((s, m) => s + m.qty, 0);
+  const totalAmount = monthlyAgg.reduce((s, m) => s + m.amount, 0);
 
   // ---- Excel upload ----
   const handleUpload = async (file?: File) => {
@@ -268,20 +289,84 @@ export function MonthlyPSReport() {
     setDB(d => ({ ...d, settings: { ...d.settings, monthlyPSRows: ((d.settings as any).monthlyPSRows || []).filter((r: PSRow) => r.id !== id) } as any }));
   };
 
-  // ---- Comparison computations ----
+  // ---- Comparison computations (applies month-level overrides when no product filter) ----
+  const applyOverride = (m: string, autoQty: number, autoAmount: number) => {
+    if (productFilter !== "all") return { qty: autoQty, amount: autoAmount };
+    const o = overrides[m];
+    if (!o) return { qty: autoQty, amount: autoAmount };
+    return {
+      qty: o.qty !== undefined ? o.qty : autoQty,
+      amount: o.amount !== undefined ? o.amount : autoAmount,
+    };
+  };
   const computeForMonth = (m: string) => {
     const rows = persisted.filter(r => r.month === m && (productFilter === "all" || r.product === productFilter));
-    return { qty: rows.reduce((s, r) => s + r.qty, 0), amount: rows.reduce((s, r) => s + r.amount, 0), lines: rows.length };
+    const autoQty = rows.reduce((s, r) => s + r.qty, 0);
+    const autoAmount = rows.reduce((s, r) => s + r.amount, 0);
+    const { qty, amount } = applyOverride(m, autoQty, autoAmount);
+    return { qty, amount, lines: rows.length };
   };
   const computeForYear = (fy: number) => {
-    const rows = persisted.filter(r => fyOf(r.month) === fy && (productFilter === "all" || r.product === productFilter));
-    return { qty: rows.reduce((s, r) => s + r.qty, 0), amount: rows.reduce((s, r) => s + r.amount, 0), lines: rows.length };
+    const monthsInFy = Array.from(new Set(persisted.filter(r => fyOf(r.month) === fy).map(r => r.month)));
+    let qty = 0, amount = 0, lines = 0;
+    monthsInFy.forEach(m => {
+      const rows = persisted.filter(r => r.month === m && (productFilter === "all" || r.product === productFilter));
+      const autoQty = rows.reduce((s, r) => s + r.qty, 0);
+      const autoAmount = rows.reduce((s, r) => s + r.amount, 0);
+      const applied = applyOverride(m, autoQty, autoAmount);
+      qty += applied.qty; amount += applied.amount; lines += rows.length;
+    });
+    return { qty, amount, lines };
   };
   const cmpCols = compareMode === "month"
     ? selectedMonths.map(k => ({ key: k, label: monthLabel(k), data: computeForMonth(k) }))
     : selectedYears.map(y => ({ key: String(y), label: fyLabel(y), data: computeForYear(y) }));
   const toggleMonth = (k: string) => setSelectedMonths(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k].sort());
   const toggleYear = (y: number) => setSelectedYears(prev => prev.includes(y) ? prev.filter(x => x !== y) : [...prev, y].sort((a, b) => a - b));
+
+  // ---- Monthly Summary override handlers ----
+  const saveOverride = (month: string, field: "qty" | "amount", raw: string) => {
+    const parsed = raw.trim() === "" ? undefined : Math.max(0, Number(raw) || 0);
+    setDB(d => {
+      const cur = { ...((d.settings as any).monthlyPSOverrides || {}) };
+      const existing = { ...(cur[month] || {}) };
+      if (parsed === undefined) delete existing[field]; else existing[field] = parsed;
+      if (existing.qty === undefined && existing.amount === undefined) delete cur[month];
+      else cur[month] = existing;
+      return { ...d, settings: { ...d.settings, monthlyPSOverrides: cur } as any };
+    });
+  };
+  const resetMonth = (month: string) => {
+    setDB(d => {
+      const cur = { ...((d.settings as any).monthlyPSOverrides || {}) };
+      delete cur[month];
+      return { ...d, settings: { ...d.settings, monthlyPSOverrides: cur } as any };
+    });
+    log(`P&S: reset override for ${monthLabel(month)}`, "P&S Report");
+  };
+
+  // ---- Row edit ----
+  const openEdit = (r: PSRow) => {
+    setEditRow(r);
+    setEditForm({ month: r.month, product: r.product, qty: String(r.qty), price: String(r.price) });
+  };
+  const saveEdit = () => {
+    if (!editRow) return;
+    const monthKey = normalizeMonth(editForm.month) || editRow.month;
+    const product = editForm.product.trim() || editRow.product;
+    const qty = Math.max(0, Number(editForm.qty) || 0);
+    const price = Math.max(0, Number(editForm.price) || 0);
+    const amount = qty * price;
+    setDB(d => ({
+      ...d,
+      settings: {
+        ...d.settings,
+        monthlyPSRows: ((d.settings as any).monthlyPSRows || []).map((r: PSRow) => r.id === editRow.id ? { ...r, month: monthKey, product, qty, price, amount } : r),
+      } as any,
+    }));
+    log(`P&S: edited row ${product} — ${monthLabel(monthKey)}`, "P&S Report");
+    setEditRow(null);
+  };
 
   return (
     <div className="space-y-4">
@@ -374,9 +459,17 @@ export function MonthlyPSReport() {
             )}
           </Card>
 
-          {/* Monthly Summary Table */}
+          {/* Monthly Summary Table (editable) */}
           <Card>
-            <div className="p-3 border-b border-slate-200 dark:border-slate-800 font-semibold">Monthly Summary</div>
+            <div className="p-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between flex-wrap gap-2">
+              <div>
+                <div className="font-semibold">Monthly Summary</div>
+                <div className="text-xs text-slate-500">
+                  Edit Total Qty or Total Sales for any month to override the auto-aggregate. Overrides only apply when no product filter is active.
+                  {productFilter !== "all" && <span className="ml-1 text-amber-600">Editing disabled — clear product filter to edit.</span>}
+                </div>
+              </div>
+            </div>
             <div className="overflow-x-auto">
               <Table>
                 <thead>
@@ -385,25 +478,77 @@ export function MonthlyPSReport() {
                     <Th className="text-right">Total Qty Sold</Th>
                     <Th className="text-right">Total Sales Amount</Th>
                     <Th className="text-right">Avg Price / Unit</Th>
+                    <Th></Th>
                   </tr>
                 </thead>
                 <tbody>
                   {monthlyAgg.length === 0 ? (
-                    <tr><Td colSpan={4}><Empty title="No data" /></Td></tr>
-                  ) : monthlyAgg.map(m => (
-                    <tr key={m.month} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                      <Td className="font-medium">{monthLabel(m.month)}</Td>
-                      <Td className="text-right">{m.qty.toLocaleString("en-IN")}</Td>
-                      <Td className="text-right font-semibold">{fmtINR(m.amount)}</Td>
-                      <Td className="text-right text-slate-500">{m.qty > 0 ? fmtINR(m.amount / m.qty) : "-"}</Td>
-                    </tr>
-                  ))}
+                    <tr><Td colSpan={5}><Empty title="No data" /></Td></tr>
+                  ) : monthlyAgg.map(m => {
+                    const editable = productFilter === "all";
+                    return (
+                      <tr key={m.month} className={"hover:bg-slate-50 dark:hover:bg-slate-800/50 " + (m.isOverridden ? "bg-amber-50/50 dark:bg-amber-900/10" : "")}>
+                        <Td className="font-medium">
+                          {monthLabel(m.month)}
+                          {m.isOverridden && <span className="ml-2 text-[9px] font-semibold text-amber-700 bg-amber-100 dark:bg-amber-900/40 dark:text-amber-300 px-1.5 py-0.5 rounded" title="Values manually overridden">OVERRIDE</span>}
+                        </Td>
+                        <Td className="text-right">
+                          <Input
+                            type="number"
+                            defaultValue={m.qty}
+                            key={`qty-${m.month}-${m.qty}-${m.isOverridden}`}
+                            disabled={!editable}
+                            onBlur={(e: any) => {
+                              const v = e.target.value;
+                              if (Number(v) === m.autoQty) { // typing back the auto value → clear override on this field
+                                saveOverride(m.month, "qty", "");
+                              } else if (String(v) !== String(m.qty)) {
+                                saveOverride(m.month, "qty", v);
+                              }
+                            }}
+                            className="text-right py-1 h-8 min-w-32 ml-auto"
+                            data-testid={`ps-summary-qty-${m.month}`}
+                          />
+                        </Td>
+                        <Td className="text-right">
+                          <Input
+                            type="number"
+                            defaultValue={m.amount}
+                            key={`amt-${m.month}-${m.amount}-${m.isOverridden}`}
+                            disabled={!editable}
+                            onBlur={(e: any) => {
+                              const v = e.target.value;
+                              if (Number(v) === m.autoAmount) {
+                                saveOverride(m.month, "amount", "");
+                              } else if (String(v) !== String(m.amount)) {
+                                saveOverride(m.month, "amount", v);
+                              }
+                            }}
+                            className="text-right py-1 h-8 min-w-36 ml-auto"
+                            data-testid={`ps-summary-amt-${m.month}`}
+                          />
+                        </Td>
+                        <Td className="text-right text-slate-500">{m.qty > 0 ? fmtINR(m.amount / m.qty) : "-"}</Td>
+                        <Td className="text-right">
+                          {m.isOverridden && editable && (
+                            <button
+                              type="button"
+                              onClick={() => resetMonth(m.month)}
+                              className="text-[10px] text-slate-500 hover:text-indigo-600 underline"
+                              data-testid={`ps-summary-reset-${m.month}`}
+                            >reset</button>
+                          )}
+                        </Td>
+                      </tr>
+                    );
+                  })}
                   {monthlyAgg.length > 0 && (
                     <tr className="bg-slate-50 dark:bg-slate-800/40 font-semibold">
                       <Td>Total</Td>
                       <Td className="text-right">{totalQty.toLocaleString("en-IN")}</Td>
                       <Td className="text-right text-indigo-700">{fmtINR(totalAmount)}</Td>
                       <Td className="text-right text-slate-500">{totalQty > 0 ? fmtINR(totalAmount / totalQty) : "-"}</Td>
+                      <Td></Td>
                     </tr>
                   )}
                 </tbody>
@@ -411,9 +556,12 @@ export function MonthlyPSReport() {
             </div>
           </Card>
 
-          {/* Product-wise Summary */}
+          {/* Product-wise Summary (clickable rows) */}
           <Card>
-            <div className="p-3 border-b border-slate-200 dark:border-slate-800 font-semibold">Product-wise Sales</div>
+            <div className="p-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+              <div className="font-semibold">Product-wise Sales</div>
+              <div className="text-xs text-slate-500">Click any product row to see the underlying sales</div>
+            </div>
             <div className="overflow-x-auto">
               <Table>
                 <thead>
@@ -428,8 +576,13 @@ export function MonthlyPSReport() {
                   {productAgg.length === 0 ? (
                     <tr><Td colSpan={4}><Empty title="No data" /></Td></tr>
                   ) : productAgg.map(p => (
-                    <tr key={p.product} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                      <Td className="font-medium">{p.product}</Td>
+                    <tr
+                      key={p.product}
+                      className="hover:bg-indigo-50/50 dark:hover:bg-indigo-900/20 cursor-pointer transition-colors"
+                      onClick={() => setViewProduct(p.product)}
+                      data-testid={`ps-product-row-${p.product.replace(/\W+/g, "-").toLowerCase()}`}
+                    >
+                      <Td className="font-medium text-indigo-700 hover:underline">{p.product}</Td>
                       <Td className="text-right">{p.qty.toLocaleString("en-IN")}</Td>
                       <Td className="text-right font-semibold">{fmtINR(p.amount)}</Td>
                       <Td className="text-right text-slate-500">{totalAmount > 0 ? ((p.amount / totalAmount) * 100).toFixed(1) + "%" : "-"}</Td>
@@ -443,7 +596,10 @@ export function MonthlyPSReport() {
           {/* Raw Rows */}
           <Card>
             <div className="p-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
-              <div className="font-semibold">Uploaded Rows</div>
+              <div>
+                <div className="font-semibold">Uploaded Rows</div>
+                <div className="text-xs text-slate-500">Click any row to edit its values</div>
+              </div>
               <div className="text-xs text-slate-500">{filtered.length} shown</div>
             </div>
             <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
@@ -462,16 +618,21 @@ export function MonthlyPSReport() {
                   {filtered.length === 0 ? (
                     <tr><Td colSpan={6}><Empty title="No rows" /></Td></tr>
                   ) : filtered.map(r => (
-                    <tr key={r.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                    <tr
+                      key={r.id}
+                      className="hover:bg-indigo-50/50 dark:hover:bg-indigo-900/20 cursor-pointer transition-colors"
+                      onClick={() => openEdit(r)}
+                      data-testid={`ps-row-${r.id}`}
+                    >
                       <Td className="font-medium">{monthLabel(r.month)}</Td>
-                      <Td>{r.product}</Td>
+                      <Td className="text-indigo-700 hover:underline">{r.product}</Td>
                       <Td className="text-right">{r.qty.toLocaleString("en-IN")}</Td>
                       <Td className="text-right">{fmtINR(r.price)}</Td>
                       <Td className="text-right font-semibold">{fmtINR(r.amount)}</Td>
                       <Td>
                         <button
                           type="button"
-                          onClick={() => removeRow(r.id)}
+                          onClick={(e) => { e.stopPropagation(); removeRow(r.id); }}
                           className="text-xs text-rose-600 hover:underline"
                           title="Delete this row"
                           data-testid={`ps-row-del-${r.id}`}
@@ -604,6 +765,100 @@ export function MonthlyPSReport() {
           </div>
         </>
       )}
+
+      {/* Row Edit Modal */}
+      <Modal open={!!editRow} onClose={() => setEditRow(null)} title="Edit Sale Row" size="md">
+        {editRow && (
+          <div className="space-y-3" data-testid="ps-edit-modal">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Month (YYYY-MM or "Aug 2026")</Label>
+                <Input value={editForm.month} onChange={(e: any) => setEditForm(f => ({ ...f, month: e.target.value }))} data-testid="ps-edit-month" />
+                {normalizeMonth(editForm.month) === null && editForm.month.trim() !== "" && (
+                  <div className="text-[10px] text-rose-600 mt-1">Could not parse — will keep original month.</div>
+                )}
+              </div>
+              <div>
+                <Label>Product Name</Label>
+                <Input value={editForm.product} onChange={(e: any) => setEditForm(f => ({ ...f, product: e.target.value }))} data-testid="ps-edit-product" />
+              </div>
+              <div>
+                <Label>Quantity Sold</Label>
+                <Input type="number" value={editForm.qty} onChange={(e: any) => setEditForm(f => ({ ...f, qty: e.target.value }))} data-testid="ps-edit-qty" />
+              </div>
+              <div>
+                <Label>Item Sale Price</Label>
+                <Input type="number" value={editForm.price} onChange={(e: any) => setEditForm(f => ({ ...f, price: e.target.value }))} data-testid="ps-edit-price" />
+              </div>
+            </div>
+            <div className="text-sm bg-slate-50 dark:bg-slate-800 rounded-md p-2.5">
+              <span className="text-slate-500">Total = Qty × Price = </span>
+              <span className="font-semibold text-indigo-700">{fmtINR((Number(editForm.qty) || 0) * (Number(editForm.price) || 0))}</span>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <Button variant="ghost" onClick={() => setEditRow(null)} data-testid="ps-edit-cancel">Cancel</Button>
+              <Button onClick={saveEdit} data-testid="ps-edit-save">Save changes</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Product Drill-down Modal */}
+      <Modal open={!!viewProduct} onClose={() => setViewProduct(null)} title={viewProduct ? `Sales — ${viewProduct}` : ""} size="lg">
+        {viewProduct && (() => {
+          const rows = persisted.filter(r =>
+            r.product === viewProduct &&
+            (monthFilter === "all" || r.month === monthFilter)
+          ).sort((a, b) => a.month.localeCompare(b.month));
+          const qtySum = rows.reduce((s, r) => s + r.qty, 0);
+          const amtSum = rows.reduce((s, r) => s + r.amount, 0);
+          return (
+            <div className="space-y-3" data-testid="ps-product-view">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-lg bg-slate-50 dark:bg-slate-800 p-3 text-center">
+                  <div className="text-[10px] uppercase tracking-wide text-slate-500">Line Items</div>
+                  <div className="text-lg font-bold">{rows.length}</div>
+                </div>
+                <div className="rounded-lg bg-blue-50 dark:bg-blue-900/20 p-3 text-center">
+                  <div className="text-[10px] uppercase tracking-wide text-blue-700">Total Qty</div>
+                  <div className="text-lg font-bold text-blue-700">{qtySum.toLocaleString("en-IN")}</div>
+                </div>
+                <div className="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 p-3 text-center">
+                  <div className="text-[10px] uppercase tracking-wide text-emerald-700">Total Sales</div>
+                  <div className="text-lg font-bold text-emerald-700">{fmtINR(amtSum)}</div>
+                </div>
+              </div>
+              <div className="max-h-[400px] overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700">
+                <Table>
+                  <thead className="sticky top-0 bg-white dark:bg-slate-900">
+                    <tr>
+                      <Th>Month</Th>
+                      <Th className="text-right">Qty</Th>
+                      <Th className="text-right">Sale Price</Th>
+                      <Th className="text-right">Amount</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.length === 0 ? (
+                      <tr><Td colSpan={4}><Empty title="No rows" /></Td></tr>
+                    ) : rows.map(r => (
+                      <tr key={r.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                        <Td className="font-medium">{monthLabel(r.month)}</Td>
+                        <Td className="text-right">{r.qty.toLocaleString("en-IN")}</Td>
+                        <Td className="text-right">{fmtINR(r.price)}</Td>
+                        <Td className="text-right font-semibold">{fmtINR(r.amount)}</Td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </Table>
+              </div>
+              <div className="flex items-center justify-end pt-1">
+                <Button variant="ghost" onClick={() => setViewProduct(null)} data-testid="ps-product-view-close">Close</Button>
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
     </div>
   );
 }
