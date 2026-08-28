@@ -153,8 +153,6 @@ export function MonthlyPSReport() {
   const [selectedYears, setSelectedYears] = useState<number[]>([]);
 
   // Modals
-  const [editRow, setEditRow] = useState<PSRow | null>(null);
-  const [editForm, setEditForm] = useState<{ month: string; product: string; qty: string; price: string }>({ month: "", product: "", qty: "", price: "" });
   const [viewProduct, setViewProduct] = useState<string | null>(null);
   const [viewMonth, setViewMonth] = useState<string | null>(null); // drill-down: items sold in this month
   const [editingQtyMonth, setEditingQtyMonth] = useState<string | null>(null);
@@ -287,10 +285,6 @@ export function MonthlyPSReport() {
     setSelectedMonths([]); setSelectedYears([]); setMonthFilter("all"); setProductFilter("all");
   };
 
-  const removeRow = (id: string) => {
-    setDB(d => ({ ...d, settings: { ...d.settings, monthlyPSRows: ((d.settings as any).monthlyPSRows || []).filter((r: PSRow) => r.id !== id) } as any }));
-  };
-
   // ---- Comparison computations (applies month-level overrides when no product filter) ----
   const applyOverride = (m: string, autoQty: number, autoAmount: number) => {
     if (productFilter !== "all") return { qty: autoQty, amount: autoAmount };
@@ -326,14 +320,15 @@ export function MonthlyPSReport() {
   const toggleMonth = (k: string) => setSelectedMonths(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k].sort());
   const toggleYear = (y: number) => setSelectedYears(prev => prev.includes(y) ? prev.filter(x => x !== y) : [...prev, y].sort((a, b) => a - b));
 
-  // ---- Monthly Summary override handlers ----
-  const saveOverride = (month: string, field: "qty" | "amount", raw: string) => {
+  // ---- Monthly Summary override handler (qty only) ----
+  const saveOverride = (month: string, raw: string) => {
     const parsed = raw.trim() === "" ? undefined : Math.max(0, Number(raw) || 0);
     setDB(d => {
       const cur = { ...((d.settings as any).monthlyPSOverrides || {}) };
       const existing = { ...(cur[month] || {}) };
-      if (parsed === undefined) delete existing[field]; else existing[field] = parsed;
-      if (existing.qty === undefined && existing.amount === undefined) delete cur[month];
+      if (parsed === undefined) delete existing.qty; else existing.qty = parsed;
+      delete existing.amount; // amount is fixed — never overridden
+      if (existing.qty === undefined) delete cur[month];
       else cur[month] = existing;
       return { ...d, settings: { ...d.settings, monthlyPSOverrides: cur } as any };
     });
@@ -345,29 +340,6 @@ export function MonthlyPSReport() {
       return { ...d, settings: { ...d.settings, monthlyPSOverrides: cur } as any };
     });
     log(`P&S: reset override for ${monthLabel(month)}`, "P&S Report");
-  };
-
-  // ---- Row edit ----
-  const openEdit = (r: PSRow) => {
-    setEditRow(r);
-    setEditForm({ month: r.month, product: r.product, qty: String(r.qty), price: String(r.price) });
-  };
-  const saveEdit = () => {
-    if (!editRow) return;
-    const monthKey = normalizeMonth(editForm.month) || editRow.month;
-    const product = editForm.product.trim() || editRow.product;
-    const qty = Math.max(0, Number(editForm.qty) || 0);
-    const price = Math.max(0, Number(editForm.price) || 0);
-    const amount = qty * price;
-    setDB(d => ({
-      ...d,
-      settings: {
-        ...d.settings,
-        monthlyPSRows: ((d.settings as any).monthlyPSRows || []).map((r: PSRow) => r.id === editRow.id ? { ...r, month: monthKey, product, qty, price, amount } : r),
-      } as any,
-    }));
-    log(`P&S: edited row ${product} — ${monthLabel(monthKey)}`, "P&S Report");
-    setEditRow(null);
   };
 
   return (
@@ -467,8 +439,8 @@ export function MonthlyPSReport() {
               <div>
                 <div className="font-semibold">Monthly Summary</div>
                 <div className="text-xs text-slate-500">
-                  Click <strong>Total Qty Sold</strong> to see items sold that month · click the ✎ pencil to override qty · Total Sales Amount is inline-editable. Overrides only apply when no product filter is active.
-                  {productFilter !== "all" && <span className="ml-1 text-amber-600">Editing disabled — clear product filter to edit.</span>}
+                  Click <strong>Total Qty Sold</strong> to see items sold that month · click the ✎ pencil to override qty. Qty overrides only apply when no product filter is active.
+                  {productFilter !== "all" && <span className="ml-1 text-amber-600">Qty override disabled — clear product filter to edit.</span>}
                 </div>
               </div>
             </div>
@@ -502,8 +474,8 @@ export function MonthlyPSReport() {
                               defaultValue={m.qty}
                               onBlur={(e: any) => {
                                 const v = e.target.value;
-                                if (Number(v) === m.autoQty) saveOverride(m.month, "qty", "");
-                                else if (String(v) !== String(m.qty)) saveOverride(m.month, "qty", v);
+                                if (Number(v) === m.autoQty) saveOverride(m.month, "");
+                                else if (String(v) !== String(m.qty)) saveOverride(m.month, v);
                                 setEditingQtyMonth(null);
                               }}
                               onKeyDown={(e: any) => {
@@ -535,24 +507,7 @@ export function MonthlyPSReport() {
                             </div>
                           )}
                         </Td>
-                        <Td className="text-right">
-                          <Input
-                            type="number"
-                            defaultValue={m.amount}
-                            key={`amt-${m.month}-${m.amount}-${m.isOverridden}`}
-                            disabled={!editable}
-                            onBlur={(e: any) => {
-                              const v = e.target.value;
-                              if (Number(v) === m.autoAmount) {
-                                saveOverride(m.month, "amount", "");
-                              } else if (String(v) !== String(m.amount)) {
-                                saveOverride(m.month, "amount", v);
-                              }
-                            }}
-                            className="text-right py-1 h-8 min-w-36 ml-auto"
-                            data-testid={`ps-summary-amt-${m.month}`}
-                          />
-                        </Td>
+                        <Td className="text-right font-semibold" data-testid={`ps-summary-amt-${m.month}`}>{fmtINR(m.amount)}</Td>
                         <Td className="text-right text-slate-500">{m.qty > 0 ? fmtINR(m.amount / m.qty) : "-"}</Td>
                         <Td className="text-right">
                           {m.isOverridden && editable && (
@@ -582,58 +537,7 @@ export function MonthlyPSReport() {
           </Card>
 
           {/* Product-wise Sales card hidden — access via clicking Total Qty Sold in Monthly Summary above */}
-
-          {/* Raw Rows */}
-          <Card>
-            <div className="p-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
-              <div>
-                <div className="font-semibold">Uploaded Rows</div>
-                <div className="text-xs text-slate-500">Click any row to edit its values</div>
-              </div>
-              <div className="text-xs text-slate-500">{filtered.length} shown</div>
-            </div>
-            <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
-              <Table>
-                <thead className="sticky top-0">
-                  <tr>
-                    <Th>Month</Th>
-                    <Th>Product</Th>
-                    <Th className="text-right">Qty Sold</Th>
-                    <Th className="text-right">Sale Price</Th>
-                    <Th className="text-right">Total Amount</Th>
-                    <Th></Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.length === 0 ? (
-                    <tr><Td colSpan={6}><Empty title="No rows" /></Td></tr>
-                  ) : filtered.map(r => (
-                    <tr
-                      key={r.id}
-                      className="hover:bg-indigo-50/50 dark:hover:bg-indigo-900/20 cursor-pointer transition-colors"
-                      onClick={() => openEdit(r)}
-                      data-testid={`ps-row-${r.id}`}
-                    >
-                      <Td className="font-medium">{monthLabel(r.month)}</Td>
-                      <Td className="text-indigo-700 hover:underline">{r.product}</Td>
-                      <Td className="text-right">{r.qty.toLocaleString("en-IN")}</Td>
-                      <Td className="text-right">{fmtINR(r.price)}</Td>
-                      <Td className="text-right font-semibold">{fmtINR(r.amount)}</Td>
-                      <Td>
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); removeRow(r.id); }}
-                          className="text-xs text-rose-600 hover:underline"
-                          title="Delete this row"
-                          data-testid={`ps-row-del-${r.id}`}
-                        >Delete</button>
-                      </Td>
-                    </tr>
-                  ))}
-                </tbody>
-              </Table>
-            </div>
-          </Card>
+          {/* Uploaded Rows card hidden — data is managed via Excel upload / Clear All */}
 
           {/* Comparison Sheet */}
           <div data-testid="ps-comparison-card">
@@ -756,42 +660,7 @@ export function MonthlyPSReport() {
         </>
       )}
 
-      {/* Row Edit Modal */}
-      <Modal open={!!editRow} onClose={() => setEditRow(null)} title="Edit Sale Row" size="md">
-        {editRow && (
-          <div className="space-y-3" data-testid="ps-edit-modal">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label>Month (YYYY-MM or "Aug 2026")</Label>
-                <Input value={editForm.month} onChange={(e: any) => setEditForm(f => ({ ...f, month: e.target.value }))} data-testid="ps-edit-month" />
-                {normalizeMonth(editForm.month) === null && editForm.month.trim() !== "" && (
-                  <div className="text-[10px] text-rose-600 mt-1">Could not parse — will keep original month.</div>
-                )}
-              </div>
-              <div>
-                <Label>Product Name</Label>
-                <Input value={editForm.product} onChange={(e: any) => setEditForm(f => ({ ...f, product: e.target.value }))} data-testid="ps-edit-product" />
-              </div>
-              <div>
-                <Label>Quantity Sold</Label>
-                <Input type="number" value={editForm.qty} onChange={(e: any) => setEditForm(f => ({ ...f, qty: e.target.value }))} data-testid="ps-edit-qty" />
-              </div>
-              <div>
-                <Label>Item Sale Price</Label>
-                <Input type="number" value={editForm.price} onChange={(e: any) => setEditForm(f => ({ ...f, price: e.target.value }))} data-testid="ps-edit-price" />
-              </div>
-            </div>
-            <div className="text-sm bg-slate-50 dark:bg-slate-800 rounded-md p-2.5">
-              <span className="text-slate-500">Total = Qty × Price = </span>
-              <span className="font-semibold text-indigo-700">{fmtINR((Number(editForm.qty) || 0) * (Number(editForm.price) || 0))}</span>
-            </div>
-            <div className="flex items-center justify-end gap-2 pt-1">
-              <Button variant="ghost" onClick={() => setEditRow(null)} data-testid="ps-edit-cancel">Cancel</Button>
-              <Button onClick={saveEdit} data-testid="ps-edit-save">Save changes</Button>
-            </div>
-          </div>
-        )}
-      </Modal>
+      {/* Row Edit Modal removed — Uploaded Rows card no longer shown */}
 
       {/* Product Drill-down Modal */}
       <Modal open={!!viewProduct} onClose={() => setViewProduct(null)} title={viewProduct ? `Sales — ${viewProduct}` : ""} size="lg">
@@ -866,7 +735,7 @@ export function MonthlyPSReport() {
             .map(([product, v]) => ({ product, ...v }))
             .sort((a, b) => b.amount - a.amount);
           const override = overrides[viewMonth];
-          const hasOverride = override && (override.qty !== undefined || override.amount !== undefined);
+          const hasOverride = !!(override && override.qty !== undefined);
           return (
             <div className="space-y-3" data-testid="ps-month-view">
               <div className="grid grid-cols-3 gap-3">
@@ -885,11 +754,7 @@ export function MonthlyPSReport() {
               </div>
               {hasOverride && (
                 <div className="text-[11px] px-3 py-2 rounded-md bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800/40">
-                  Note: this month has manual overrides on the summary
-                  ({override.qty !== undefined && `Qty=${override.qty.toLocaleString("en-IN")}`}
-                  {override.qty !== undefined && override.amount !== undefined && ", "}
-                  {override.amount !== undefined && `Amount=${fmtINR(override.amount)}`}).
-                  The values below are the raw uploaded rows.
+                  Note: this month has a manual qty override (Qty={override!.qty!.toLocaleString("en-IN")}). The values below are the raw uploaded rows.
                 </div>
               )}
               <div className="max-h-[420px] overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700">
