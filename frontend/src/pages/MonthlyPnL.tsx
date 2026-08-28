@@ -166,6 +166,119 @@ export function MonthlyPnL() {
   }, { opening: 0, purchase: 0, closing: 0, consumed: 0, sales: 0, indirect: 0, direct: 0, totalExp: 0, profit: 0 });
   const totalProfitPct = totals.sales > 0 ? (totals.profit / totals.sales) * 100 : 0;
 
+  // ----- Comparison Sheet: helpers -----
+  const rawFor = (key: string): PnlRow => {
+    if (draft[key]) return draft[key];
+    const p = persisted[key];
+    return {
+      key,
+      opening: (!p || p.opening === undefined || p.opening === null) ? null : Number(p.opening),
+      purchase: p ? Number(p.purchase) || 0 : 0,
+      closing: p ? Number(p.closing) || 0 : 0,
+      sales: p ? Number(p.sales) || 0 : 0,
+      indirect: p ? Number(p.indirect) || 0 : 0,
+      direct: p ? Number(p.direct) || 0 : 0,
+    };
+  };
+
+  const fyOf = (monthKey: string): number => {
+    const [y, m] = monthKey.split("-").map(Number);
+    return m >= 4 ? y : y - 1;
+  };
+
+  const monthLabelFor = (key: string) => {
+    const [y, m] = key.split("-").map(Number);
+    return new Date(y, m - 1, 1).toLocaleString("en", { month: "short" }) + " " + String(y).slice(2);
+  };
+
+  const fyLabel = (fyStart: number) => `FY ${fyStart}-${String(fyStart + 1).slice(-2)}`;
+
+  const computeMonth = (key: string) => {
+    const fyStart = fyOf(key);
+    const monthList = fyKeys(fyStart);
+    let prevClosing = 0;
+    for (const mk of monthList) {
+      const r = rawFor(mk.key);
+      const opening = r.opening === null ? prevClosing : (r.opening as number);
+      if (mk.key === key) {
+        const d = derive(opening, r);
+        return { opening, purchase: r.purchase, closing: r.closing, sales: r.sales, indirect: r.indirect, direct: r.direct, ...d };
+      }
+      prevClosing = r.closing;
+    }
+    return { opening: 0, purchase: 0, closing: 0, sales: 0, indirect: 0, direct: 0, consumed: 0, totalExp: 0, profit: 0, profitPct: 0 };
+  };
+
+  const computeYear = (fyStart: number) => {
+    const monthList = fyKeys(fyStart);
+    let prevClosing = 0;
+    const agg = { opening: 0, purchase: 0, closing: 0, consumed: 0, sales: 0, indirect: 0, direct: 0, totalExp: 0, profit: 0, profitPct: 0 };
+    for (const mk of monthList) {
+      const r = rawFor(mk.key);
+      const opening = r.opening === null ? prevClosing : (r.opening as number);
+      const d = derive(opening, r);
+      agg.opening += opening;
+      agg.purchase += r.purchase;
+      agg.closing += r.closing;
+      agg.consumed += d.consumed;
+      agg.sales += r.sales;
+      agg.indirect += r.indirect;
+      agg.direct += r.direct;
+      agg.totalExp += d.totalExp;
+      agg.profit += d.profit;
+      prevClosing = r.closing;
+    }
+    agg.profitPct = agg.sales > 0 ? (agg.profit / agg.sales) * 100 : 0;
+    return agg;
+  };
+
+  const allKeys = useMemo(() => Array.from(new Set([...Object.keys(persisted), ...Object.keys(draft)])), [persisted, draft]);
+  const availableMonths = useMemo(() => allKeys.filter(k => {
+    const r = rawFor(k);
+    return r.purchase || r.closing || r.sales || r.indirect || r.direct || (r.opening !== null && (r.opening as number) > 0);
+  }).sort(), [allKeys, draft, persisted]);
+  const availableYears = useMemo(() => {
+    const s = new Set<number>();
+    allKeys.forEach(k => s.add(fyOf(k)));
+    return Array.from(s).sort((a, b) => a - b);
+  }, [allKeys]);
+
+  const [compareMode, setCompareMode] = useState<"month" | "year">("month");
+  const [selectedMonths, setSelectedMonths] = useState<string[]>([]);
+  const [selectedYears, setSelectedYears] = useState<number[]>([]);
+
+  const toggleMonth = (k: string) => setSelectedMonths(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k].sort());
+  const toggleYear = (y: number) => setSelectedYears(prev => prev.includes(y) ? prev.filter(x => x !== y) : [...prev, y].sort((a, b) => a - b));
+
+  type CompareCol = { key: string; label: string; data: ReturnType<typeof computeYear> };
+  const compareCols: CompareCol[] = compareMode === "month"
+    ? selectedMonths.map(k => ({ key: k, label: monthLabelFor(k), data: computeMonth(k) as any }))
+    : selectedYears.map(y => ({ key: String(y), label: fyLabel(y), data: computeYear(y) }));
+
+  const cmpMetrics: { label: string; get: (d: CompareCol["data"]) => number; kind?: "profit" | "pct" | "money" }[] = [
+    { label: "Opening Stock", get: d => d.opening, kind: "money" },
+    { label: "Purchase", get: d => d.purchase, kind: "money" },
+    { label: "Closing Stock", get: d => d.closing, kind: "money" },
+    { label: "Consumed Stock", get: d => d.consumed, kind: "money" },
+    { label: "Sales", get: d => d.sales, kind: "money" },
+    { label: "Indirect Expenses", get: d => d.indirect, kind: "money" },
+    { label: "Direct Expenses", get: d => d.direct, kind: "money" },
+    { label: "Total Expenses", get: d => d.totalExp, kind: "money" },
+    { label: "Profit / Loss", get: d => d.profit, kind: "profit" },
+    { label: "Profit %", get: d => d.profitPct, kind: "pct" },
+  ];
+
+  const formatMetric = (val: number, kind?: string) => {
+    if (kind === "pct") return `${val.toFixed(2)}%`;
+    if (kind === "profit") return val < 0 ? `Loss ${fmtINR(Math.abs(val))}` : fmtINR(val);
+    return fmtINR(val);
+  };
+  const metricClass = (val: number, kind?: string) => {
+    if (kind === "profit" || kind === "pct") return val < 0 ? "text-rose-600 font-semibold" : "text-emerald-600 font-semibold";
+    return "";
+  };
+
+
   const salesChart = months.map((m, i) => ({ label: m.label, value: Math.round((resolved[i].sales) / 1000) }));
   const expChart = months.map((m, i) => ({ label: m.label, value: Math.round(derive(resolved[i].resolvedOpening, resolved[i]).totalExp / 1000) }));
   const profitChart = months.map((m, i) => ({ label: m.label, value: Math.round(derive(resolved[i].resolvedOpening, resolved[i]).profit / 1000) }));
@@ -338,6 +451,139 @@ export function MonthlyPnL() {
           </Table>
         </div>
       </Card>
+
+      {/* Comparison Sheet */}
+      <div data-testid="pnl-comparison-card">
+      <Card>
+        <div className="p-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <div className="font-semibold">Comparison Sheet</div>
+            <div className="text-xs text-slate-500">Compare 2+ months or 2+ financial years side-by-side. Uses the same auto-cascaded opening stock logic.</div>
+          </div>
+          <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-lg" role="tablist">
+            <button
+              type="button"
+              onClick={() => setCompareMode("month")}
+              className={"px-3 py-1 text-xs rounded-md " + (compareMode === "month" ? "bg-white dark:bg-slate-700 shadow font-semibold text-indigo-700" : "text-slate-600 dark:text-slate-300")}
+              data-testid="pnl-cmp-mode-month"
+            >Compare by Month</button>
+            <button
+              type="button"
+              onClick={() => setCompareMode("year")}
+              className={"px-3 py-1 text-xs rounded-md " + (compareMode === "year" ? "bg-white dark:bg-slate-700 shadow font-semibold text-indigo-700" : "text-slate-600 dark:text-slate-300")}
+              data-testid="pnl-cmp-mode-year"
+            >Compare by Year</button>
+          </div>
+        </div>
+
+        {/* Selector */}
+        <div className="p-3 border-b border-slate-200 dark:border-slate-800">
+          {compareMode === "month" ? (
+            availableMonths.length === 0 ? (
+              <Empty title="No months with data yet" subtitle="Enter and save some monthly data first, then come back to compare." />
+            ) : (
+              <div className="flex flex-wrap gap-1.5" data-testid="pnl-cmp-month-picker">
+                {availableMonths.map(k => {
+                  const active = selectedMonths.includes(k);
+                  return (
+                    <button
+                      key={k}
+                      type="button"
+                      onClick={() => toggleMonth(k)}
+                      className={"text-xs px-2.5 py-1 rounded-full border transition-colors " + (active
+                        ? "bg-indigo-600 border-indigo-600 text-white"
+                        : "bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-indigo-400")}
+                      data-testid={`pnl-cmp-month-${k}`}
+                    >{monthLabelFor(k)}</button>
+                  );
+                })}
+                {selectedMonths.length > 0 && (
+                  <button type="button" onClick={() => setSelectedMonths([])} className="text-xs px-2 py-1 text-slate-500 hover:text-rose-600 underline" data-testid="pnl-cmp-clear-months">Clear</button>
+                )}
+              </div>
+            )
+          ) : (
+            availableYears.length === 0 ? (
+              <Empty title="No years with data yet" subtitle="Enter and save at least one month of data first, then come back to compare." />
+            ) : (
+              <div className="flex flex-wrap gap-1.5" data-testid="pnl-cmp-year-picker">
+                {availableYears.map(y => {
+                  const active = selectedYears.includes(y);
+                  return (
+                    <button
+                      key={y}
+                      type="button"
+                      onClick={() => toggleYear(y)}
+                      className={"text-xs px-3 py-1 rounded-full border transition-colors " + (active
+                        ? "bg-indigo-600 border-indigo-600 text-white"
+                        : "bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-indigo-400")}
+                      data-testid={`pnl-cmp-year-${y}`}
+                    >{fyLabel(y)}</button>
+                  );
+                })}
+                {selectedYears.length > 0 && (
+                  <button type="button" onClick={() => setSelectedYears([])} className="text-xs px-2 py-1 text-slate-500 hover:text-rose-600 underline" data-testid="pnl-cmp-clear-years">Clear</button>
+                )}
+              </div>
+            )
+          )}
+          <div className="text-[11px] text-slate-500 mt-2">
+            {compareCols.length < 2
+              ? `Select at least 2 ${compareMode === "month" ? "months" : "years"} to see comparison.`
+              : `${compareCols.length} ${compareMode === "month" ? "months" : "years"} selected.`}
+          </div>
+        </div>
+
+        {/* Comparison table + chart */}
+        {compareCols.length >= 2 && (
+          <>
+            <div className="overflow-x-auto">
+              <Table>
+                <thead>
+                  <tr>
+                    <Th>Metric</Th>
+                    {compareCols.map(c => (
+                      <Th key={c.key} className="text-right">{c.label}</Th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {cmpMetrics.map(m => (
+                    <tr key={m.label} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                      <Td className="font-medium">{m.label}</Td>
+                      {compareCols.map(c => {
+                        const val = m.get(c.data);
+                        return (
+                          <Td key={c.key} className={"text-right " + metricClass(val, m.kind)} data-testid={`pnl-cmp-cell-${m.label.replace(/\W+/g, "-").toLowerCase()}-${c.key}`}>
+                            {formatMetric(val, m.kind)}
+                          </Td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            </div>
+
+            {/* Mini bar charts */}
+            <div className="p-4 grid gap-4 lg:grid-cols-3 border-t border-slate-200 dark:border-slate-800">
+              <div>
+                <div className="text-xs font-medium mb-1 text-indigo-700">Sales (₹ thousands)</div>
+                <BarChart data={compareCols.map(c => ({ label: c.label, value: Math.round(c.data.sales / 1000) }))} color="#6366f1" />
+              </div>
+              <div>
+                <div className="text-xs font-medium mb-1 text-amber-700">Total Expenses (₹ thousands)</div>
+                <BarChart data={compareCols.map(c => ({ label: c.label, value: Math.round(c.data.totalExp / 1000) }))} color="#f59e0b" />
+              </div>
+              <div>
+                <div className="text-xs font-medium mb-1 text-emerald-700">Profit / Loss (₹ thousands)</div>
+                <PnlBarChart data={compareCols.map(c => ({ label: c.label, value: Math.round(c.data.profit / 1000) }))} />
+              </div>
+            </div>
+          </>
+        )}
+      </Card>
+      </div>
     </div>
   );
 }
