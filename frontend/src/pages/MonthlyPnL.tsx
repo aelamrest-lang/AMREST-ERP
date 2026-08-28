@@ -6,7 +6,9 @@ import { fmtINR, downloadCSV } from "../lib/utils";
 import { BarChart } from "../components/charts";
 
 type StockType = "opening" | "purchase" | "closing";
+type ExpType = "indirect" | "direct";
 interface PLine { id: string; product: string; qty: number; amount: number }
+interface ELine { id: string; description: string; amount: number }
 
 interface PnlRow {
   key: string; // "YYYY-MM"
@@ -95,22 +97,33 @@ export function MonthlyPnL() {
   const persisted = (db.settings as any).monthlyPnl || {};
   const linesStore: Record<string, { opening?: PLine[]; purchase?: PLine[]; closing?: PLine[] }> =
     ((db.settings as any).monthlyPnlLines || {});
+  const expStore: Record<string, { indirect?: ELine[]; direct?: ELine[] }> =
+    ((db.settings as any).monthlyPnlExpenses || {});
 
   const getLines = (month: string, type: StockType): PLine[] => (linesStore[month]?.[type]) || [];
   const sumLines = (month: string, type: StockType): number => getLines(month, type).reduce((s, l) => s + (Number(l.amount) || 0), 0);
   const hasLines = (month: string, type: StockType): boolean => getLines(month, type).length > 0;
 
+  const getExpLines = (month: string, type: ExpType): ELine[] => (expStore[month]?.[type]) || [];
+  const sumExpLines = (month: string, type: ExpType): number => getExpLines(month, type).reduce((s, l) => s + (Number(l.amount) || 0), 0);
+  const hasExpLines = (month: string, type: ExpType): boolean => getExpLines(month, type).length > 0;
+
   // Excel upload state / modal state
   const fileRef = useRef<HTMLInputElement>(null);
+  const expFileRef = useRef<HTMLInputElement>(null);
   const [uploadMsg, setUploadMsg] = useState<string>("");
   const [viewLines, setViewLines] = useState<{ month: string; type: StockType } | null>(null);
+  const [viewExpLines, setViewExpLines] = useState<{ month: string; type: ExpType } | null>(null);
 
   const persistedRows: PnlRow[] = months.map(m => {
     const p = persisted[m.key] || {};
-    // Line-item sums override the manual number (if any lines exist for that month+type)
+    // Stock line-item sums override the manual number when they exist
     const openingLines = hasLines(m.key, "opening");
     const purchaseLines = hasLines(m.key, "purchase");
     const closingLines = hasLines(m.key, "closing");
+    // Expense line-item sums override the manual number when they exist
+    const indirectExp = hasExpLines(m.key, "indirect");
+    const directExp = hasExpLines(m.key, "direct");
     return {
       key: m.key,
       opening: openingLines
@@ -119,8 +132,8 @@ export function MonthlyPnL() {
       purchase: purchaseLines ? sumLines(m.key, "purchase") : (Number(p.purchase) || 0),
       closing: closingLines ? sumLines(m.key, "closing") : (Number(p.closing) || 0),
       sales: Number(p.sales) || 0,
-      indirect: Number(p.indirect) || 0,
-      direct: Number(p.direct) || 0,
+      indirect: indirectExp ? sumExpLines(m.key, "indirect") : (Number(p.indirect) || 0),
+      direct: directExp ? sumExpLines(m.key, "direct") : (Number(p.direct) || 0),
     };
   });
 
@@ -321,6 +334,102 @@ export function MonthlyPnL() {
     });
   };
 
+  // ---- Excel upload for Indirect / Direct expense line items ----
+  const parseExpType = (raw: any): ExpType | null => {
+    const s = String(raw || "").toLowerCase().replace(/[^a-z]/g, "");
+    if (!s) return null;
+    if (s.startsWith("indirect")) return "indirect";
+    if (s.startsWith("direct")) return "direct";
+    return null;
+  };
+
+  const handleExpUpload = async (file?: File) => {
+    if (!file) return;
+    setUploadMsg("Reading Excel file...");
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array", cellDates: true });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json<Record<string, any>>(sheet, { defval: "" });
+      if (!rows.length) throw new Error("No rows found");
+
+      const groups: Record<string, { indirect: ELine[]; direct: ELine[] }> = {};
+      let skipped = 0;
+      rows.forEach(r => {
+        const monthKey = parseMonth(rowVal(r, ["Month", "Period"]));
+        const type = parseExpType(rowVal(r, ["Type", "Expense Type", "Category"]));
+        const description = String(rowVal(r, ["Description", "Particulars", "Head", "Expense", "Item"]) || "").trim();
+        const amount = numVal(rowVal(r, ["Amount", "Value"]));
+        if (!monthKey || !type || !description) { skipped++; return; }
+        if (!groups[monthKey]) groups[monthKey] = { indirect: [], direct: [] };
+        groups[monthKey][type].push({ id: uid(), description, amount });
+      });
+
+      const grouped = Object.entries(groups);
+      if (grouped.length === 0) {
+        setUploadMsg("Upload failed: no valid rows. Required columns — Month, Type (Indirect/Direct), Description, Amount.");
+        return;
+      }
+
+      setDB(d => {
+        const cur = { ...((d.settings as any).monthlyPnlExpenses || {}) };
+        grouped.forEach(([mo, buckets]) => {
+          const existing = cur[mo] || {};
+          cur[mo] = {
+            indirect: [...(existing.indirect || []), ...buckets.indirect],
+            direct: [...(existing.direct || []), ...buckets.direct],
+          };
+        });
+        return { ...d, settings: { ...d.settings, monthlyPnlExpenses: cur } as any };
+      });
+      setDraft(prev => {
+        const next = { ...prev };
+        grouped.forEach(([mo]) => { delete next[mo]; });
+        return next;
+      });
+      const total = grouped.reduce((s, [, b]) => s + b.indirect.length + b.direct.length, 0);
+      log(`P&L: uploaded ${total} expense line items across ${grouped.length} months`, "P&L");
+      setUploadMsg(`Uploaded ${total} expense rows across ${grouped.length} months${skipped ? `, ${skipped} skipped.` : "."}`);
+    } catch (e: any) {
+      setUploadMsg(`Error: ${e?.message || "Failed to read file."}`);
+    } finally {
+      if (expFileRef.current) expFileRef.current.value = "";
+    }
+  };
+
+  const downloadExpTemplate = () => {
+    downloadCSV("monthly-pnl-expenses-template.csv", [
+      ["Month", "Type", "Description", "Amount"],
+      ["2026-04", "Indirect", "Office Rent", 60000],
+      ["2026-04", "Indirect", "Electricity", 25000],
+      ["2026-04", "Indirect", "Staff Salaries (Admin)", 180000],
+      ["2026-04", "Direct", "Factory Labour", 220000],
+      ["2026-04", "Direct", "Transportation", 45000],
+      ["Apr 2026", "Direct", "Consumables", 18000],
+    ]);
+  };
+
+  const removeExpLine = (month: string, type: ExpType, id: string) => {
+    setDB(d => {
+      const cur = { ...((d.settings as any).monthlyPnlExpenses || {}) };
+      const existing = cur[month] || {};
+      cur[month] = { ...existing, [type]: (existing[type] || []).filter((l: ELine) => l.id !== id) };
+      if ((!cur[month].indirect?.length) && (!cur[month].direct?.length)) delete cur[month];
+      return { ...d, settings: { ...d.settings, monthlyPnlExpenses: cur } as any };
+    });
+  };
+
+  const clearExpLines = (month: string, type: ExpType) => {
+    if (!confirm(`Delete all ${type} expense line items for ${months.find(m => m.key === month)?.label || month}?`)) return;
+    setDB(d => {
+      const cur = { ...((d.settings as any).monthlyPnlExpenses || {}) };
+      const existing = cur[month] || {};
+      cur[month] = { ...existing, [type]: [] };
+      if ((!cur[month].indirect?.length) && (!cur[month].direct?.length)) delete cur[month];
+      return { ...d, settings: { ...d.settings, monthlyPnlExpenses: cur } as any };
+    });
+  };
+
   // Totals
   const totals = resolved.reduce((t, r) => {
     const d = derive(r.resolvedOpening, r);
@@ -345,14 +454,16 @@ export function MonthlyPnL() {
     const openL = hasLines(key, "opening");
     const purL = hasLines(key, "purchase");
     const cloL = hasLines(key, "closing");
+    const indE = hasExpLines(key, "indirect");
+    const dirE = hasExpLines(key, "direct");
     return {
       key,
       opening: openL ? sumLines(key, "opening") : ((!p || p.opening === undefined || p.opening === null) ? null : Number(p.opening)),
       purchase: purL ? sumLines(key, "purchase") : (p ? Number(p.purchase) || 0 : 0),
       closing: cloL ? sumLines(key, "closing") : (p ? Number(p.closing) || 0 : 0),
       sales: p ? Number(p.sales) || 0 : 0,
-      indirect: p ? Number(p.indirect) || 0 : 0,
-      direct: p ? Number(p.direct) || 0 : 0,
+      indirect: indE ? sumExpLines(key, "indirect") : (p ? Number(p.indirect) || 0 : 0),
+      direct: dirE ? sumExpLines(key, "direct") : (p ? Number(p.direct) || 0 : 0),
     };
   };
 
@@ -470,7 +581,10 @@ export function MonthlyPnL() {
         <div className="flex items-end gap-2 flex-wrap">
           <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={e => handleUpload(e.target.files?.[0])} data-testid="pnl-upload-input" />
           <Button variant="outline" onClick={() => fileRef.current?.click()} data-testid="pnl-upload-btn">Upload Stock Excel</Button>
-          <Button variant="ghost" onClick={downloadStockTemplate} data-testid="pnl-template-btn">Template</Button>
+          <Button variant="ghost" onClick={downloadStockTemplate} data-testid="pnl-template-btn">Stock Template</Button>
+          <input ref={expFileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={e => handleExpUpload(e.target.files?.[0])} data-testid="pnl-exp-upload-input" />
+          <Button variant="outline" onClick={() => expFileRef.current?.click()} data-testid="pnl-exp-upload-btn">Upload Expenses Excel</Button>
+          <Button variant="ghost" onClick={downloadExpTemplate} data-testid="pnl-exp-template-btn">Expenses Template</Button>
           <div>
             <Label className="text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">Financial Year</Label>
             <Input type="number" value={fy} onChange={(e: any) => setFy(Number(e.target.value) || fyDefault)} className="w-28 h-8 py-1" data-testid="pnl-fy" />
@@ -646,8 +760,36 @@ export function MonthlyPnL() {
                     <Td className="font-medium">{m.label}</Td>
                     <Td><Input type="number" value={r.sales} onChange={(e: any) => updateCell(m.key, "sales", Number(e.target.value) || 0)} className="text-right py-1 h-8 min-w-32 ml-auto" data-testid={`pnl-sales-${m.key}`} /></Td>
                     <Td className="text-right">{fmtINR(d.consumed)}</Td>
-                    <Td><Input type="number" value={r.indirect} onChange={(e: any) => updateCell(m.key, "indirect", Number(e.target.value) || 0)} className="text-right py-1 h-8 min-w-32 ml-auto" data-testid={`pnl-indirect-${m.key}`} /></Td>
-                    <Td><Input type="number" value={r.direct} onChange={(e: any) => updateCell(m.key, "direct", Number(e.target.value) || 0)} className="text-right py-1 h-8 min-w-32 ml-auto" data-testid={`pnl-direct-${m.key}`} /></Td>
+                    <Td>
+                      {hasExpLines(m.key, "indirect") ? (
+                        <button
+                          type="button"
+                          onClick={() => setViewExpLines({ month: m.key, type: "indirect" })}
+                          className="text-indigo-700 font-semibold hover:underline text-right min-w-32 ml-auto flex items-center justify-end gap-1"
+                          title={`${getExpLines(m.key, "indirect").length} items — click to view details`}
+                          data-testid={`pnl-indirect-view-${m.key}`}
+                        >{fmtINR(r.indirect)}
+                          <span className="text-[9px] font-semibold text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 px-1 rounded">{getExpLines(m.key, "indirect").length} items</span>
+                        </button>
+                      ) : (
+                        <Input type="number" value={r.indirect} onChange={(e: any) => updateCell(m.key, "indirect", Number(e.target.value) || 0)} className="text-right py-1 h-8 min-w-32 ml-auto" data-testid={`pnl-indirect-${m.key}`} />
+                      )}
+                    </Td>
+                    <Td>
+                      {hasExpLines(m.key, "direct") ? (
+                        <button
+                          type="button"
+                          onClick={() => setViewExpLines({ month: m.key, type: "direct" })}
+                          className="text-indigo-700 font-semibold hover:underline text-right min-w-32 ml-auto flex items-center justify-end gap-1"
+                          title={`${getExpLines(m.key, "direct").length} items — click to view details`}
+                          data-testid={`pnl-direct-view-${m.key}`}
+                        >{fmtINR(r.direct)}
+                          <span className="text-[9px] font-semibold text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 px-1 rounded">{getExpLines(m.key, "direct").length} items</span>
+                        </button>
+                      ) : (
+                        <Input type="number" value={r.direct} onChange={(e: any) => updateCell(m.key, "direct", Number(e.target.value) || 0)} className="text-right py-1 h-8 min-w-32 ml-auto" data-testid={`pnl-direct-${m.key}`} />
+                      )}
+                    </Td>
                     <Td className="text-right font-semibold">{fmtINR(d.totalExp)}</Td>
                     <Td className={"text-right font-semibold " + (d.profit >= 0 ? "text-emerald-600" : "text-rose-600")}>
                       {d.profit < 0 ? `Loss ${fmtINR(Math.abs(d.profit))}` : fmtINR(d.profit)}
@@ -877,6 +1019,78 @@ export function MonthlyPnL() {
                 )}
                 <div className="flex-1" />
                 <Button variant="ghost" onClick={() => setViewLines(null)} data-testid="pnl-lines-close">Close</Button>
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
+
+      {/* Expense Line Items Drill-down Modal */}
+      <Modal
+        open={!!viewExpLines}
+        onClose={() => setViewExpLines(null)}
+        title={viewExpLines
+          ? `${viewExpLines.type === "indirect" ? "Indirect Expenses" : "Direct Expenses"} — ${months.find(m => m.key === viewExpLines.month)?.label || viewExpLines.month}`
+          : ""}
+        size="lg"
+      >
+        {viewExpLines && (() => {
+          const lines = getExpLines(viewExpLines.month, viewExpLines.type);
+          const amtSum = lines.reduce((s, l) => s + (l.amount || 0), 0);
+          return (
+            <div className="space-y-3" data-testid="pnl-exp-lines-modal">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-lg bg-slate-50 dark:bg-slate-800 p-3 text-center">
+                  <div className="text-[10px] uppercase tracking-wide text-slate-500">Line Items</div>
+                  <div className="text-lg font-bold">{lines.length}</div>
+                </div>
+                <div className="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 p-3 text-center">
+                  <div className="text-[10px] uppercase tracking-wide text-emerald-700">Total Amount</div>
+                  <div className="text-lg font-bold text-emerald-700">{fmtINR(amtSum)}</div>
+                </div>
+              </div>
+              <div className="max-h-[420px] overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700">
+                <Table>
+                  <thead className="sticky top-0 bg-white dark:bg-slate-900">
+                    <tr>
+                      <Th>Description</Th>
+                      <Th className="text-right">Amount</Th>
+                      <Th className="text-right">Share</Th>
+                      <Th></Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lines.length === 0 ? (
+                      <tr><Td colSpan={4}><Empty title="No line items" /></Td></tr>
+                    ) : lines.map(l => (
+                      <tr key={l.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                        <Td className="font-medium">{l.description}</Td>
+                        <Td className="text-right font-semibold">{fmtINR(l.amount)}</Td>
+                        <Td className="text-right text-slate-500">{amtSum > 0 ? ((l.amount / amtSum) * 100).toFixed(1) + "%" : "-"}</Td>
+                        <Td className="text-right">
+                          <button
+                            type="button"
+                            onClick={() => removeExpLine(viewExpLines.month, viewExpLines.type, l.id)}
+                            className="text-xs text-rose-600 hover:underline"
+                            title="Delete this line item"
+                            data-testid={`pnl-exp-line-del-${l.id}`}
+                          >Delete</button>
+                        </Td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </Table>
+              </div>
+              <div className="flex items-center justify-between pt-1">
+                {lines.length > 0 && (
+                  <Button
+                    variant="danger"
+                    onClick={() => { clearExpLines(viewExpLines.month, viewExpLines.type); setViewExpLines(null); }}
+                    data-testid="pnl-exp-lines-clear"
+                  >Delete all line items</Button>
+                )}
+                <div className="flex-1" />
+                <Button variant="ghost" onClick={() => setViewExpLines(null)} data-testid="pnl-exp-lines-close">Close</Button>
               </div>
             </div>
           );
