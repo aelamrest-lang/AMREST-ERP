@@ -1,8 +1,12 @@
-import { useMemo, useState } from "react";
-import { useStore } from "../lib/store";
-import { Card, Button, Input, Label, Table, Th, Td, Empty } from "../components/ui";
-import { fmtINR } from "../lib/utils";
+import { useMemo, useRef, useState } from "react";
+import * as XLSX from "xlsx";
+import { useStore, uid } from "../lib/store";
+import { Card, Button, Input, Label, Table, Th, Td, Empty, Modal } from "../components/ui";
+import { fmtINR, downloadCSV } from "../lib/utils";
 import { BarChart } from "../components/charts";
+
+type StockType = "opening" | "purchase" | "closing";
+interface PLine { id: string; product: string; qty: number; amount: number }
 
 interface PnlRow {
   key: string; // "YYYY-MM"
@@ -89,14 +93,31 @@ export function MonthlyPnL() {
   const months = useMemo(() => fyKeys(fy), [fy]);
 
   const persisted = (db.settings as any).monthlyPnl || {};
+  const linesStore: Record<string, { opening?: PLine[]; purchase?: PLine[]; closing?: PLine[] }> =
+    ((db.settings as any).monthlyPnlLines || {});
+
+  const getLines = (month: string, type: StockType): PLine[] => (linesStore[month]?.[type]) || [];
+  const sumLines = (month: string, type: StockType): number => getLines(month, type).reduce((s, l) => s + (Number(l.amount) || 0), 0);
+  const hasLines = (month: string, type: StockType): boolean => getLines(month, type).length > 0;
+
+  // Excel upload state / modal state
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [uploadMsg, setUploadMsg] = useState<string>("");
+  const [viewLines, setViewLines] = useState<{ month: string; type: StockType } | null>(null);
+
   const persistedRows: PnlRow[] = months.map(m => {
     const p = persisted[m.key] || {};
+    // Line-item sums override the manual number (if any lines exist for that month+type)
+    const openingLines = hasLines(m.key, "opening");
+    const purchaseLines = hasLines(m.key, "purchase");
+    const closingLines = hasLines(m.key, "closing");
     return {
       key: m.key,
-      // Treat missing/null as "auto" so it inherits from previous month's closing
-      opening: (p.opening === undefined || p.opening === null) ? null : Number(p.opening),
-      purchase: Number(p.purchase) || 0,
-      closing: Number(p.closing) || 0,
+      opening: openingLines
+        ? sumLines(m.key, "opening")
+        : ((p.opening === undefined || p.opening === null) ? null : Number(p.opening)),
+      purchase: purchaseLines ? sumLines(m.key, "purchase") : (Number(p.purchase) || 0),
+      closing: closingLines ? sumLines(m.key, "closing") : (Number(p.closing) || 0),
       sales: Number(p.sales) || 0,
       indirect: Number(p.indirect) || 0,
       direct: Number(p.direct) || 0,
@@ -149,6 +170,157 @@ export function MonthlyPnL() {
     setDraft({});
   };
 
+  // ---- Excel upload for stock line items (Opening / Purchase / Closing) ----
+  const parseMonth = (raw: any): string | null => {
+    if (raw === null || raw === undefined || raw === "") return null;
+    if (raw instanceof Date && !isNaN(raw.getTime())) {
+      return `${raw.getFullYear()}-${String(raw.getMonth() + 1).padStart(2, "0")}`;
+    }
+    if (typeof raw === "number" && raw > 20000 && raw < 80000) {
+      const jsDate = new Date(Math.round((raw - 25569) * 86400 * 1000));
+      if (!isNaN(jsDate.getTime())) return `${jsDate.getUTCFullYear()}-${String(jsDate.getUTCMonth() + 1).padStart(2, "0")}`;
+    }
+    const s = String(raw).trim();
+    let m = s.match(/^(\d{4})[-/](\d{1,2})$/);
+    if (m) return `${m[1]}-${String(Number(m[2])).padStart(2, "0")}`;
+    m = s.match(/^(\d{1,2})[-/](\d{4})$/);
+    if (m) return `${m[2]}-${String(Number(m[1])).padStart(2, "0")}`;
+    const monthNames = ["january","february","march","april","may","june","july","august","september","october","november","december"];
+    const shortNames = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
+    const cleaned = s.toLowerCase().replace(/[.,]/g, "").replace(/[-/]/g, " ").replace(/\s+/g, " ");
+    const parts = cleaned.split(" ");
+    if (parts.length >= 2) {
+      const idx1 = monthNames.findIndex(mn => parts[0].startsWith(mn.slice(0, 3)));
+      const idx2 = shortNames.findIndex(mn => parts[0].startsWith(mn));
+      const idx = idx1 >= 0 ? idx1 : idx2;
+      if (idx >= 0) {
+        let year = Number(parts[1]);
+        if (!isFinite(year)) return null;
+        if (year < 100) year = 2000 + year;
+        return `${year}-${String(idx + 1).padStart(2, "0")}`;
+      }
+    }
+    const dt = new Date(s);
+    if (!isNaN(dt.getTime())) return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
+    return null;
+  };
+  const parseType = (raw: any): StockType | null => {
+    const s = String(raw || "").toLowerCase().replace(/[^a-z]/g, "");
+    if (!s) return null;
+    if (s.startsWith("open")) return "opening";
+    if (s.startsWith("purch")) return "purchase";
+    if (s.startsWith("clos")) return "closing";
+    return null;
+  };
+  const rowVal = (row: Record<string, any>, names: string[]) => {
+    const norm = Object.fromEntries(Object.entries(row).map(([k, v]) => [k.trim().toLowerCase().replace(/[^a-z0-9]/g, ""), v]));
+    for (const n of names) {
+      const k = n.toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (k in norm) return norm[k];
+    }
+    return undefined;
+  };
+  const numVal = (v: any) => {
+    if (v === null || v === undefined || v === "") return 0;
+    const n = Number(String(v).replace(/,/g, "").replace(/[^0-9.\-]/g, ""));
+    return isFinite(n) ? n : 0;
+  };
+
+  const handleUpload = async (file?: File) => {
+    if (!file) return;
+    setUploadMsg("Reading Excel file...");
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array", cellDates: true });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json<Record<string, any>>(sheet, { defval: "" });
+      if (!rows.length) throw new Error("No rows found");
+
+      const groups: Record<string, { opening: PLine[]; purchase: PLine[]; closing: PLine[] }> = {};
+      let skipped = 0;
+      rows.forEach(r => {
+        const monthKey = parseMonth(rowVal(r, ["Month", "Period"]));
+        const type = parseType(rowVal(r, ["Type", "Stock Type", "Category"]));
+        const product = String(rowVal(r, ["Product Name", "Product", "Item", "Item Name"]) || "").trim();
+        const qty = numVal(rowVal(r, ["Quantity", "Qty"]));
+        const amount = numVal(rowVal(r, ["Amount", "Value", "Total Amount"]));
+        if (!monthKey || !type || !product) { skipped++; return; }
+        if (!groups[monthKey]) groups[monthKey] = { opening: [], purchase: [], closing: [] };
+        groups[monthKey][type].push({ id: uid(), product, qty, amount });
+      });
+
+      const grouped = Object.entries(groups);
+      if (grouped.length === 0) {
+        setUploadMsg("Upload failed: no valid rows. Required columns — Month, Type (Opening/Purchase/Closing), Product Name, Quantity, Amount.");
+        return;
+      }
+
+      setDB(d => {
+        const cur = { ...((d.settings as any).monthlyPnlLines || {}) };
+        grouped.forEach(([mo, buckets]) => {
+          const existing = cur[mo] || {};
+          cur[mo] = {
+            opening: [...(existing.opening || []), ...buckets.opening],
+            purchase: [...(existing.purchase || []), ...buckets.purchase],
+            closing: [...(existing.closing || []), ...buckets.closing],
+          };
+        });
+        return { ...d, settings: { ...d.settings, monthlyPnlLines: cur } as any };
+      });
+      // Clear any local draft edits for these month keys so line sums take effect immediately
+      setDraft(prev => {
+        const next = { ...prev };
+        grouped.forEach(([mo]) => { delete next[mo]; });
+        return next;
+      });
+      const totalRows = grouped.reduce((s, [, b]) => s + b.opening.length + b.purchase.length + b.closing.length, 0);
+      log(`P&L: uploaded ${totalRows} stock line items across ${grouped.length} months`, "P&L");
+      setUploadMsg(`Uploaded ${totalRows} rows across ${grouped.length} months${skipped ? `, ${skipped} skipped.` : "."}`);
+    } catch (e: any) {
+      setUploadMsg(`Error: ${e?.message || "Failed to read file."}`);
+    } finally {
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
+
+  const downloadStockTemplate = () => {
+    downloadCSV("monthly-pnl-stock-template.csv", [
+      ["Month", "Type", "Product Name", "Quantity", "Amount"],
+      ["2026-04", "Opening", "CRGO Steel 0.23mm", 500, 250000],
+      ["2026-04", "Opening", "Copper Wire 1.6mm", 300, 180000],
+      ["2026-04", "Purchase", "CRGO Steel 0.23mm", 400, 210000],
+      ["2026-04", "Closing", "CRGO Steel 0.23mm", 300, 160000],
+      ["Apr 2026", "Purchase", "Copper Wire 1.6mm", 200, 125000],
+    ]);
+  };
+
+  const removeLine = (month: string, type: StockType, id: string) => {
+    setDB(d => {
+      const cur = { ...((d.settings as any).monthlyPnlLines || {}) };
+      const existing = cur[month] || {};
+      const filtered = (existing[type] || []).filter((l: PLine) => l.id !== id);
+      cur[month] = { ...existing, [type]: filtered };
+      // Clean up empty months
+      if ((!cur[month].opening?.length) && (!cur[month].purchase?.length) && (!cur[month].closing?.length)) {
+        delete cur[month];
+      }
+      return { ...d, settings: { ...d.settings, monthlyPnlLines: cur } as any };
+    });
+  };
+
+  const clearLines = (month: string, type: StockType) => {
+    if (!confirm(`Delete all ${type} line items for ${months.find(m => m.key === month)?.label || month}?`)) return;
+    setDB(d => {
+      const cur = { ...((d.settings as any).monthlyPnlLines || {}) };
+      const existing = cur[month] || {};
+      cur[month] = { ...existing, [type]: [] };
+      if ((!cur[month].opening?.length) && (!cur[month].purchase?.length) && (!cur[month].closing?.length)) {
+        delete cur[month];
+      }
+      return { ...d, settings: { ...d.settings, monthlyPnlLines: cur } as any };
+    });
+  };
+
   // Totals
   const totals = resolved.reduce((t, r) => {
     const d = derive(r.resolvedOpening, r);
@@ -170,11 +342,14 @@ export function MonthlyPnL() {
   const rawFor = (key: string): PnlRow => {
     if (draft[key]) return draft[key];
     const p = persisted[key];
+    const openL = hasLines(key, "opening");
+    const purL = hasLines(key, "purchase");
+    const cloL = hasLines(key, "closing");
     return {
       key,
-      opening: (!p || p.opening === undefined || p.opening === null) ? null : Number(p.opening),
-      purchase: p ? Number(p.purchase) || 0 : 0,
-      closing: p ? Number(p.closing) || 0 : 0,
+      opening: openL ? sumLines(key, "opening") : ((!p || p.opening === undefined || p.opening === null) ? null : Number(p.opening)),
+      purchase: purL ? sumLines(key, "purchase") : (p ? Number(p.purchase) || 0 : 0),
+      closing: cloL ? sumLines(key, "closing") : (p ? Number(p.closing) || 0 : 0),
       sales: p ? Number(p.sales) || 0 : 0,
       indirect: p ? Number(p.indirect) || 0 : 0,
       direct: p ? Number(p.direct) || 0 : 0,
@@ -290,9 +465,12 @@ export function MonthlyPnL() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold">Monthly Profit &amp; Loss</h1>
-          <p className="text-sm text-slate-500">Manual month-wise entry · Closing Stock auto-flows to next month&apos;s Opening Stock (still editable)</p>
+          <p className="text-sm text-slate-500">Manual month-wise entry · Closing Stock auto-flows to next month&apos;s Opening Stock (still editable) · Upload Excel to break Opening/Purchase/Closing stock into product-level line items</p>
         </div>
-        <div className="flex items-end gap-2">
+        <div className="flex items-end gap-2 flex-wrap">
+          <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={e => handleUpload(e.target.files?.[0])} data-testid="pnl-upload-input" />
+          <Button variant="outline" onClick={() => fileRef.current?.click()} data-testid="pnl-upload-btn">Upload Stock Excel</Button>
+          <Button variant="ghost" onClick={downloadStockTemplate} data-testid="pnl-template-btn">Template</Button>
           <div>
             <Label className="text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">Financial Year</Label>
             <Input type="number" value={fy} onChange={(e: any) => setFy(Number(e.target.value) || fyDefault)} className="w-28 h-8 py-1" data-testid="pnl-fy" />
@@ -304,6 +482,9 @@ export function MonthlyPnL() {
           >{Object.keys(draft).length > 0 ? `Save (${Object.keys(draft).length})` : "Saved"}</Button>
         </div>
       </div>
+      {uploadMsg && (
+        <div className={"text-xs px-3 py-2 rounded-md " + (uploadMsg.startsWith("Error") ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700")} data-testid="pnl-upload-msg">{uploadMsg}</div>
+      )}
 
       {/* Monthly Trend — moved to top */}
       <Card data-testid="pnl-trend-card">
@@ -359,18 +540,30 @@ export function MonthlyPnL() {
                     <Td className="font-medium">{m.label}</Td>
                     <Td>
                       <div className="flex items-center justify-end gap-1">
-                        <Input
-                          type="number"
-                          value={r.resolvedOpening}
-                          onChange={(e: any) => updateCell(m.key, "opening", Number(e.target.value) || 0)}
-                          className="text-right py-1 h-8 min-w-32 ml-auto"
-                          data-testid={`pnl-open-${m.key}`}
-                          title={r.isOpeningAuto && i > 0 ? "Auto: inherited from previous month's closing stock. Edit to override." : ""}
-                        />
-                        {r.isOpeningAuto && i > 0 && r.resolvedOpening > 0 && (
+                        {hasLines(m.key, "opening") ? (
+                          <button
+                            type="button"
+                            onClick={() => setViewLines({ month: m.key, type: "opening" })}
+                            className="text-indigo-700 font-semibold hover:underline text-right min-w-32"
+                            title={`${getLines(m.key, "opening").length} products — click to view details`}
+                            data-testid={`pnl-open-view-${m.key}`}
+                          >{fmtINR(r.resolvedOpening)}
+                            <span className="ml-1 text-[9px] font-semibold text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 px-1 rounded align-middle">{getLines(m.key, "opening").length} items</span>
+                          </button>
+                        ) : (
+                          <Input
+                            type="number"
+                            value={r.resolvedOpening}
+                            onChange={(e: any) => updateCell(m.key, "opening", Number(e.target.value) || 0)}
+                            className="text-right py-1 h-8 min-w-32 ml-auto"
+                            data-testid={`pnl-open-${m.key}`}
+                            title={r.isOpeningAuto && i > 0 ? "Auto: inherited from previous month's closing stock. Edit to override." : ""}
+                          />
+                        )}
+                        {!hasLines(m.key, "opening") && r.isOpeningAuto && i > 0 && r.resolvedOpening > 0 && (
                           <span className="text-[9px] font-semibold text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 px-1 rounded" title="Auto-carried from previous month's Closing Stock">AUTO</span>
                         )}
-                        {!r.isOpeningAuto && (
+                        {!hasLines(m.key, "opening") && !r.isOpeningAuto && (
                           <button
                             type="button"
                             onClick={() => updateCell(m.key, "opening", null)}
@@ -381,8 +574,36 @@ export function MonthlyPnL() {
                         )}
                       </div>
                     </Td>
-                    <Td><Input type="number" value={r.purchase} onChange={(e: any) => updateCell(m.key, "purchase", Number(e.target.value) || 0)} className="text-right py-1 h-8 min-w-32 ml-auto" data-testid={`pnl-purchase-${m.key}`} /></Td>
-                    <Td><Input type="number" value={r.closing} onChange={(e: any) => updateCell(m.key, "closing", Number(e.target.value) || 0)} className="text-right py-1 h-8 min-w-32 ml-auto" data-testid={`pnl-close-${m.key}`} /></Td>
+                    <Td>
+                      {hasLines(m.key, "purchase") ? (
+                        <button
+                          type="button"
+                          onClick={() => setViewLines({ month: m.key, type: "purchase" })}
+                          className="text-indigo-700 font-semibold hover:underline text-right min-w-32 ml-auto flex items-center justify-end gap-1"
+                          title={`${getLines(m.key, "purchase").length} products — click to view details`}
+                          data-testid={`pnl-purchase-view-${m.key}`}
+                        >{fmtINR(r.purchase)}
+                          <span className="text-[9px] font-semibold text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 px-1 rounded">{getLines(m.key, "purchase").length} items</span>
+                        </button>
+                      ) : (
+                        <Input type="number" value={r.purchase} onChange={(e: any) => updateCell(m.key, "purchase", Number(e.target.value) || 0)} className="text-right py-1 h-8 min-w-32 ml-auto" data-testid={`pnl-purchase-${m.key}`} />
+                      )}
+                    </Td>
+                    <Td>
+                      {hasLines(m.key, "closing") ? (
+                        <button
+                          type="button"
+                          onClick={() => setViewLines({ month: m.key, type: "closing" })}
+                          className="text-indigo-700 font-semibold hover:underline text-right min-w-32 ml-auto flex items-center justify-end gap-1"
+                          title={`${getLines(m.key, "closing").length} products — click to view details`}
+                          data-testid={`pnl-close-view-${m.key}`}
+                        >{fmtINR(r.closing)}
+                          <span className="text-[9px] font-semibold text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 px-1 rounded">{getLines(m.key, "closing").length} items</span>
+                        </button>
+                      ) : (
+                        <Input type="number" value={r.closing} onChange={(e: any) => updateCell(m.key, "closing", Number(e.target.value) || 0)} className="text-right py-1 h-8 min-w-32 ml-auto" data-testid={`pnl-close-${m.key}`} />
+                      )}
+                    </Td>
                     <Td className="text-right font-semibold text-indigo-600">{fmtINR(d.consumed)}</Td>
                   </tr>
                 );
@@ -584,6 +805,83 @@ export function MonthlyPnL() {
         )}
       </Card>
       </div>
+
+      {/* Stock Line Items Drill-down Modal */}
+      <Modal
+        open={!!viewLines}
+        onClose={() => setViewLines(null)}
+        title={viewLines
+          ? `${viewLines.type === "opening" ? "Opening Stock" : viewLines.type === "purchase" ? "Purchase" : "Closing Stock"} — ${months.find(m => m.key === viewLines.month)?.label || viewLines.month}`
+          : ""}
+        size="lg"
+      >
+        {viewLines && (() => {
+          const lines = getLines(viewLines.month, viewLines.type);
+          const qtySum = lines.reduce((s, l) => s + (l.qty || 0), 0);
+          const amtSum = lines.reduce((s, l) => s + (l.amount || 0), 0);
+          return (
+            <div className="space-y-3" data-testid="pnl-lines-modal">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-lg bg-slate-50 dark:bg-slate-800 p-3 text-center">
+                  <div className="text-[10px] uppercase tracking-wide text-slate-500">Line Items</div>
+                  <div className="text-lg font-bold">{lines.length}</div>
+                </div>
+                <div className="rounded-lg bg-blue-50 dark:bg-blue-900/20 p-3 text-center">
+                  <div className="text-[10px] uppercase tracking-wide text-blue-700">Total Qty</div>
+                  <div className="text-lg font-bold text-blue-700">{qtySum.toLocaleString("en-IN")}</div>
+                </div>
+                <div className="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 p-3 text-center">
+                  <div className="text-[10px] uppercase tracking-wide text-emerald-700">Total Amount</div>
+                  <div className="text-lg font-bold text-emerald-700">{fmtINR(amtSum)}</div>
+                </div>
+              </div>
+              <div className="max-h-[420px] overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700">
+                <Table>
+                  <thead className="sticky top-0 bg-white dark:bg-slate-900">
+                    <tr>
+                      <Th>Product</Th>
+                      <Th className="text-right">Quantity</Th>
+                      <Th className="text-right">Amount</Th>
+                      <Th></Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lines.length === 0 ? (
+                      <tr><Td colSpan={4}><Empty title="No line items" /></Td></tr>
+                    ) : lines.map(l => (
+                      <tr key={l.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                        <Td className="font-medium">{l.product}</Td>
+                        <Td className="text-right">{l.qty.toLocaleString("en-IN")}</Td>
+                        <Td className="text-right font-semibold">{fmtINR(l.amount)}</Td>
+                        <Td className="text-right">
+                          <button
+                            type="button"
+                            onClick={() => removeLine(viewLines.month, viewLines.type, l.id)}
+                            className="text-xs text-rose-600 hover:underline"
+                            title="Delete this line item"
+                            data-testid={`pnl-line-del-${l.id}`}
+                          >Delete</button>
+                        </Td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </Table>
+              </div>
+              <div className="flex items-center justify-between pt-1">
+                {lines.length > 0 && (
+                  <Button
+                    variant="danger"
+                    onClick={() => { clearLines(viewLines.month, viewLines.type); setViewLines(null); }}
+                    data-testid="pnl-lines-clear"
+                  >Delete all line items</Button>
+                )}
+                <div className="flex-1" />
+                <Button variant="ghost" onClick={() => setViewLines(null)} data-testid="pnl-lines-close">Close</Button>
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
     </div>
   );
 }
