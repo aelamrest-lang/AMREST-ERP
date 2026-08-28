@@ -99,6 +99,9 @@ export function MonthlyPnL() {
     ((db.settings as any).monthlyPnlLines || {});
   const expStore: Record<string, { indirect?: ELine[]; direct?: ELine[] }> =
     ((db.settings as any).monthlyPnlExpenses || {});
+  // Monthly P&S Report rows are the source-of-truth for Sales when data exists
+  const psRows: Array<{ id: string; month: string; product: string; qty: number; price: number; amount: number }> =
+    ((db.settings as any).monthlyPSRows || []);
 
   const getLines = (month: string, type: StockType): PLine[] => (linesStore[month]?.[type]) || [];
   const sumLines = (month: string, type: StockType): number => getLines(month, type).reduce((s, l) => s + (Number(l.amount) || 0), 0);
@@ -108,22 +111,26 @@ export function MonthlyPnL() {
   const sumExpLines = (month: string, type: ExpType): number => getExpLines(month, type).reduce((s, l) => s + (Number(l.amount) || 0), 0);
   const hasExpLines = (month: string, type: ExpType): boolean => getExpLines(month, type).length > 0;
 
+  const psRowsFor = (month: string) => psRows.filter(r => r.month === month);
+  const psTotalFor = (month: string) => psRowsFor(month).reduce((s, r) => s + (r.amount || 0), 0);
+  const hasPS = (month: string) => psRowsFor(month).length > 0;
+
   // Excel upload state / modal state
   const fileRef = useRef<HTMLInputElement>(null);
   const expFileRef = useRef<HTMLInputElement>(null);
   const [uploadMsg, setUploadMsg] = useState<string>("");
   const [viewLines, setViewLines] = useState<{ month: string; type: StockType } | null>(null);
   const [viewExpLines, setViewExpLines] = useState<{ month: string; type: ExpType } | null>(null);
+  const [viewPSMonth, setViewPSMonth] = useState<string | null>(null);
 
   const persistedRows: PnlRow[] = months.map(m => {
     const p = persisted[m.key] || {};
-    // Stock line-item sums override the manual number when they exist
     const openingLines = hasLines(m.key, "opening");
     const purchaseLines = hasLines(m.key, "purchase");
     const closingLines = hasLines(m.key, "closing");
-    // Expense line-item sums override the manual number when they exist
     const indirectExp = hasExpLines(m.key, "indirect");
     const directExp = hasExpLines(m.key, "direct");
+    const hasPSForMonth = hasPS(m.key);
     return {
       key: m.key,
       opening: openingLines
@@ -131,7 +138,8 @@ export function MonthlyPnL() {
         : ((p.opening === undefined || p.opening === null) ? null : Number(p.opening)),
       purchase: purchaseLines ? sumLines(m.key, "purchase") : (Number(p.purchase) || 0),
       closing: closingLines ? sumLines(m.key, "closing") : (Number(p.closing) || 0),
-      sales: Number(p.sales) || 0,
+      // Sales auto-pulls from Monthly P&S Report when rows exist for the month
+      sales: hasPSForMonth ? psTotalFor(m.key) : (Number(p.sales) || 0),
       indirect: indirectExp ? sumExpLines(m.key, "indirect") : (Number(p.indirect) || 0),
       direct: directExp ? sumExpLines(m.key, "direct") : (Number(p.direct) || 0),
     };
@@ -461,7 +469,7 @@ export function MonthlyPnL() {
       opening: openL ? sumLines(key, "opening") : ((!p || p.opening === undefined || p.opening === null) ? null : Number(p.opening)),
       purchase: purL ? sumLines(key, "purchase") : (p ? Number(p.purchase) || 0 : 0),
       closing: cloL ? sumLines(key, "closing") : (p ? Number(p.closing) || 0 : 0),
-      sales: p ? Number(p.sales) || 0 : 0,
+      sales: hasPS(key) ? psTotalFor(key) : (p ? Number(p.sales) || 0 : 0),
       indirect: indE ? sumExpLines(key, "indirect") : (p ? Number(p.indirect) || 0 : 0),
       direct: dirE ? sumExpLines(key, "direct") : (p ? Number(p.direct) || 0 : 0),
     };
@@ -576,7 +584,7 @@ export function MonthlyPnL() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold">Monthly Profit &amp; Loss</h1>
-          <p className="text-sm text-slate-500">Manual month-wise entry · Closing Stock auto-flows to next month&apos;s Opening Stock (still editable) · Upload Excel to break Opening/Purchase/Closing stock into product-level line items</p>
+          <p className="text-sm text-slate-500">Manual month-wise entry · Closing Stock auto-flows to next month&apos;s Opening Stock · <strong>Sales</strong> auto-pulls from Monthly P&amp;S Report when uploaded · Upload Excel for stock &amp; expense line items</p>
         </div>
         <div className="flex items-end gap-2 flex-wrap">
           <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={e => handleUpload(e.target.files?.[0])} data-testid="pnl-upload-input" />
@@ -758,7 +766,21 @@ export function MonthlyPnL() {
                 return (
                   <tr key={m.key} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                     <Td className="font-medium">{m.label}</Td>
-                    <Td><Input type="number" value={r.sales} onChange={(e: any) => updateCell(m.key, "sales", Number(e.target.value) || 0)} className="text-right py-1 h-8 min-w-32 ml-auto" data-testid={`pnl-sales-${m.key}`} /></Td>
+                    <Td>
+                      {hasPS(m.key) ? (
+                        <button
+                          type="button"
+                          onClick={() => setViewPSMonth(m.key)}
+                          className="text-indigo-700 font-semibold hover:underline text-right min-w-32 ml-auto flex items-center justify-end gap-1"
+                          title={`${psRowsFor(m.key).length} rows from Monthly P&S Report — click to view`}
+                          data-testid={`pnl-sales-view-${m.key}`}
+                        >{fmtINR(r.sales)}
+                          <span className="text-[9px] font-semibold text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 px-1 rounded">P&amp;S</span>
+                        </button>
+                      ) : (
+                        <Input type="number" value={r.sales} onChange={(e: any) => updateCell(m.key, "sales", Number(e.target.value) || 0)} className="text-right py-1 h-8 min-w-32 ml-auto" data-testid={`pnl-sales-${m.key}`} />
+                      )}
+                    </Td>
                     <Td className="text-right">{fmtINR(d.consumed)}</Td>
                     <Td>
                       {hasExpLines(m.key, "indirect") ? (
@@ -1091,6 +1113,68 @@ export function MonthlyPnL() {
                 )}
                 <div className="flex-1" />
                 <Button variant="ghost" onClick={() => setViewExpLines(null)} data-testid="pnl-exp-lines-close">Close</Button>
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
+
+      {/* P&S Report Drill-down Modal (Sales source) */}
+      <Modal
+        open={!!viewPSMonth}
+        onClose={() => setViewPSMonth(null)}
+        title={viewPSMonth ? `Sales from P&S Report — ${months.find(m => m.key === viewPSMonth)?.label || viewPSMonth}` : ""}
+        size="lg"
+      >
+        {viewPSMonth && (() => {
+          const rows = psRowsFor(viewPSMonth).sort((a, b) => b.amount - a.amount);
+          const qtySum = rows.reduce((s, r) => s + r.qty, 0);
+          const amtSum = rows.reduce((s, r) => s + r.amount, 0);
+          return (
+            <div className="space-y-3" data-testid="pnl-ps-modal">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-lg bg-slate-50 dark:bg-slate-800 p-3 text-center">
+                  <div className="text-[10px] uppercase tracking-wide text-slate-500">Rows</div>
+                  <div className="text-lg font-bold">{rows.length}</div>
+                </div>
+                <div className="rounded-lg bg-blue-50 dark:bg-blue-900/20 p-3 text-center">
+                  <div className="text-[10px] uppercase tracking-wide text-blue-700">Total Qty</div>
+                  <div className="text-lg font-bold text-blue-700">{qtySum.toLocaleString("en-IN")}</div>
+                </div>
+                <div className="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 p-3 text-center">
+                  <div className="text-[10px] uppercase tracking-wide text-emerald-700">Total Sales</div>
+                  <div className="text-lg font-bold text-emerald-700">{fmtINR(amtSum)}</div>
+                </div>
+              </div>
+              <div className="text-[11px] px-3 py-2 rounded-md bg-indigo-50 dark:bg-indigo-900/20 text-indigo-800 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/40">
+                Source: Monthly P&amp;S Report. Add or edit these rows there to change the P&amp;L Sales for this month.
+              </div>
+              <div className="max-h-[420px] overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700">
+                <Table>
+                  <thead className="sticky top-0 bg-white dark:bg-slate-900">
+                    <tr>
+                      <Th>Product</Th>
+                      <Th className="text-right">Qty</Th>
+                      <Th className="text-right">Sale Price</Th>
+                      <Th className="text-right">Amount</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.length === 0 ? (
+                      <tr><Td colSpan={4}><Empty title="No rows" /></Td></tr>
+                    ) : rows.map(r => (
+                      <tr key={r.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                        <Td className="font-medium">{r.product}</Td>
+                        <Td className="text-right">{r.qty.toLocaleString("en-IN")}</Td>
+                        <Td className="text-right">{fmtINR(r.price)}</Td>
+                        <Td className="text-right font-semibold">{fmtINR(r.amount)}</Td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </Table>
+              </div>
+              <div className="flex items-center justify-end pt-1">
+                <Button variant="ghost" onClick={() => setViewPSMonth(null)} data-testid="pnl-ps-close">Close</Button>
               </div>
             </div>
           );
