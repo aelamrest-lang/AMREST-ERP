@@ -3,7 +3,7 @@ import { useStore, uid } from "../lib/store";
 import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Empty, Textarea } from "../components/ui";
 import { FinishedGoodCombobox } from "../components/FinishedGoodCombobox";
 import { NewFinishedGoodModal } from "../components/NewFinishedGoodModal";
-import type { Quotation, DocStatus } from "../lib/types";
+import type { Quotation, DocStatus, Party } from "../lib/types";
 import { IconPlus, IconEdit, IconTrash, IconPrint, IconFile } from "../components/icons";
 import { calcCostingTotals, calcDocTotals, fmtINR, nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
 import { userCan } from "../lib/permissions";
@@ -33,6 +33,25 @@ export function Quotations() {
   const [open, setOpen] = useState(false);
   const [edit, setEdit] = useState<Quotation | null>(null);
   const [newItemForRow, setNewItemForRow] = useState<{ idx: number; seed: string } | null>(null);
+
+  // Inline "Create New Customer" modal (from Customer dropdown in Quotation form)
+  const blankCustomer = (): Party => ({
+    id: "", name: "", type: "customer", gst: "", address: "", city: "",
+    contactPerson: "", mobile: "", email: "", paymentTerms: "30 days", creditLimit: 0,
+    ownerId: currentUser!.id, createdAt: new Date().toISOString(),
+  });
+  const [showNewCustomer, setShowNewCustomer] = useState(false);
+  const [newCustomer, setNewCustomer] = useState<Party>(blankCustomer());
+  const openNewCustomer = () => { setNewCustomer(blankCustomer()); setShowNewCustomer(true); };
+  const saveNewCustomer = () => {
+    const name = (newCustomer.name || "").trim();
+    if (!name) return alert("Customer name is required");
+    const created: Party = { ...newCustomer, name, id: uid() };
+    setDB(d => ({ ...d, parties: [created, ...d.parties] }));
+    setForm(f => ({ ...f, customerId: created.id }));
+    log(`Created party: ${created.name} (from Quotation)`, "Party Master");
+    setShowNewCustomer(false);
+  };
 
   const list = useMemo(() => {
     const arr = isAdmin ? db.quotations : db.quotations.filter(q => q.ownerId === currentUser?.id);
@@ -240,9 +259,18 @@ export function Quotations() {
           <div><Label>Quotation No.</Label><Input value={form.number} disabled/></div>
           <div><Label>Date</Label><Input type="date" value={form.date} onChange={(e: any) => setForm({...form, date: e.target.value})}/></div>
           <div><Label>Customer *</Label>
-            <Select value={form.customerId} onChange={(e: any) => setForm({...form, customerId: e.target.value})}>
+            <Select
+              value={form.customerId}
+              onChange={(e: any) => {
+                const v = e.target.value;
+                if (v === "__new__") { openNewCustomer(); return; }
+                setForm({ ...form, customerId: v });
+              }}
+              data-testid="qtn-customer-select"
+            >
               <option value="">— Select —</option>
               {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              <option value="__new__">+ Create New Customer…</option>
             </Select>
           </div>
         </div>
@@ -320,6 +348,31 @@ export function Quotations() {
         }}
         testIdPrefix="quot-new-fg"
       />
+
+      {/* Inline "Create New Customer" modal — persists into Party Master and auto-selects */}
+      <Modal open={showNewCustomer} onClose={() => setShowNewCustomer(false)} title="Create New Customer" size="lg">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3" data-testid="qtn-new-customer-modal">
+          <div className="sm:col-span-2">
+            <Label>Customer Name *</Label>
+            <Input value={newCustomer.name} onChange={(e: any) => setNewCustomer({ ...newCustomer, name: e.target.value })} autoFocus data-testid="qtn-new-customer-name" />
+          </div>
+          <div><Label>GSTIN</Label><Input value={newCustomer.gst} onChange={(e: any) => setNewCustomer({ ...newCustomer, gst: e.target.value })} data-testid="qtn-new-customer-gst" /></div>
+          <div><Label>Contact Person</Label><Input value={newCustomer.contactPerson} onChange={(e: any) => setNewCustomer({ ...newCustomer, contactPerson: e.target.value })} data-testid="qtn-new-customer-contact" /></div>
+          <div><Label>Mobile</Label><Input value={newCustomer.mobile} onChange={(e: any) => setNewCustomer({ ...newCustomer, mobile: e.target.value })} data-testid="qtn-new-customer-mobile" /></div>
+          <div><Label>Email</Label><Input type="email" value={newCustomer.email} onChange={(e: any) => setNewCustomer({ ...newCustomer, email: e.target.value })} data-testid="qtn-new-customer-email" /></div>
+          <div><Label>City</Label><Input value={newCustomer.city} onChange={(e: any) => setNewCustomer({ ...newCustomer, city: e.target.value })} data-testid="qtn-new-customer-city" /></div>
+          <div><Label>Payment Terms</Label><Input value={newCustomer.paymentTerms} onChange={(e: any) => setNewCustomer({ ...newCustomer, paymentTerms: e.target.value })} data-testid="qtn-new-customer-terms" /></div>
+          <div className="sm:col-span-2">
+            <Label>Address</Label>
+            <Textarea value={newCustomer.address} onChange={(e: any) => setNewCustomer({ ...newCustomer, address: e.target.value })} rows={2} data-testid="qtn-new-customer-address" />
+          </div>
+          <div><Label>Credit Limit</Label><Input type="number" value={newCustomer.creditLimit} onChange={(e: any) => setNewCustomer({ ...newCustomer, creditLimit: Number(e.target.value) || 0 })} data-testid="qtn-new-customer-credit" /></div>
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <Button variant="outline" onClick={() => setShowNewCustomer(false)} data-testid="qtn-new-customer-cancel">Cancel</Button>
+          <Button onClick={saveNewCustomer} data-testid="qtn-new-customer-save">Create &amp; Select</Button>
+        </div>
+      </Modal>
     </div>
   );
 }
