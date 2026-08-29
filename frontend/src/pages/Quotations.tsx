@@ -268,9 +268,9 @@ export function Quotations() {
               }}
               data-testid="qtn-customer-select"
             >
+              <option value="__new__" style={{ background: "#eef2ff", color: "#4338ca", fontWeight: 700 }}>➕ Create New Customer…</option>
               <option value="">— Select —</option>
               {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              <option value="__new__">+ Create New Customer…</option>
             </Select>
           </div>
         </div>
