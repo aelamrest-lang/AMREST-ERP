@@ -71,14 +71,17 @@ export function JobCards() {
     totalQty: qty * (STAGE_MULTIPLIERS[stage] ?? 1),
   }));
 
-  const blank = (): JobCard => ({
-    id: "", number: nextNumber("JC", db.jobCards), date: todayISO(), salesOrderId: "", bomId: db.boms[0]?.id || "",
-    qcFormatId: db.qcFormats[0]?.id || "", serialStart: "",
-    product: "100 KVA Transformer", qty: 1, reservedItems: [],
-    stageQuantities: defaultStageQuantities(1),
-    stages: STAGES.map(s => ({ stage: s, status: "pending" as const })), status: "Open",
-    createdAt: new Date().toISOString(),
-  });
+  const blank = (): JobCard => {
+    const firstBom = db.boms[0];
+    return {
+      id: "", number: `${nextNumber("JC", db.jobCards)}${firstBom ? ` - ${firstBom.name}` : ""}`, date: todayISO(), salesOrderId: "", bomId: firstBom?.id || "",
+      qcFormatId: db.qcFormats[0]?.id || "", serialStart: "",
+      product: firstBom?.name || "", qty: 1, reservedItems: firstBom ? firstBom.materials.filter(m => m.itemId).map(m => ({ itemId: m.itemId!, qty: m.qty })) : [],
+      stageQuantities: defaultStageQuantities(1),
+      stages: STAGES.map(s => ({ stage: s, status: "pending" as const })), status: "Open",
+      createdAt: new Date().toISOString(),
+    };
+  };
   const [form, setForm] = useState<JobCard>(blank());
 
   // Look up the most recently created Job Card with the same product name and inherit its stage prices.
@@ -184,6 +187,8 @@ export function JobCards() {
     setForm(f => ({
       ...f,
       bomId,
+      // Auto-sync Product name from BOM name so job cards stay consistent with the BOM
+      product: bom ? bom.name : f.product,
       number: `${f.number.split(" - ")[0]}${bom ? ` - ${bom.name}` : ""}`,
       reservedItems: bom ? bom.materials.filter(m => m.itemId).map(m => ({ itemId: m.itemId!, qty: m.qty * f.qty })) : [],
     }));
