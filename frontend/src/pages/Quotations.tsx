@@ -312,7 +312,7 @@ export function Quotations() {
               <Label className="text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">Owner</Label>
               <Select value={ownerFilter} onChange={(e: any) => setOwnerFilter(e.target.value)} className="w-44" data-testid="quot-owner-filter">
                 <option value="all">All Owners</option>
-                {db.users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                {db.users.filter(u => u.role === "sales").map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
               </Select>
             </div>
           )}
