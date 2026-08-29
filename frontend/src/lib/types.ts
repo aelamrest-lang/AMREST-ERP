@@ -102,6 +102,20 @@ export type DocStatus =
   | "Production"
   | "Delivered";
 
+export interface QuotationRevision {
+  revNo: number;
+  date: string;
+  revisedById: string;
+  revisedByName: string;
+  items: { name: string; description?: string; qty: number; rate: number; gst: number }[];
+  subTotal: number;
+  gst: number;
+  total: number;
+  discountPct?: number;
+  discountAmt?: number;
+  note?: string;
+}
+
 export interface Quotation {
   id: string;
   number: string;
@@ -113,6 +127,12 @@ export interface Quotation {
   status: DocStatus;
   ownerId: string;
   createdAt: string;
+  // Revision & Closure tracking
+  revisions?: QuotationRevision[];
+  closeReason?: string;
+  closeNote?: string;
+  closedAt?: string;
+  closedById?: string;
 }
 
 export interface Proforma {

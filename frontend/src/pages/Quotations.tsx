@@ -1,9 +1,9 @@
 import { useState, useMemo } from "react";
 import { useStore, uid } from "../lib/store";
-import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Empty, Textarea } from "../components/ui";
+import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Empty, Textarea, Badge } from "../components/ui";
 import { FinishedGoodCombobox } from "../components/FinishedGoodCombobox";
 import { NewFinishedGoodModal } from "../components/NewFinishedGoodModal";
-import type { Quotation, DocStatus, Party } from "../lib/types";
+import type { Quotation, DocStatus, Party, QuotationRevision } from "../lib/types";
 import { IconPlus, IconEdit, IconTrash, IconPrint, IconFile } from "../components/icons";
 import { calcCostingTotals, calcDocTotals, fmtINR, nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
 import { userCan } from "../lib/permissions";
@@ -53,10 +53,22 @@ export function Quotations() {
     setShowNewCustomer(false);
   };
 
+  const [ownerFilter, setOwnerFilter] = useState<string>("all");
+  const [stateFilter, setStateFilter] = useState<"all" | "open" | "revised" | "confirmed" | "closed">("all");
+  const quotationState = (q: Quotation): "open" | "revised" | "confirmed" | "closed" => {
+    if (q.closeReason) return "closed";
+    if (q.status === "Order Confirmed" || q.status === "Production" || q.status === "Delivered") return "confirmed";
+    if ((q.revisions || []).length > 0) return "revised";
+    return "open";
+  };
+
   const list = useMemo(() => {
-    const arr = isAdmin ? db.quotations : db.quotations.filter(q => q.ownerId === currentUser?.id);
+    let arr = isAdmin ? db.quotations : db.quotations.filter(q => q.ownerId === currentUser?.id);
+    if (ownerFilter !== "all") arr = arr.filter(q => q.ownerId === ownerFilter);
+    if (stateFilter !== "all") arr = arr.filter(q => quotationState(q) === stateFilter);
     return arr.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  }, [db.quotations, isAdmin, currentUser]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [db.quotations, isAdmin, currentUser, ownerFilter, stateFilter]);
 
   const customers = db.parties.filter(p => p.type === "customer" && (isAdmin || p.ownerId === currentUser?.id));
   const myCostings = db.costings.filter(c => isAdmin || c.ownerId === currentUser?.id);
@@ -176,8 +188,90 @@ export function Quotations() {
     }
   };
 
-  const openPreview = (q: Quotation) => setPreviewQ(q);
   const [previewQ, setPreviewQ] = useState<Quotation | null>(null);
+
+  // Revise / Close / History modals
+  type ReviseItem = { name: string; description?: string; qty: number; rate: number; gst: number };
+  const [reviseQ, setReviseQ] = useState<Quotation | null>(null);
+  const [reviseItems, setReviseItems] = useState<ReviseItem[]>([]);
+  const [reviseDiscountPct, setReviseDiscountPct] = useState<number>(0);
+  const [reviseNote, setReviseNote] = useState<string>("");
+  const [closeQ, setCloseQ] = useState<Quotation | null>(null);
+  const [closeReason, setCloseReason] = useState<string>("Price High");
+  const [closeNote, setCloseNote] = useState<string>("");
+  const [historyQ, setHistoryQ] = useState<Quotation | null>(null);
+  const CLOSE_REASONS = ["Price High", "Customer Cancelled", "Competitor", "No Response", "Other"];
+
+  const stateBadgeColor: Record<string, "slate" | "blue" | "amber" | "emerald" | "rose"> = {
+    open: "blue", revised: "amber", confirmed: "emerald", closed: "rose",
+  };
+  const stateLabel: Record<string, string> = { open: "Open", revised: "Revised", confirmed: "Confirmed", closed: "Closed" };
+
+  const openRevise = (q: Quotation) => {
+    setReviseQ(q);
+    setReviseItems(q.items.map(i => ({ ...i })));
+    setReviseDiscountPct(0);
+    setReviseNote("");
+  };
+  const applyPctToAllRates = () => {
+    const pct = Number(reviseDiscountPct) || 0;
+    if (pct <= 0) return;
+    setReviseItems(items => items.map(it => ({ ...it, rate: Math.round(it.rate * (1 - pct / 100)) })));
+  };
+  const saveRevision = () => {
+    if (!reviseQ) return;
+    const items = reviseItems;
+    const t = calcDocTotals(items);
+    const nextRev = ((reviseQ.revisions || []).slice(-1)[0]?.revNo || 0) + 1;
+    const rev: QuotationRevision = {
+      revNo: nextRev,
+      date: todayISO(),
+      revisedById: currentUser!.id,
+      revisedByName: currentUser!.name || currentUser!.email || "User",
+      items: items.map(i => ({ ...i })),
+      subTotal: t.sub,
+      gst: t.gst,
+      total: t.total,
+      discountPct: Number(reviseDiscountPct) || undefined,
+      note: reviseNote || undefined,
+    };
+    setDB(d => ({
+      ...d,
+      quotations: d.quotations.map(x => x.id === reviseQ.id
+        ? { ...x, items: rev.items, revisions: [...(x.revisions || []), rev] }
+        : x),
+    }));
+    log(`Revised ${reviseQ.number} → R${nextRev} (total ${fmtINR(t.total)})`, "Quotations");
+    setReviseQ(null);
+  };
+
+  const openClose = (q: Quotation) => {
+    setCloseQ(q);
+    setCloseReason("Price High");
+    setCloseNote("");
+  };
+  const saveClose = () => {
+    if (!closeQ) return;
+    if (!closeReason) return alert("Reason is required.");
+    setDB(d => ({
+      ...d,
+      quotations: d.quotations.map(x => x.id === closeQ.id
+        ? { ...x, closeReason, closeNote: closeNote || undefined, closedAt: new Date().toISOString(), closedById: currentUser!.id }
+        : x),
+    }));
+    log(`Closed ${closeQ.number}: ${closeReason}${closeNote ? " — " + closeNote : ""}`, "Quotations");
+    setCloseQ(null);
+  };
+  const reopenQ = (q: Quotation) => {
+    if (!confirm(`Reopen ${q.number}?`)) return;
+    setDB(d => ({
+      ...d,
+      quotations: d.quotations.map(x => x.id === q.id ? { ...x, closeReason: undefined, closeNote: undefined, closedAt: undefined, closedById: undefined } : x),
+    }));
+    log(`Reopened ${q.number}`, "Quotations");
+  };
+
+  const openPreview = (q: Quotation) => setPreviewQ(q);
 
   const buildQuotationHTML = (q: Quotation) => {
     const cust = db.parties.find(p => p.id === q.customerId);
@@ -212,7 +306,26 @@ export function Quotations() {
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div><h1 className="text-2xl font-bold">Quotations</h1><p className="text-sm text-slate-500">Create, convert and track quotations</p></div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap items-end">
+          {isAdmin && (
+            <div>
+              <Label className="text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">Owner</Label>
+              <Select value={ownerFilter} onChange={(e: any) => setOwnerFilter(e.target.value)} className="w-44" data-testid="quot-owner-filter">
+                <option value="all">All Owners</option>
+                {db.users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+              </Select>
+            </div>
+          )}
+          <div>
+            <Label className="text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">State</Label>
+            <Select value={stateFilter} onChange={(e: any) => setStateFilter(e.target.value)} className="w-36" data-testid="quot-state-filter">
+              <option value="all">All States</option>
+              <option value="open">Open</option>
+              <option value="revised">Revised</option>
+              <option value="confirmed">Confirmed</option>
+              <option value="closed">Closed</option>
+            </Select>
+          </div>
           {canCreate && myCostings.length > 0 && (
             <Select className="w-56" onChange={(e: any) => e.target.value && openNew(e.target.value)}>
               <option value="">From costing sheet…</option>
@@ -225,40 +338,60 @@ export function Quotations() {
 
       <Card>
         <Table>
-          <thead><tr><Th>#</Th><Th>Date</Th><Th>Customer</Th><Th>Items</Th><Th>Total</Th><Th>Status</Th><Th>Owner</Th><Th></Th></tr></thead>
+          <thead><tr><Th>#</Th><Th>Date</Th><Th>Customer</Th><Th>Items</Th><Th>Total</Th><Th>Status</Th><Th>State</Th><Th>Owner</Th><Th></Th></tr></thead>
           <tbody>
             {list.map(q => {
               const t = calcDocTotals(q.items);
+              const st = quotationState(q);
+              const revCount = (q.revisions || []).length;
               return (
                 <tr key={q.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                   <Td className="font-mono text-xs">
-                    <button
-                      className="text-indigo-600 hover:underline"
-                      onClick={() => openPreview(q)}
-                      title="Click to preview the printable A4 quotation"
-                      data-testid={`quot-view-${q.id}`}
-                    >{q.number}</button>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        className="text-indigo-600 hover:underline"
+                        onClick={() => openPreview(q)}
+                        title="Click to preview the printable A4 quotation"
+                        data-testid={`quot-view-${q.id}`}
+                      >{q.number}</button>
+                      {revCount > 0 && (
+                        <button
+                          onClick={() => setHistoryQ(q)}
+                          className="text-[9px] font-semibold text-amber-700 bg-amber-100 dark:bg-amber-900/40 dark:text-amber-300 px-1.5 py-0.5 rounded hover:bg-amber-200"
+                          title="View revision history"
+                          data-testid={`quot-history-${q.id}`}
+                        >R{revCount}</button>
+                      )}
+                    </div>
                   </Td>
                   <Td>{q.date}</Td>
                   <Td>{db.parties.find(p => p.id === q.customerId)?.name}</Td>
                   <Td>{q.items.length}</Td>
                   <Td className="font-semibold">{fmtINR(t.total)}</Td>
                   <Td>
-                    <Select disabled={!canEdit} value={q.status} onChange={(e: any) => {
+                    <Select disabled={!canEdit || st === "closed"} value={q.status} onChange={(e: any) => {
                       setDB(d => ({ ...d, quotations: d.quotations.map(x => x.id === q.id ? {...x, status: e.target.value} : x) }));
                       log(`Status of ${q.number} → ${e.target.value}`, "Quotations");
                     }} className="text-xs py-1">
                       {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
                     </Select>
                   </Td>
+                  <Td>
+                    <Badge color={stateBadgeColor[st]} className={st === "closed" ? "cursor-help" : ""}>
+                      <span title={st === "closed" ? `${q.closeReason || ""}${q.closeNote ? " — " + q.closeNote : ""}` : ""}>{stateLabel[st]}</span>
+                    </Badge>
+                  </Td>
                   <Td className="text-xs">{db.users.find(u => u.id === q.ownerId)?.name}</Td>
                   <Td>
                     <div className="flex gap-1 flex-wrap">
-                      {canEdit && <Button size="sm" variant="ghost" onClick={() => openEdit(q)}><IconEdit size={14}/></Button>}
-                      {canPrint && <Button size="sm" variant="ghost" onClick={() => printQ(q)}><IconPrint size={14}/></Button>}
-                      {userCan(currentUser, "proformas", "create") && <Button size="sm" variant="outline" onClick={() => convert(q, "proforma")} title="Convert to Proforma"><IconFile size={12}/> PI</Button>}
-                      {userCan(currentUser, "salesorders", "create") && <Button size="sm" variant="outline" onClick={() => convert(q, "salesorder")} title="Convert to Sales Order">SO</Button>}
-                      {canDelete && <Button size="sm" variant="ghost" onClick={() => remove(q)}><IconTrash size={14}/></Button>}
+                      {canEdit && st !== "closed" && <Button size="sm" variant="ghost" onClick={() => openEdit(q)} title="Edit"><IconEdit size={14}/></Button>}
+                      {canEdit && st !== "closed" && <Button size="sm" variant="outline" onClick={() => openRevise(q)} title="Revise quotation" data-testid={`quot-revise-${q.id}`}>Revise</Button>}
+                      {canPrint && <Button size="sm" variant="ghost" onClick={() => printQ(q)} title="Download PDF"><IconPrint size={14}/></Button>}
+                      {userCan(currentUser, "proformas", "create") && st !== "closed" && <Button size="sm" variant="outline" onClick={() => convert(q, "proforma")} title="Convert to Proforma"><IconFile size={12}/> PI</Button>}
+                      {userCan(currentUser, "salesorders", "create") && st !== "closed" && <Button size="sm" variant="outline" onClick={() => convert(q, "salesorder")} title="Convert to Sales Order">SO</Button>}
+                      {canEdit && st !== "closed" && st !== "confirmed" && <Button size="sm" variant="outline" onClick={() => openClose(q)} title="Close (not confirmed)" data-testid={`quot-close-${q.id}`}>Close</Button>}
+                      {canEdit && st === "closed" && <Button size="sm" variant="ghost" onClick={() => reopenQ(q)} title="Reopen" data-testid={`quot-reopen-${q.id}`}>Reopen</Button>}
+                      {canDelete && <Button size="sm" variant="ghost" onClick={() => remove(q)} title="Delete"><IconTrash size={14}/></Button>}
                     </div>
                   </Td>
                 </tr>
@@ -424,6 +557,151 @@ export function Quotations() {
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* Revise Quotation Modal */}
+      <Modal open={!!reviseQ} onClose={() => setReviseQ(null)} title={reviseQ ? `Revise ${reviseQ.number} — R${((reviseQ.revisions || []).slice(-1)[0]?.revNo || 0) + 1}` : ""} size="xl">
+        {reviseQ && (() => {
+          const t = calcDocTotals(reviseItems);
+          const prevTotal = calcDocTotals(reviseQ.items).total;
+          return (
+            <div className="space-y-3" data-testid="quot-revise-modal">
+              <div className="text-xs text-slate-500">Edit rates or apply an overall discount %. Saving creates a new revision entry and updates the current quotation with these values. Previous total: <b>{fmtINR(prevTotal)}</b></div>
+              <div className="border border-slate-200 dark:border-slate-700 rounded-lg overflow-x-auto">
+                <Table>
+                  <thead><tr><Th>Item</Th><Th className="text-right">Qty</Th><Th className="text-right">Rate</Th><Th className="text-right">GST%</Th><Th className="text-right">Amount</Th></tr></thead>
+                  <tbody>
+                    {reviseItems.map((it, i) => (
+                      <tr key={i}>
+                        <Td className="min-w-[280px]"><Input value={it.name} onChange={(e: any) => setReviseItems(items => items.map((x, idx) => idx === i ? { ...x, name: e.target.value } : x))} /></Td>
+                        <Td><Input type="number" value={it.qty} onChange={(e: any) => setReviseItems(items => items.map((x, idx) => idx === i ? { ...x, qty: Number(e.target.value) || 0 } : x))} className="w-20 text-right" data-testid={`quot-rev-qty-${i}`} /></Td>
+                        <Td><Input type="number" value={it.rate} onChange={(e: any) => setReviseItems(items => items.map((x, idx) => idx === i ? { ...x, rate: Number(e.target.value) || 0 } : x))} className="w-32 text-right" data-testid={`quot-rev-rate-${i}`} /></Td>
+                        <Td>
+                          <Select value={it.gst} onChange={(e: any) => setReviseItems(items => items.map((x, idx) => idx === i ? { ...x, gst: Number(e.target.value) } : x))} className="w-20">
+                            {GST_OPTIONS.map(g => <option key={g} value={g}>{g}%</option>)}
+                          </Select>
+                        </Td>
+                        <Td className="text-right font-semibold">{fmtINR(it.qty * it.rate)}</Td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </Table>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                <div>
+                  <Label>Overall Discount %</Label>
+                  <div className="flex gap-2">
+                    <Input type="number" value={reviseDiscountPct} onChange={(e: any) => setReviseDiscountPct(Number(e.target.value) || 0)} data-testid="quot-rev-discount-pct" />
+                    <Button variant="outline" onClick={applyPctToAllRates} data-testid="quot-rev-apply-pct">Apply</Button>
+                  </div>
+                </div>
+                <div className="sm:col-span-2">
+                  <Label>Note (optional)</Label>
+                  <Input value={reviseNote} onChange={(e: any) => setReviseNote(e.target.value)} placeholder="e.g. Revised after customer negotiation" data-testid="quot-rev-note" />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1 border-t border-slate-200 dark:border-slate-700">
+                <div className="text-sm"><span className="text-slate-500">Sub Total:</span> <b>{fmtINR(t.sub)}</b></div>
+                <div className="text-sm"><span className="text-slate-500">GST:</span> <b>{fmtINR(t.gst)}</b></div>
+                <div className="text-sm text-emerald-700"><span className="text-slate-500">New Total:</span> <b>{fmtINR(t.total)}</b>
+                  {prevTotal !== t.total && <span className={"ml-2 text-xs " + (t.total < prevTotal ? "text-emerald-600" : "text-rose-600")}>{t.total < prevTotal ? "▼" : "▲"} {fmtINR(Math.abs(t.total - prevTotal))}</span>}
+                </div>
+              </div>
+              <div className="mt-2 flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setReviseQ(null)} data-testid="quot-rev-cancel">Cancel</Button>
+                <Button onClick={saveRevision} data-testid="quot-rev-save">Save Revision</Button>
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
+
+      {/* Close Quotation Modal */}
+      <Modal open={!!closeQ} onClose={() => setCloseQ(null)} title={closeQ ? `Close Quotation — ${closeQ.number}` : ""} size="md">
+        {closeQ && (
+          <div className="space-y-3" data-testid="quot-close-modal">
+            <div className="text-xs text-slate-500">Provide a reason for closing this quotation. This will lock further edits (you can reopen it later from Actions).</div>
+            <div>
+              <Label>Reason *</Label>
+              <Select value={closeReason} onChange={(e: any) => setCloseReason(e.target.value)} data-testid="quot-close-reason">
+                {CLOSE_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
+              </Select>
+            </div>
+            <div>
+              <Label>Additional note (optional)</Label>
+              <Textarea rows={3} value={closeNote} onChange={(e: any) => setCloseNote(e.target.value)} data-testid="quot-close-note" />
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button variant="outline" onClick={() => setCloseQ(null)} data-testid="quot-close-cancel">Cancel</Button>
+              <Button onClick={saveClose} data-testid="quot-close-save">Close Quotation</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Revision History Modal */}
+      <Modal open={!!historyQ} onClose={() => setHistoryQ(null)} title={historyQ ? `Revision History — ${historyQ.number}` : ""} size="lg">
+        {historyQ && (() => {
+          const orig = calcDocTotals(historyQ.items); // NOTE: items on the record now match the latest revision
+          const revs = (historyQ.revisions || []).slice().sort((a, b) => a.revNo - b.revNo);
+          return (
+            <div className="space-y-3" data-testid="quot-history-modal">
+              <div className="rounded-lg border border-slate-200 dark:border-slate-700 overflow-x-auto">
+                <Table>
+                  <thead>
+                    <tr>
+                      <Th>Rev</Th>
+                      <Th>Date</Th>
+                      <Th>Revised By</Th>
+                      <Th className="text-right">Discount %</Th>
+                      <Th className="text-right">Sub Total</Th>
+                      <Th className="text-right">Total</Th>
+                      <Th>Note</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="bg-slate-50 dark:bg-slate-800/40">
+                      <Td className="font-mono font-semibold">R0</Td>
+                      <Td>{historyQ.date}</Td>
+                      <Td>{db.users.find(u => u.id === historyQ.ownerId)?.name || "—"}</Td>
+                      <Td className="text-right text-slate-400">—</Td>
+                      <Td className="text-right">—</Td>
+                      <Td className="text-right font-semibold">— (Original)</Td>
+                      <Td className="text-xs text-slate-500">Original quotation</Td>
+                    </tr>
+                    {revs.length === 0 ? (
+                      <tr><Td colSpan={7}><Empty title="No revisions yet" subtitle="Use the Revise button to create one." /></Td></tr>
+                    ) : revs.map(r => (
+                      <tr key={r.revNo}>
+                        <Td className="font-mono font-semibold text-amber-700">R{r.revNo}</Td>
+                        <Td>{r.date}</Td>
+                        <Td>{r.revisedByName}</Td>
+                        <Td className="text-right">{r.discountPct ? r.discountPct + "%" : "—"}</Td>
+                        <Td className="text-right">{fmtINR(r.subTotal)}</Td>
+                        <Td className="text-right font-semibold">{fmtINR(r.total)}</Td>
+                        <Td className="text-xs text-slate-500">{r.note || "—"}</Td>
+                      </tr>
+                    ))}
+                    {revs.length > 0 && (
+                      <tr className="bg-emerald-50 dark:bg-emerald-900/20">
+                        <Td className="font-mono font-semibold text-emerald-700">Current</Td>
+                        <Td>—</Td>
+                        <Td>—</Td>
+                        <Td className="text-right text-slate-400">—</Td>
+                        <Td className="text-right">{fmtINR(orig.sub)}</Td>
+                        <Td className="text-right font-semibold text-emerald-700">{fmtINR(orig.total)}</Td>
+                        <Td className="text-xs text-slate-500">Latest saved</Td>
+                      </tr>
+                    )}
+                  </tbody>
+                </Table>
+              </div>
+              <div className="flex justify-end pt-1">
+                <Button variant="ghost" onClick={() => setHistoryQ(null)} data-testid="quot-history-close">Close</Button>
+              </div>
+            </div>
+          );
+        })()}
       </Modal>
     </div>
   );
