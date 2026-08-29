@@ -176,7 +176,10 @@ export function Quotations() {
     }
   };
 
-  const printQ = (q: Quotation) => {
+  const openPreview = (q: Quotation) => setPreviewQ(q);
+  const [previewQ, setPreviewQ] = useState<Quotation | null>(null);
+
+  const buildQuotationHTML = (q: Quotation) => {
     const cust = db.parties.find(p => p.id === q.customerId);
     const t = calcDocTotals(q.items);
     const body = `
@@ -190,8 +193,19 @@ export function Quotations() {
       </div>
       <div class="box"><div class="section-title">Terms & Conditions</div><pre style="white-space:pre-wrap;font-family:inherit;font-size:12px;margin:6px 0">${q.terms}</pre></div>
     `;
-    const html = professionalDocument(db.settings, { title: "Quotation", number: q.number, date: q.date, body, accent: "#2563eb", skipFormatTerms: true });
-    printArea(html, q.number);
+    return professionalDocument(db.settings, { title: "Quotation", number: q.number, date: q.date, body, accent: "#2563eb", skipFormatTerms: true });
+  };
+
+  const printQ = (q: Quotation) => {
+    printArea(buildQuotationHTML(q), q.number);
+  };
+
+  const printFromPreview = () => {
+    const frame = document.querySelector('iframe[data-testid="quot-preview-iframe"]') as HTMLIFrameElement | null;
+    if (frame && frame.contentWindow) {
+      frame.contentWindow.focus();
+      frame.contentWindow.print();
+    }
   };
 
   return (
@@ -220,7 +234,8 @@ export function Quotations() {
                   <Td className="font-mono text-xs">
                     <button
                       className="text-indigo-600 hover:underline"
-                      onClick={() => openEdit(q)}
+                      onClick={() => openPreview(q)}
+                      title="Click to preview the printable A4 quotation"
                       data-testid={`quot-view-${q.id}`}
                     >{q.number}</button>
                   </Td>
@@ -372,6 +387,43 @@ export function Quotations() {
           <Button variant="outline" onClick={() => setShowNewCustomer(false)} data-testid="qtn-new-customer-cancel">Cancel</Button>
           <Button onClick={saveNewCustomer} data-testid="qtn-new-customer-save">Create &amp; Select</Button>
         </div>
+      </Modal>
+
+      {/* A4 Printable Preview modal — clickable quotation number */}
+      <Modal
+        open={!!previewQ}
+        onClose={() => setPreviewQ(null)}
+        title={previewQ ? `Quotation Preview — ${previewQ.number}` : ""}
+        size="xl"
+      >
+        {previewQ && (
+          <div className="space-y-3" data-testid="quot-preview-modal">
+            <div className="flex items-center justify-end gap-2">
+              {canEdit && (
+                <Button variant="outline" onClick={() => { const q = previewQ; setPreviewQ(null); openEdit(q); }} data-testid="quot-preview-edit">
+                  <IconEdit size={14}/> Edit
+                </Button>
+              )}
+              <Button variant="outline" onClick={printFromPreview} data-testid="quot-preview-print">
+                <IconPrint size={14}/> Print
+              </Button>
+              {canPrint && (
+                <Button onClick={() => printQ(previewQ)} data-testid="quot-preview-pdf">
+                  <IconFile size={14}/> Download PDF
+                </Button>
+              )}
+              <Button variant="ghost" onClick={() => setPreviewQ(null)} data-testid="quot-preview-close">Close</Button>
+            </div>
+            <div className="bg-slate-100 dark:bg-slate-800 rounded-lg p-3 flex justify-center overflow-auto max-h-[75vh]">
+              <iframe
+                srcDoc={buildQuotationHTML(previewQ)}
+                title={`Quotation ${previewQ.number}`}
+                data-testid="quot-preview-iframe"
+                style={{ width: "820px", height: "1123px", border: 0, background: "#fff", boxShadow: "0 6px 20px rgba(15,23,42,0.15)" }}
+              />
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );
