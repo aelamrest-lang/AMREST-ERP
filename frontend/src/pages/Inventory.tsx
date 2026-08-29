@@ -15,6 +15,14 @@ export function Inventory() {
   const [heldSearch, setHeldSearch] = useState("");
   const [heldType, setHeldType] = useState<"all" | "Raw Material" | "Semi-Finished" | "Finished Goods">("all");
   const [uploadMessage, setUploadMessage] = useState("");
+  const [sortKey, setSortKey] = useState<"current" | "hold" | "available" | "cost" | "value" | "status" | null>(null);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const toggleSort = (k: "current" | "hold" | "available" | "cost" | "value" | "status") => {
+    if (sortKey === k) setSortDir(d => d === "asc" ? "desc" : "asc");
+    else { setSortKey(k); setSortDir("desc"); }
+  };
+  const arrow = (k: string) => sortKey === k ? (sortDir === "desc" ? " ▼" : " ▲") : " ↕";
+  const statusRank: Record<string, number> = { "Healthy": 0, "Reorder Soon": 1, "Below Buffer": 2, "Over-Committed": 3 };
 
   const items = useMemo(() => {
     let arr = db.items.slice();
@@ -56,13 +64,28 @@ export function Inventory() {
     });
     return map;
   }, [allHeldRows]);
-  const controlRows = useMemo(() => items.map(item => {
-    const hold = heldByItem.get(item.id) || 0;
-    const available = item.currentStock;
-    const totalStock = item.currentStock + hold;
-    const status = available < 0 ? "Over-Committed" : available <= item.minStock ? "Below Buffer" : available <= item.reorderLevel ? "Reorder Soon" : "Healthy";
-    return { item, hold, available, totalStock, status };
-  }), [items, heldByItem]);
+  const controlRows = useMemo(() => {
+    const rows = items.map(item => {
+      const hold = heldByItem.get(item.id) || 0;
+      const available = item.currentStock;
+      const totalStock = item.currentStock + hold;
+      const status = available < 0 ? "Over-Committed" : available <= item.minStock ? "Below Buffer" : available <= item.reorderLevel ? "Reorder Soon" : "Healthy";
+      return { item, hold, available, totalStock, status };
+    });
+    if (!sortKey) return rows;
+    const val = (r: typeof rows[0]) => {
+      switch (sortKey) {
+        case "current": return r.totalStock;
+        case "hold": return r.hold;
+        case "available": return r.available;
+        case "cost": return r.item.purchaseRate;
+        case "value": return r.available * r.item.purchaseRate;
+        case "status": return statusRank[r.status] ?? -1;
+      }
+    };
+    const sign = sortDir === "desc" ? -1 : 1;
+    return rows.slice().sort((a, b) => sign * ((val(a) as number) - (val(b) as number)));
+  }, [items, heldByItem, sortKey, sortDir]);
   const heldRows = useMemo(() => {
     return allHeldRows.filter(r => {
       const text = `${r.jobCardNumber} ${r.item?.name || ""}`.toLowerCase();
@@ -211,7 +234,16 @@ export function Inventory() {
           <div className="font-mono text-xs text-amber-800 dark:text-amber-300">Current Stock - Hold (Job Card) = Available</div>
         </div>
         <Table>
-          <thead><tr><Th>Material Details</Th><Th>UOM</Th><Th>Current Stock</Th><Th>Hold (Job Card)</Th><Th>Available Stock</Th><Th>Avg Unit Cost</Th><Th>Total Valuation (₹)</Th><Th>Safety Buffer Status</Th></tr></thead>
+          <thead><tr>
+            <Th>Material Details</Th>
+            <Th>UOM</Th>
+            <Th className="cursor-pointer select-none hover:text-indigo-600" onClick={() => toggleSort("current")} data-testid="inv-sort-current">Current Stock{arrow("current")}</Th>
+            <Th className="cursor-pointer select-none hover:text-indigo-600" onClick={() => toggleSort("hold")} data-testid="inv-sort-hold">Hold (Job Card){arrow("hold")}</Th>
+            <Th className="cursor-pointer select-none hover:text-indigo-600" onClick={() => toggleSort("available")} data-testid="inv-sort-available">Available Stock{arrow("available")}</Th>
+            <Th className="cursor-pointer select-none hover:text-indigo-600" onClick={() => toggleSort("cost")} data-testid="inv-sort-cost">Avg Unit Cost{arrow("cost")}</Th>
+            <Th className="cursor-pointer select-none hover:text-indigo-600" onClick={() => toggleSort("value")} data-testid="inv-sort-value">Total Valuation (₹){arrow("value")}</Th>
+            <Th className="cursor-pointer select-none hover:text-indigo-600" onClick={() => toggleSort("status")} data-testid="inv-sort-status">Safety Buffer Status{arrow("status")}</Th>
+          </tr></thead>
           <tbody>
             {controlRows.map(({ item: i, hold, available, totalStock, status }) => {
               const low = available <= i.minStock;
