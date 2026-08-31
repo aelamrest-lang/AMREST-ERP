@@ -5,6 +5,7 @@ import { Card, Button, Input, Select, Label, Table, Th, Td, Empty, Badge, Modal 
 import type { BOM } from "../lib/types";
 import { IconPlus, IconTrash, IconSearch, IconEdit, IconCheck } from "../components/icons";
 import { userCan } from "../lib/permissions";
+import { FinishedGoodCombobox } from "../components/FinishedGoodCombobox";
 
 export function BOMPage() {
   const { db, setDB, log, currentUser } = useStore();
@@ -221,10 +222,14 @@ export function BOMPage() {
             </div>
 
             <div>
-              <Label>Select Transformer Model</Label>
-              <Select value={selectedProduct?.id || ""} onChange={(e: any) => setSelectedProductId(e.target.value)}>
-                {finishedProducts.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </Select>
+              <Label>Select Finished Goods</Label>
+              <FinishedGoodCombobox
+                items={finishedProducts.slice().sort((a, b) => a.name.localeCompare(b.name))}
+                value={selectedProduct?.name || ""}
+                onPick={(it) => setSelectedProductId(it.id)}
+                placeholder="Type to search Finished Goods..."
+                testId="bom-fg-combobox"
+              />
             </div>
 
             <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 p-4">
