@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import * as XLSX from "xlsx";
 import { useStore, uid } from "../lib/store";
 import { Card, Button, Input, Select, Label, Table, Th, Td, Empty, Badge, Modal } from "../components/ui";
 import type { BOM } from "../lib/types";
@@ -261,15 +262,50 @@ export function BOMPage() {
             </div>
 
             <div>
-              <h4 className="font-semibold mb-3">Current BOM Map Items</h4>
+              <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                <h4 className="font-semibold">Current BOM Map Items</h4>
+                <Button
+                  variant="outline"
+                  disabled={!currentBom || (currentBom.materials || []).length === 0}
+                  onClick={() => {
+                    if (!currentBom) return;
+                    const sorted = (currentBom.materials || []).slice().sort((a, b) => {
+                      const an = (rawAndSemiItems.find(i => i.id === a.itemId)?.name || a.name || "").toLowerCase();
+                      const bn = (rawAndSemiItems.find(i => i.id === b.itemId)?.name || b.name || "").toLowerCase();
+                      return an.localeCompare(bn);
+                    });
+                    const rows = sorted.map((m, idx) => {
+                      const item = rawAndSemiItems.find(i => i.id === m.itemId);
+                      return {
+                        "Sr. No.": idx + 1,
+                        "Material": item?.name || m.name,
+                        "Category": item?.category || "",
+                        "UOM": m.unit,
+                        "Required Qty (Per Unit)": m.qty,
+                      };
+                    });
+                    const wb = XLSX.utils.book_new();
+                    const ws = XLSX.utils.json_to_sheet(rows);
+                    XLSX.utils.book_append_sheet(wb, ws, "BOM Items");
+                    const safeName = (currentBom.name || "BOM").replace(/[^a-z0-9-_ ]/gi, "_");
+                    XLSX.writeFile(wb, `${safeName} - BOM Items.xlsx`);
+                  }}
+                  data-testid="bom-download-excel"
+                >Download Excel</Button>
+              </div>
               <div className="rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
                 <Table>
-                  <thead><tr><Th>Material Details</Th><Th>UOM</Th><Th>Required Qty (Per Unit)</Th><Th>Action</Th></tr></thead>
+                  <thead><tr><Th>Sr. No.</Th><Th>Material Details</Th><Th>UOM</Th><Th>Required Qty (Per Unit)</Th><Th>Action</Th></tr></thead>
                   <tbody>
-                    {(currentBom?.materials || []).map(m => {
+                    {(currentBom?.materials || []).slice().sort((a, b) => {
+                      const an = (rawAndSemiItems.find(i => i.id === a.itemId)?.name || a.name || "").toLowerCase();
+                      const bn = (rawAndSemiItems.find(i => i.id === b.itemId)?.name || b.name || "").toLowerCase();
+                      return an.localeCompare(bn);
+                    }).map((m, idx) => {
                       const item = rawAndSemiItems.find(i => i.id === m.itemId);
                       return (
                         <tr key={m.itemId || m.name} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                          <Td className="font-mono text-xs text-slate-500">{idx + 1}</Td>
                           <Td>
                             <div className="font-semibold">{item?.name || m.name}</div>
                             {item && <Badge color={item.category === "Raw Material" ? "blue" : "yellow"}>{item.category}</Badge>}
