@@ -828,6 +828,7 @@ export function GRNPage() {
   const [freightEnabled, setFreightEnabled] = useState(false);
   const [freight, setFreight] = useState<number>(0);
   const [freightGst, setFreightGst] = useState<number>(18);
+  const [grnSearch, setGrnSearch] = useState<string>("");
   const [packingEnabled, setPackingEnabled] = useState(false);
   const [packing, setPacking] = useState<number>(0);
   const [packingGst, setPackingGst] = useState<number>(18);
@@ -1051,13 +1052,31 @@ export function GRNPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div><h1 className="text-2xl font-bold">Goods Receipt Notes (GRN)</h1><p className="text-sm text-slate-500">Receive against PO and auto-update inventory</p></div>
-        {canCreate && <Button onClick={openNew}><IconPlus size={14}/> New GRN</Button>}
+        <div className="flex items-center gap-2 flex-wrap">
+          <Input
+            placeholder="Search by party / vendor / GRN / PO / invoice…"
+            value={grnSearch}
+            onChange={(e: any) => setGrnSearch(e.target.value)}
+            className="w-72"
+            data-testid="grn-search"
+          />
+          {canCreate && <Button onClick={openNew}><IconPlus size={14}/> New GRN</Button>}
+        </div>
       </div>
       <Card>
         <Table>
           <thead><tr><Th>#</Th><Th>Date</Th><Th>PO / Vendor</Th><Th>Items</Th><Th>Invoice #</Th><Th className="text-right">Total</Th><Th>QC</Th><Th></Th></tr></thead>
           <tbody>
-            {db.grns.map(g => {
+            {db.grns.filter(g => {
+              const q = grnSearch.trim().toLowerCase();
+              if (!q) return true;
+              const p = db.purchaseOrders.find(x => x.id === g.poId);
+              const vendorName = (db.parties.find(v => v.id === p?.vendorId)?.name || "").toLowerCase();
+              return vendorName.includes(q)
+                || (g.number || "").toLowerCase().includes(q)
+                || (p?.number || "").toLowerCase().includes(q)
+                || (g.vendorInvoiceNo || "").toLowerCase().includes(q);
+            }).map(g => {
               const p = db.purchaseOrders.find(x => x.id === g.poId);
               const itemsTotal = g.receivedItems.reduce((s, ri) => {
                 const line = p?.items.find(x => x.itemId === ri.itemId);
