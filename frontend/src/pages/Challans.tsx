@@ -55,6 +55,7 @@ function buildDispatchRow(
   challans: DeliveryChallan[],
   excludeChallanId?: string,
   existing?: DeliveryChallan["items"],
+  fgSalePriceByName?: Map<string, number>,
 ): DispatchRow | null {
   const jcCompleted = jobCardCompletedQty(jc, entries);
   const jcAlreadyDispatched = sumDispatchedFromJC(challans, jc.id, excludeChallanId);
@@ -68,6 +69,7 @@ function buildDispatchRow(
       const soBalance = Math.max(0, soi.qty - already);
       const cap = Math.min(soBalance, jcRemaining);
       const existingRow = existing?.find(x => x.name === soi.name);
+      const mfgSale = fgSalePriceByName?.get(soi.name) || 0;
       return {
         name: soi.name,
         ordered: soi.qty,
@@ -75,7 +77,7 @@ function buildDispatchRow(
         jcCompleted,
         jcAlreadyDispatched,
         currentQty: existingRow?.qty ?? cap,
-        rate: existingRow?.rate ?? soi.rate,
+        rate: existingRow?.rate ?? (soi.rate || mfgSale),
         gst: existingRow?.gst ?? soi.gst,
       };
     }
@@ -84,6 +86,7 @@ function buildDispatchRow(
 
   // No SO linked (or product mismatch) — dispatch directly from the JC.
   const existingRow = existing?.find(x => x.name === jc.product);
+  const mfgSale = fgSalePriceByName?.get(jc.product) || 0;
   return {
     name: jc.product,
     ordered: jc.qty,
@@ -91,7 +94,7 @@ function buildDispatchRow(
     jcCompleted,
     jcAlreadyDispatched,
     currentQty: existingRow?.qty ?? jcRemaining,
-    rate: existingRow?.rate ?? 0,
+    rate: existingRow?.rate ?? mfgSale,
     gst: existingRow?.gst ?? 18,
   };
 }
@@ -144,12 +147,23 @@ export function Challans() {
     setRow(null);
     setOpen(true);
   };
+  // Map of Finished Good name → saved manufacturing sale price (used to auto-fill DC rate)
+  const fgSaleMap = useMemo(() => {
+    const map = new Map<string, number>();
+    const mfg = ((db.settings as any).manufacturingCosts || {}) as Record<string, { salePrice?: number }>;
+    Object.entries(mfg).forEach(([itemId, v]) => {
+      const it = db.items.find(x => x.id === itemId);
+      if (it && v.salePrice) map.set(it.name, Number(v.salePrice) || 0);
+    });
+    return map;
+  }, [db.items, db.settings]);
+
   const openEdit = (c: DeliveryChallan) => {
     setEdit(c);
     setForm({ ...c });
     const jc = db.jobCards.find(j => j.id === c.jobCardId);
     const so = db.salesOrders.find(s => s.id === c.salesOrderId);
-    if (jc) setRow(buildDispatchRow(so, jc, db.productionEntries, db.challans, c.id, c.items));
+    if (jc) setRow(buildDispatchRow(so, jc, db.productionEntries, db.challans, c.id, c.items, fgSaleMap));
     else setRow(null);
     setOpen(true);
   };
@@ -165,7 +179,7 @@ export function Challans() {
       customerId: so?.customerId || f.customerId || "",
       freight: so?.freight ?? f.freight ?? 0,
     }));
-    setRow(buildDispatchRow(so, jc, db.productionEntries, db.challans, edit?.id));
+    setRow(buildDispatchRow(so, jc, db.productionEntries, db.challans, edit?.id, undefined, fgSaleMap));
   };
 
   const updateRow = (patch: Partial<DispatchRow>) => {

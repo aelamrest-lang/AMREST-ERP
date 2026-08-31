@@ -16,6 +16,7 @@ import { BOMPage } from "./pages/BOM";
 import { JobCards, ProductionDashboard } from "./pages/Production";
 import { OperatorsPage } from "./pages/Operators";
 import { ManufacturingTime } from "./pages/ManufacturingTime";
+import { ManufacturingCost } from "./pages/ManufacturingCost";
 import { MonthlyPnL } from "./pages/MonthlyPnL";
 import { MonthlyPSReport } from "./pages/MonthlyPSReport";
 import { Costings } from "./pages/Costings";
@@ -81,6 +82,7 @@ function Shell() {
       {effective === "production" && <ProductionDashboard />}
       {effective === "operators" && <OperatorsPage />}
       {effective === "mfgtime" && <ManufacturingTime />}
+      {effective === "mfgcost" && <ManufacturingCost />}
       {effective === "pnl" && <MonthlyPnL />}
       {effective === "psreport" && <MonthlyPSReport />}
       {effective === "testing" && <TestingPage />}

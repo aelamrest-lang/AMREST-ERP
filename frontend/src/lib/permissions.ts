@@ -3,7 +3,7 @@ import type { ModulePermission, PermissionAction, PermissionMatrix, Role, User }
 export type RouteId =
   | "dashboard" | "leads" | "parties" | "items" | "costing" | "quotations" | "proformas" | "salesorders"
   | "purchase" | "grn" | "inventory" | "rawissue" | "bom" | "jobcards" | "production" | "testing" | "challans"
-  | "operators" | "mfgtime" | "pnl" | "psreport"
+  | "operators" | "mfgtime" | "mfgcost" | "pnl" | "psreport"
   | "reports" | "taxdash" | "users" | "settings" | "docformats" | "logs" | "profile";
 
 export const permissionActions: PermissionAction[] = ["view", "create", "edit", "delete", "approve", "print", "export"];
@@ -28,6 +28,7 @@ export const moduleLabels: Record<RouteId, string> = {
   challans: "Delivery Challan",
   operators: "Operators & Ledger",
   mfgtime: "Manufacturing Time",
+  mfgcost: "Manufacturing Cost",
   pnl: "Monthly P&L",
   psreport: "Monthly P&S Report",
   reports: "Reports",
@@ -42,7 +43,7 @@ export const moduleLabels: Record<RouteId, string> = {
 export const permissionModules: RouteId[] = [
   "dashboard", "leads", "parties", "items", "costing", "quotations", "proformas", "salesorders",
   "purchase", "grn", "inventory", "rawissue", "bom", "jobcards", "production", "testing", "challans",
-  "operators", "mfgtime", "pnl", "psreport",
+  "operators", "mfgtime", "mfgcost", "pnl", "psreport",
   "reports", "taxdash", "users", "settings", "docformats", "logs", "profile",
 ];
 

@@ -487,6 +487,17 @@ export interface CompanySettings {
   monthlyPnlExpenses?: Record<string, { indirect?: Array<{ id: string; description: string; amount: number }>; direct?: Array<{ id: string; description: string; amount: number }> }>; // Monthly P&L — per-month expense line items for Indirect/Direct (sum overrides the manual number)
   monthlyPSRows?: Array<{ id: string; month: string; product: string; qty: number; price: number; amount: number }>; // Monthly P&S Report — Excel-uploaded product sales rows (month=YYYY-MM)
   monthlyPSOverrides?: Record<string, { qty?: number; amount?: number }>; // Monthly P&S — manual month-level overrides (supersede aggregates); key=YYYY-MM
+  manufacturingCosts?: Record<string, {
+    bomId?: string;
+    materialRows: Array<{ itemId: string; qty: number; rate: number; amount: number }>;
+    materialTotal: number;
+    labourCost: number;
+    officeExpense: number;
+    totalCost: number;
+    salePrice: number;
+    updatedAt: string;
+    updatedBy?: string;
+  }>; // Manufacturing Cost sheet keyed by Finished Good item id
 }
 
 export interface DocumentTerm {
