@@ -26,6 +26,7 @@ export function BOMPage() {
   const [qty, setQty] = useState<number>(1);
   const [registrySearch, setRegistrySearch] = useState("");
   const [materialSearch, setMaterialSearch] = useState("");
+  const [bomItemSearch, setBomItemSearch] = useState("");
   const [saveMessage, setSaveMessage] = useState("");
   const [copyOpen, setCopyOpen] = useState(false);
   const [copyTargetId, setCopyTargetId] = useState("");
@@ -264,44 +265,68 @@ export function BOMPage() {
             <div>
               <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
                 <h4 className="font-semibold">Current BOM Map Items</h4>
-                <Button
-                  variant="outline"
-                  disabled={!currentBom || (currentBom.materials || []).length === 0}
-                  onClick={() => {
-                    if (!currentBom) return;
-                    const sorted = (currentBom.materials || []).slice().sort((a, b) => {
-                      const an = (rawAndSemiItems.find(i => i.id === a.itemId)?.name || a.name || "").toLowerCase();
-                      const bn = (rawAndSemiItems.find(i => i.id === b.itemId)?.name || b.name || "").toLowerCase();
-                      return an.localeCompare(bn);
-                    });
-                    const rows = sorted.map((m, idx) => {
-                      const item = rawAndSemiItems.find(i => i.id === m.itemId);
-                      return {
-                        "Sr. No.": idx + 1,
-                        "Material": item?.name || m.name,
-                        "Category": item?.category || "",
-                        "UOM": m.unit,
-                        "Required Qty (Per Unit)": m.qty,
-                      };
-                    });
-                    const wb = XLSX.utils.book_new();
-                    const ws = XLSX.utils.json_to_sheet(rows);
-                    XLSX.utils.book_append_sheet(wb, ws, "BOM Items");
-                    const safeName = (currentBom.name || "BOM").replace(/[^a-z0-9-_ ]/gi, "_");
-                    XLSX.writeFile(wb, `${safeName} - BOM Items.xlsx`);
-                  }}
-                  data-testid="bom-download-excel"
-                >Download Excel</Button>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Input
+                    className="w-64"
+                    placeholder="Search by material name…"
+                    value={bomItemSearch}
+                    onChange={(e: any) => setBomItemSearch(e.target.value)}
+                    data-testid="bom-item-search"
+                  />
+                  <Button
+                    variant="outline"
+                    disabled={!currentBom || (currentBom.materials || []).length === 0}
+                    onClick={() => {
+                      if (!currentBom) return;
+                      const q = bomItemSearch.trim().toLowerCase();
+                      const sorted = (currentBom.materials || []).slice()
+                        .filter(m => {
+                          if (!q) return true;
+                          const n = (rawAndSemiItems.find(i => i.id === m.itemId)?.name || m.name || "").toLowerCase();
+                          return n.includes(q);
+                        })
+                        .sort((a, b) => {
+                          const an = (rawAndSemiItems.find(i => i.id === a.itemId)?.name || a.name || "").toLowerCase();
+                          const bn = (rawAndSemiItems.find(i => i.id === b.itemId)?.name || b.name || "").toLowerCase();
+                          return an.localeCompare(bn);
+                        });
+                      const rows = sorted.map((m, idx) => {
+                        const item = rawAndSemiItems.find(i => i.id === m.itemId);
+                        return {
+                          "Sr. No.": idx + 1,
+                          "Material": item?.name || m.name,
+                          "Category": item?.category || "",
+                          "UOM": m.unit,
+                          "Required Qty (Per Unit)": m.qty,
+                        };
+                      });
+                      const wb = XLSX.utils.book_new();
+                      const ws = XLSX.utils.json_to_sheet(rows);
+                      XLSX.utils.book_append_sheet(wb, ws, "BOM Items");
+                      const safeName = (currentBom.name || "BOM").replace(/[^a-z0-9-_ ]/gi, "_");
+                      XLSX.writeFile(wb, `${safeName} - BOM Items.xlsx`);
+                    }}
+                    data-testid="bom-download-excel"
+                  >Download Excel</Button>
+                </div>
               </div>
               <div className="rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
                 <Table>
                   <thead><tr><Th>Sr. No.</Th><Th>Material Details</Th><Th>UOM</Th><Th>Required Qty (Per Unit)</Th><Th>Action</Th></tr></thead>
                   <tbody>
-                    {(currentBom?.materials || []).slice().sort((a, b) => {
-                      const an = (rawAndSemiItems.find(i => i.id === a.itemId)?.name || a.name || "").toLowerCase();
-                      const bn = (rawAndSemiItems.find(i => i.id === b.itemId)?.name || b.name || "").toLowerCase();
-                      return an.localeCompare(bn);
-                    }).map((m, idx) => {
+                    {(currentBom?.materials || []).slice()
+                      .filter(m => {
+                        const q = bomItemSearch.trim().toLowerCase();
+                        if (!q) return true;
+                        const n = (rawAndSemiItems.find(i => i.id === m.itemId)?.name || m.name || "").toLowerCase();
+                        return n.includes(q);
+                      })
+                      .sort((a, b) => {
+                        const an = (rawAndSemiItems.find(i => i.id === a.itemId)?.name || a.name || "").toLowerCase();
+                        const bn = (rawAndSemiItems.find(i => i.id === b.itemId)?.name || b.name || "").toLowerCase();
+                        return an.localeCompare(bn);
+                      })
+                      .map((m, idx) => {
                       const item = rawAndSemiItems.find(i => i.id === m.itemId);
                       return (
                         <tr key={m.itemId || m.name} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
@@ -319,6 +344,11 @@ export function BOMPage() {
                   </tbody>
                 </Table>
                 {(!currentBom || currentBom.materials.length === 0) && <Empty title="No materials mapped" subtitle="Select or type a raw/semi material and click Map Consumable" />}
+                {currentBom && currentBom.materials.length > 0 && bomItemSearch.trim() && (currentBom.materials || []).filter(m => {
+                  const q = bomItemSearch.trim().toLowerCase();
+                  const n = (rawAndSemiItems.find(i => i.id === m.itemId)?.name || m.name || "").toLowerCase();
+                  return n.includes(q);
+                }).length === 0 && <Empty title="No matches" subtitle={`No BOM items match "${bomItemSearch}"`} />}
               </div>
               <div className="mt-4 flex items-center justify-end gap-2">
                 {saveMessage && <span className="text-xs font-medium text-emerald-600">{saveMessage}</span>}
