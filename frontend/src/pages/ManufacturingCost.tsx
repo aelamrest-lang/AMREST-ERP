@@ -7,7 +7,15 @@ interface CostRow { itemId: string; qty: number; rate: number; amount: number }
 
 export function ManufacturingCost() {
   const { db, setDB, log, currentUser } = useStore();
-  const finishedGoods = useMemo(() => db.items.filter(i => i.category === "Finished Goods"), [db.items]);
+  // Show only Finished Goods that have at least one BOM linked (by matching name, case-insensitive substring)
+  const finishedGoods = useMemo(() => {
+    const bomNames = db.boms.map(b => (b.name || "").trim().toLowerCase()).filter(Boolean);
+    return db.items.filter(i => {
+      if (i.category !== "Finished Goods") return false;
+      const n = i.name.trim().toLowerCase();
+      return bomNames.some(bn => bn === n || bn.includes(n) || n.includes(bn));
+    });
+  }, [db.items, db.boms]);
 
   const persisted = useMemo(() => ((db.settings as any).manufacturingCosts || {}) as Record<string, any>, [db.settings]);
 

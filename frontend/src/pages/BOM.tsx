@@ -11,7 +11,12 @@ export function BOMPage() {
   const canEdit = userCan(currentUser, "bom", "edit");
   const canDelete = userCan(currentUser, "bom", "delete");
 
-  const finishedProducts = useMemo(() => db.items.filter(i => i.category === "Finished Goods"), [db.items]);
+  // Only show Finished Goods that appear in at least one Sales Order line
+  const finishedProducts = useMemo(() => {
+    const soNames = new Set<string>();
+    db.salesOrders.forEach(so => (so.items || []).forEach(it => it.name && soNames.add(it.name.trim().toLowerCase())));
+    return db.items.filter(i => i.category === "Finished Goods" && soNames.has(i.name.trim().toLowerCase()));
+  }, [db.items, db.salesOrders]);
   const rawAndSemiItems = useMemo(() => db.items.filter(i => i.category === "Raw Material" || i.category === "Semi-Finished"), [db.items]);
 
   const [selectedProductId, setSelectedProductId] = useState(finishedProducts[0]?.id || "");
