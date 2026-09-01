@@ -13,12 +13,26 @@ export function BOMPage() {
   const canEdit = userCan(currentUser, "bom", "edit");
   const canDelete = userCan(currentUser, "bom", "delete");
 
-  // Only show Finished Goods that appear in at least one Sales Order line
+  // Show Finished Goods that either (a) appear in a Sales Order OR (b) already have a BOM linked (name match).
+  // Once a BOM exists for a FG it stays permanently visible with status "Active", even after the SO is dispatched/deleted.
   const finishedProducts = useMemo(() => {
     const soNames = new Set<string>();
     db.salesOrders.forEach(so => (so.items || []).forEach(it => it.name && soNames.add(it.name.trim().toLowerCase())));
-    return db.items.filter(i => i.category === "Finished Goods" && soNames.has(i.name.trim().toLowerCase()));
-  }, [db.items, db.salesOrders]);
+    const bomNames = new Set<string>();
+    db.boms.forEach(b => b.name && bomNames.add(b.name.trim().toLowerCase()));
+    return db.items.filter(i => {
+      if (i.category !== "Finished Goods") return false;
+      const n = i.name.trim().toLowerCase();
+      return soNames.has(n) || bomNames.has(n);
+    });
+  }, [db.items, db.salesOrders, db.boms]);
+
+  // Set of FG-name (lowercase) that already have a BOM — used to show an Active badge in the registry.
+  const bomNameSet = useMemo(() => {
+    const s = new Set<string>();
+    db.boms.forEach(b => b.name && s.add(b.name.trim().toLowerCase()));
+    return s;
+  }, [db.boms]);
   const rawAndSemiItems = useMemo(() => db.items.filter(i => i.category === "Raw Material" || i.category === "Semi-Finished"), [db.items]);
 
   const [selectedProductId, setSelectedProductId] = useState(finishedProducts[0]?.id || "");
@@ -379,7 +393,12 @@ export function BOMPage() {
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <div className="font-semibold text-slate-800 dark:text-slate-100">{product.name}</div>
-                      <div className="text-xs text-slate-500 mt-1">{product.category}</div>
+                      <div className="text-xs text-slate-500 mt-1 flex items-center gap-2">
+                        <span>{product.category}</span>
+                        {bomNameSet.has(product.name.trim().toLowerCase()) && (
+                          <Badge color="green" data-testid={`bom-active-${product.id}`}>Active</Badge>
+                        )}
+                      </div>
                     </div>
                     <Badge color={selectedProductId === product.id ? "indigo" : "slate"}>Rev {bom ? "1." + Math.max(0, bom.materials.length) : "0.0"}</Badge>
                   </div>
