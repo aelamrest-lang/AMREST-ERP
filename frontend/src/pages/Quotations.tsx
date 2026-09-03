@@ -117,15 +117,28 @@ export function Quotations() {
     setForm(f => ({...f, items: f.items.map((it, idx) => idx === i ? {...it, [key]: key === "name" || key === "description" ? val : Number(val)} : it)}));
   };
   const pickFinishedGood = (i: number, fg: { name: string; saleRate: number; gstRate: number }) => {
+    // Look up the LATEST Costing Sheet for this product name (approved > any) — sale price = pre-GST subTotal.
+    // The Costing Sheet is only read; editing the quotation rate never mutates the sheet.
+    const norm = (s: string) => (s || "").trim().toLowerCase();
+    const matches = db.costings.filter(c => norm(c.productName || "") === norm(fg.name));
+    const preferred = matches.filter(c => c.status === "approved");
+    const pool = preferred.length > 0 ? preferred : matches;
+    const latest = pool.slice().sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))[0];
+    let costingRate = 0;
+    if (latest) {
+      const t = calcCostingTotals(latest.materials, latest.gstRate, latest.marginPct);
+      costingRate = Math.round(t.subTotal);
+    }
     setForm(f => ({
       ...f,
       items: f.items.map((it, idx) => idx === i ? {
         ...it,
         name: fg.name,
-        rate: fg.saleRate || it.rate || 0,
-        gst: fg.gstRate ?? it.gst,
+        rate: costingRate || fg.saleRate || it.rate || 0,
+        gst: latest?.gstRate ?? (fg.gstRate ?? it.gst),
       } : it),
     }));
+    if (latest) log(`Quotation: auto-filled sale price ${fmtINR(costingRate)} from ${latest.number} for ${fg.name}`, "Quotations");
   };
   const addItem = () => setForm(f => ({...f, items: [...f.items, { name: "", description: "", qty: 1, rate: 0, gst: 18 }]}));
   const delItem = (i: number) => setForm(f => ({...f, items: f.items.filter((_, idx) => idx !== i)}));
