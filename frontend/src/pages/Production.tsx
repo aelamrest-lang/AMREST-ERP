@@ -889,19 +889,24 @@ export function ProductionDashboard() {
             .slice().sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt));
           const totalToday = rows.reduce((s, r) => s + (r.todayQty || 0), 0);
           const totalAmt = rows.reduce((s, r) => s + (r.todayQty || 0) * (r.priceEach || 0), 0);
+          const balanceQty = Math.max(0, (jc?.qty || 0) - totalToday);
           return (
             <div className="space-y-3" data-testid="stage-details-modal">
               <div className="text-xs text-slate-500">Job Card <b>{jc?.number}</b> · Product <b>{jc?.product}</b> · Total Job Qty <b>{jc?.qty}</b></div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="rounded-lg bg-slate-50 dark:bg-slate-800 p-3 text-center">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="rounded-lg bg-slate-50 dark:bg-slate-800 p-3 text-center" data-testid="kpi-entries">
                   <div className="text-[10px] uppercase text-slate-500">Entries</div>
                   <div className="text-lg font-bold">{rows.length}</div>
                 </div>
-                <div className="rounded-lg bg-blue-50 dark:bg-blue-900/20 p-3 text-center">
+                <div className="rounded-lg bg-blue-50 dark:bg-blue-900/20 p-3 text-center" data-testid="kpi-total-qty">
                   <div className="text-[10px] uppercase text-blue-700">Total Qty</div>
                   <div className="text-lg font-bold text-blue-700">{totalToday}</div>
                 </div>
-                <div className="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 p-3 text-center">
+                <div className="rounded-lg bg-amber-50 dark:bg-amber-900/20 p-3 text-center" data-testid="kpi-balance-qty">
+                  <div className="text-[10px] uppercase text-amber-700">Balance Qty</div>
+                  <div className="text-lg font-bold text-amber-700">{balanceQty}</div>
+                </div>
+                <div className="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 p-3 text-center" data-testid="kpi-total-amount">
                   <div className="text-[10px] uppercase text-emerald-700">Total Amount</div>
                   <div className="text-lg font-bold text-emerald-700">{fmtINR(totalAmt)}</div>
                 </div>
