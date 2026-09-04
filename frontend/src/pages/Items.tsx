@@ -20,6 +20,10 @@ export function Items() {
   const [open, setOpen] = useState(false);
   const [edit, setEdit] = useState<Item | null>(null);
   const [uploadMessage, setUploadMessage] = useState("");
+  const [historyItem, setHistoryItem] = useState<Item | null>(null);
+  const [historyRange, setHistoryRange] = useState<"month" | "lastMonth" | "3m" | "6m" | "1y" | "custom">("6m");
+  const [customFrom, setCustomFrom] = useState<string>("");
+  const [customTo, setCustomTo] = useState<string>("");
 
   const items = useMemo(() => {
     let arr = db.items;
@@ -178,7 +182,14 @@ export function Items() {
               const low = i.currentStock <= i.minStock;
               return (
                 <tr key={i.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                  <Td className="font-medium">{i.name}</Td>
+                  <Td className="font-medium">
+                    <button
+                      className="text-indigo-600 hover:underline text-left"
+                      onClick={() => setHistoryItem(i)}
+                      title="Click to view Purchase History"
+                      data-testid={`item-name-${i.id}`}
+                    >{i.name}</button>
+                  </Td>
                   <Td><Badge color={i.category === "Raw Material" ? "blue" : i.category === "Finished Goods" ? "green" : "yellow"}>{i.category}</Badge></Td>
                   <Td>{i.unit}</Td>
                   <Td className="text-xs">{i.hsn}</Td>
@@ -220,6 +231,142 @@ export function Items() {
           <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
           <Button onClick={save}>{edit ? "Update" : "Create"}</Button>
         </div>
+      </Modal>
+
+      {/* Purchase History Modal */}
+      <Modal open={!!historyItem} onClose={() => setHistoryItem(null)} title={historyItem ? `Purchase History — ${historyItem.name}` : ""} size="xl">
+        {historyItem && (() => {
+          // Determine date range boundaries
+          const now = new Date();
+          const y = now.getFullYear(), m = now.getMonth();
+          let from = new Date(0), to = new Date(9999, 0, 1);
+          if (historyRange === "month") { from = new Date(y, m, 1); to = new Date(y, m + 1, 1); }
+          else if (historyRange === "lastMonth") { from = new Date(y, m - 1, 1); to = new Date(y, m, 1); }
+          else if (historyRange === "3m") { from = new Date(y, m - 3, 1); to = new Date(y, m + 1, 1); }
+          else if (historyRange === "6m") { from = new Date(y, m - 6, 1); to = new Date(y, m + 1, 1); }
+          else if (historyRange === "1y") { from = new Date(y - 1, m, 1); to = new Date(y, m + 1, 1); }
+          else if (historyRange === "custom") {
+            if (customFrom) from = new Date(customFrom);
+            if (customTo) { const t = new Date(customTo); t.setDate(t.getDate() + 1); to = t; }
+          }
+          // Build rows: iterate GRNs where receivedItems includes this itemId
+          const rows: Array<{ date: string; grn: string; po: string; vendor: string; qty: number; rate: number; amount: number }> = [];
+          db.grns.forEach(g => {
+            const rec = (g.receivedItems || []).find(r => r.itemId === historyItem.id);
+            if (!rec || (Number(rec.qty) || 0) <= 0) return;
+            const gDate = new Date(g.date);
+            if (isNaN(gDate.getTime()) || gDate < from || gDate >= to) return;
+            const po = db.purchaseOrders.find(p => p.id === g.poId);
+            const poLine = po?.items.find(x => x.itemId === historyItem.id);
+            const rate = Number(poLine?.rate) || 0;
+            const vendor = db.parties.find(v => v.id === po?.vendorId)?.name || "—";
+            rows.push({
+              date: g.date,
+              grn: g.number,
+              po: po?.number || "—",
+              vendor,
+              qty: rec.qty,
+              rate,
+              amount: rec.qty * rate,
+            });
+          });
+          rows.sort((a, b) => b.date.localeCompare(a.date));
+          const totalQty = rows.reduce((s, r) => s + r.qty, 0);
+          const totalAmount = rows.reduce((s, r) => s + r.amount, 0);
+          const avgRate = totalQty > 0 ? totalAmount / totalQty : 0;
+
+          return (
+            <div className="space-y-3" data-testid="item-history-modal">
+              {/* Range picker */}
+              <div className="flex flex-wrap items-end gap-2">
+                {[
+                  { k: "month", label: "This Month" },
+                  { k: "lastMonth", label: "Last Month" },
+                  { k: "3m", label: "Last 3 Months" },
+                  { k: "6m", label: "Last 6 Months" },
+                  { k: "1y", label: "Last 1 Year" },
+                  { k: "custom", label: "Custom" },
+                ].map(opt => (
+                  <button
+                    key={opt.k}
+                    type="button"
+                    onClick={() => setHistoryRange(opt.k as any)}
+                    className={"text-xs px-3 py-1.5 rounded-md border " + (historyRange === opt.k ? "bg-indigo-600 border-indigo-600 text-white" : "bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-700 hover:border-indigo-400")}
+                    data-testid={`hist-range-${opt.k}`}
+                  >{opt.label}</button>
+                ))}
+                {historyRange === "custom" && (
+                  <>
+                    <div><Label className="text-[10px]">From</Label><Input type="date" value={customFrom} onChange={(e: any) => setCustomFrom(e.target.value)} data-testid="hist-from" /></div>
+                    <div><Label className="text-[10px]">To</Label><Input type="date" value={customTo} onChange={(e: any) => setCustomTo(e.target.value)} data-testid="hist-to" /></div>
+                  </>
+                )}
+              </div>
+
+              {/* KPI */}
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                <div className="rounded-lg bg-slate-50 dark:bg-slate-800 p-3 text-center">
+                  <div className="text-[10px] uppercase tracking-wide text-slate-500">Rows</div>
+                  <div className="text-lg font-bold">{rows.length}</div>
+                </div>
+                <div className="rounded-lg bg-blue-50 dark:bg-blue-900/20 p-3 text-center">
+                  <div className="text-[10px] uppercase tracking-wide text-blue-700">Total Qty</div>
+                  <div className="text-lg font-bold text-blue-700">{fmt2(totalQty)} {historyItem.unit}</div>
+                </div>
+                <div className="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 p-3 text-center">
+                  <div className="text-[10px] uppercase tracking-wide text-emerald-700">Total Amount</div>
+                  <div className="text-lg font-bold text-emerald-700">{fmtINR(totalAmount)}</div>
+                </div>
+                <div className="rounded-lg bg-amber-50 dark:bg-amber-900/20 p-3 text-center">
+                  <div className="text-[10px] uppercase tracking-wide text-amber-700">Avg Rate</div>
+                  <div className="text-lg font-bold text-amber-700">{fmtINR(avgRate)}</div>
+                </div>
+              </div>
+
+              <div className="max-h-[420px] overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700">
+                <Table>
+                  <thead className="sticky top-0 bg-white dark:bg-slate-900">
+                    <tr>
+                      <Th>Date</Th>
+                      <Th>PO No.</Th>
+                      <Th>GRN No.</Th>
+                      <Th>Vendor</Th>
+                      <Th className="text-right">Qty</Th>
+                      <Th className="text-right">Rate</Th>
+                      <Th className="text-right">Total Amount</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.length === 0 ? (
+                      <tr><Td colSpan={7}><Empty title="No purchases in this period" subtitle="Try a wider date range or check if any GRN records this item." /></Td></tr>
+                    ) : rows.map((r, idx) => (
+                      <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                        <Td>{r.date}</Td>
+                        <Td className="font-mono text-xs">{r.po}</Td>
+                        <Td className="font-mono text-xs">{r.grn}</Td>
+                        <Td>{r.vendor}</Td>
+                        <Td className="text-right">{fmt2(r.qty)}</Td>
+                        <Td className="text-right">{fmtINR(r.rate)}</Td>
+                        <Td className="text-right font-semibold">{fmtINR(r.amount)}</Td>
+                      </tr>
+                    ))}
+                    {rows.length > 0 && (
+                      <tr className="bg-slate-50 dark:bg-slate-800/40 font-semibold">
+                        <Td colSpan={4}>Total</Td>
+                        <Td className="text-right">{fmt2(totalQty)} {historyItem.unit}</Td>
+                        <Td className="text-right">—</Td>
+                        <Td className="text-right text-indigo-700">{fmtINR(totalAmount)}</Td>
+                      </tr>
+                    )}
+                  </tbody>
+                </Table>
+              </div>
+              <div className="flex justify-end pt-1">
+                <Button variant="ghost" onClick={() => setHistoryItem(null)} data-testid="item-history-close">Close</Button>
+              </div>
+            </div>
+          );
+        })()}
       </Modal>
     </div>
   );
