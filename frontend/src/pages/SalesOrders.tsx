@@ -48,41 +48,38 @@ export function SalesOrders() {
 
   // ---- SO Summary (auto-derived from Delivery Challans) ----
   const summary = useMemo(() => {
-    let inHandCount = 0, inHandQty = 0, inHandValue = 0;
-    let pendingCount = 0, pendingQty = 0, pendingValue = 0;
+    let totalCount = 0, totalQty = 0, totalValue = 0;
     let completedCount = 0, completedQty = 0, completedValue = 0;
 
     for (const o of list) {
       const orderedQty = o.items.reduce((s, i) => s + (Number(i.qty) || 0), 0);
       const orderedValue = o.items.reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.rate) || 0) * (1 + (Number(i.gst) || 0) / 100), 0) + (Number(o.freight) || 0);
 
-      // Dispatched from Delivery Challans linked to this SO
       const dcs = db.challans.filter(c => c.salesOrderId === o.id);
       const dispatchedQty = dcs.reduce((s, c) => s + (c.items || []).reduce((a, i) => a + (Number(i.qty) || 0), 0), 0);
-      const dispatchedValue = dcs.reduce((s, c) => s + (c.items || []).reduce((a, i) => a + (Number(i.qty) || 0) * (Number(i.rate) || 0) * (1 + (Number(i.gst) || 0) / 100), 0) + (Number(c.freight) || 0), 0);
-
       const balanceQty = Math.max(0, orderedQty - dispatchedQty);
-      const balanceValue = Math.max(0, orderedValue - dispatchedValue);
       // An SO is Completed when the full ordered qty has been dispatched,
       // OR when a user manually marks its status as "Delivered".
       const isCompleted = (orderedQty > 0 && balanceQty === 0) || o.status === "Delivered";
 
+      totalCount += 1;
+      totalQty += orderedQty;
+      totalValue += orderedValue;
       if (isCompleted) {
         completedCount += 1;
         completedQty += orderedQty;
         completedValue += orderedValue;
-      } else {
-        inHandCount += 1;
-        inHandQty += orderedQty;
-        inHandValue += orderedValue;
-        if (balanceQty > 0) {
-          pendingCount += 1;
-          pendingQty += balanceQty;
-          pendingValue += balanceValue;
-        }
       }
     }
-    return { inHandCount, inHandQty, inHandValue, pendingCount, pendingQty, pendingValue, completedCount, completedQty, completedValue };
+    const pendingCount = totalCount - completedCount;
+    const pendingQty = Math.max(0, totalQty - completedQty);
+    const pendingValue = Math.max(0, totalValue - completedValue);
+    // "in hand" aliases for existing callers = total (kept for backwards compatibility of any consumer)
+    return {
+      inHandCount: totalCount, inHandQty: totalQty, inHandValue: totalValue,
+      pendingCount, pendingQty, pendingValue,
+      completedCount, completedQty, completedValue,
+    };
   }, [list, db.challans]);
 
   // ---- Monthly Sales (from DCs) + Top Customers (from DCs) ----
@@ -378,17 +375,17 @@ export function SalesOrders() {
             <div>
               <div className="text-[11px] uppercase tracking-wide text-amber-700 dark:text-amber-300 font-semibold">Pending Orders</div>
               <div className="text-3xl font-bold text-amber-800 dark:text-amber-200 mt-1" data-testid="so-summary-pending-count">{summary.pendingCount}</div>
-              <div className="text-[11px] text-slate-500 mt-0.5">Orders with remaining balance qty</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">Total Orders − Completed</div>
             </div>
             <div className="text-2xl" aria-hidden>⏳</div>
           </div>
           <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-amber-100 dark:border-amber-800/60">
             <div>
-              <div className="text-[10px] uppercase tracking-wide text-slate-500">Balance Qty</div>
+              <div className="text-[10px] uppercase tracking-wide text-slate-500">Pending Qty</div>
               <div className="text-base font-semibold text-slate-800 dark:text-slate-100" data-testid="so-summary-pending-qty">{summary.pendingQty} <span className="text-[10px] text-slate-500 font-normal">Nos</span></div>
             </div>
             <div>
-              <div className="text-[10px] uppercase tracking-wide text-slate-500">Balance Value</div>
+              <div className="text-[10px] uppercase tracking-wide text-slate-500">Pending Amount</div>
               <div className="text-base font-semibold text-slate-800 dark:text-slate-100" data-testid="so-summary-pending-value">{fmtINR(summary.pendingValue)}</div>
             </div>
           </div>
