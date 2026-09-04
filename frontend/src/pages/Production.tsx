@@ -3,7 +3,7 @@ import { useStore, uid } from "../lib/store";
 import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Badge, Empty, KPI, Textarea } from "../components/ui";
 import type { DB, JobCard, ProductionEntry, ProductionStage, QCTestRecord, SerialRecord } from "../lib/types";
 import { IconPlus, IconEdit, IconTrash, IconFactory, IconCheck, IconPrint } from "../components/icons";
-import { nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
+import { fmtINR, nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
 import { userCan } from "../lib/permissions";
 
 const STAGES: ProductionStage[] = ["LV Winding", "HV Winding", "Primary Winding", "Secondary Winding 1", "Secondary Winding 2", "Secondary Winding 3", "Core Coil Assembly", "Tanking", "Finishing", "Testing Ready", "Dispatch Ready"];
@@ -416,6 +416,43 @@ export function ProductionDashboard() {
   const [entryOpen, setEntryOpen] = useState(false);
   const [entryJobId, setEntryJobId] = useState(db.jobCards[0]?.id || "");
   const [entryStage, setEntryStage] = useState<ProductionStage>(STAGES[0]);
+  const [stageDetails, setStageDetails] = useState<{ jcId: string; stage: ProductionStage } | null>(null);
+  const [editEntry, setEditEntry] = useState<ProductionEntry | null>(null);
+  const [editEntryForm, setEditEntryForm] = useState<Partial<ProductionEntry>>({});
+  const [editEntryNote, setEditEntryNote] = useState<string>("");
+
+  const openEditEntry = (e: ProductionEntry) => {
+    setEditEntry(e);
+    setEditEntryForm({
+      date: e.date, todayQty: e.todayQty, operatorName: e.operatorName,
+      shift: e.shift, machineName: e.machineName, priceEach: e.priceEach || 0, remarks: e.remarks || "",
+    });
+    setEditEntryNote("");
+  };
+  const saveEditedEntry = () => {
+    if (!editEntry) return;
+    const original = editEntry;
+    const changes: Record<string, { from: any; to: any }> = {};
+    (Object.keys(editEntryForm) as Array<keyof ProductionEntry>).forEach(k => {
+      const from = (original as any)[k];
+      const to = (editEntryForm as any)[k];
+      if (from !== to && !(from == null && to == null)) changes[k as string] = { from, to };
+    });
+    if (Object.keys(changes).length === 0) { setEditEntry(null); return; }
+    setDB(d => ({
+      ...d,
+      productionEntries: d.productionEntries.map(pe => pe.id === original.id ? {
+        ...pe,
+        ...editEntryForm,
+        editHistory: [
+          ...(pe.editHistory || []),
+          { at: new Date().toISOString(), byName: currentUser?.name || currentUser?.email || "User", changes, note: editEntryNote || undefined },
+        ],
+      } : pe),
+    }));
+    log(`Production entry fix: ${original.jobCardNumber} · ${original.stage} · ${Object.keys(changes).join(", ")}`, "Production");
+    setEditEntry(null);
+  };
   const [entryQty, setEntryQty] = useState(0);
   const [operatorId, setOperatorId] = useState("");
   const [priceEach, setPriceEach] = useState(0);
@@ -616,17 +653,26 @@ export function ProductionDashboard() {
               </div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                 {j.stages.map(s => (
-                  <button key={s.stage} onClick={() => s.status !== "done" && completeStage(j.id, s.stage)}
+                  <div key={s.stage} className="relative">
+                  <button onClick={() => s.status !== "done" && completeStage(j.id, s.stage)}
                     disabled={!canEditProduction || (currentUser?.role === "testing" && s.stage !== "Testing") || (currentUser?.role === "production" && s.stage === "Testing")}
                     title={currentUser?.role === "testing" && s.stage !== "Testing" ? "Testing users can update only the Testing stage" : currentUser?.role === "production" && s.stage === "Testing" ? "Testing stage is reserved for Testing users" : "Click to complete stage"}
-                    className={`text-left p-2 rounded-lg border text-xs disabled:opacity-50 disabled:cursor-not-allowed ${s.status === "done" ? "bg-emerald-50 border-emerald-300 dark:bg-emerald-900/30 dark:border-emerald-700" : s.status === "in-progress" ? "bg-amber-50 border-amber-300 dark:bg-amber-900/30 dark:border-amber-700 cursor-pointer" : "bg-slate-50 border-slate-300 dark:bg-slate-800 dark:border-slate-700 cursor-pointer hover:border-indigo-400"}`}>
-                    <div className="flex items-center gap-1.5">
+                    className={`w-full text-left p-2 rounded-lg border text-xs disabled:opacity-50 disabled:cursor-not-allowed ${s.status === "done" ? "bg-emerald-50 border-emerald-300 dark:bg-emerald-900/30 dark:border-emerald-700" : s.status === "in-progress" ? "bg-amber-50 border-amber-300 dark:bg-amber-900/30 dark:border-amber-700 cursor-pointer" : "bg-slate-50 border-slate-300 dark:bg-slate-800 dark:border-slate-700 cursor-pointer hover:border-indigo-400"}`}>
+                    <div className="flex items-center gap-1.5 pr-6">
                       {s.status === "done" && <IconCheck size={12}/>}
                       <span className="font-medium">{s.stage}</span>
                     </div>
                     {s.worker && <div className="text-slate-500 mt-0.5">{s.worker}</div>}
                     {s.date && <div className="text-slate-400">{s.date}</div>}
                   </button>
+                  <button
+                    type="button"
+                    onClick={(ev) => { ev.stopPropagation(); setStageDetails({ jcId: j.id, stage: s.stage }); }}
+                    className="absolute top-1 right-1 text-[10px] px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/40 dark:text-indigo-300"
+                    title="View stage details & history"
+                    data-testid={`stage-details-${j.id}-${s.stage}`}
+                  >Details</button>
+                  </div>
                 ))}
               </div>
             </div>
@@ -827,6 +873,130 @@ export function ProductionDashboard() {
             </div>
           );
         })()}
+      </Modal>
+
+      {/* Stage Details Modal */}
+      <Modal
+        open={!!stageDetails}
+        onClose={() => setStageDetails(null)}
+        title={stageDetails ? `Stage Details — ${stageDetails.stage}` : ""}
+        size="xl"
+      >
+        {stageDetails && (() => {
+          const jc = db.jobCards.find(j => j.id === stageDetails.jcId);
+          const rows = db.productionEntries
+            .filter(e => e.jobCardId === stageDetails.jcId && e.stage === stageDetails.stage)
+            .slice().sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt));
+          const totalToday = rows.reduce((s, r) => s + (r.todayQty || 0), 0);
+          const totalAmt = rows.reduce((s, r) => s + (r.todayQty || 0) * (r.priceEach || 0), 0);
+          return (
+            <div className="space-y-3" data-testid="stage-details-modal">
+              <div className="text-xs text-slate-500">Job Card <b>{jc?.number}</b> · Product <b>{jc?.product}</b> · Total Job Qty <b>{jc?.qty}</b></div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="rounded-lg bg-slate-50 dark:bg-slate-800 p-3 text-center">
+                  <div className="text-[10px] uppercase text-slate-500">Entries</div>
+                  <div className="text-lg font-bold">{rows.length}</div>
+                </div>
+                <div className="rounded-lg bg-blue-50 dark:bg-blue-900/20 p-3 text-center">
+                  <div className="text-[10px] uppercase text-blue-700">Total Qty</div>
+                  <div className="text-lg font-bold text-blue-700">{totalToday}</div>
+                </div>
+                <div className="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 p-3 text-center">
+                  <div className="text-[10px] uppercase text-emerald-700">Total Amount</div>
+                  <div className="text-lg font-bold text-emerald-700">{fmtINR(totalAmt)}</div>
+                </div>
+              </div>
+              <div className="max-h-[430px] overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700">
+                <Table>
+                  <thead className="sticky top-0 bg-white dark:bg-slate-900">
+                    <tr>
+                      <Th>Date</Th>
+                      <Th>Operator</Th>
+                      <Th>Shift</Th>
+                      <Th>Machine</Th>
+                      <Th className="text-right">Prev Qty</Th>
+                      <Th className="text-right">Today</Th>
+                      <Th className="text-right">Balance</Th>
+                      <Th className="text-right">Rate</Th>
+                      <Th className="text-right">Amount</Th>
+                      <Th>Remarks</Th>
+                      <Th></Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.length === 0 ? (
+                      <tr><Td colSpan={11}><Empty title="No entries yet for this stage" /></Td></tr>
+                    ) : rows.map(e => (
+                      <tr key={e.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                        <Td>{e.date}</Td>
+                        <Td className="font-medium">{e.operatorName}</Td>
+                        <Td>{e.shift}</Td>
+                        <Td>{e.machineName}</Td>
+                        <Td className="text-right">{e.previousCompletedQty}</Td>
+                        <Td className="text-right font-semibold">{e.todayQty}</Td>
+                        <Td className="text-right">{e.balanceQty}</Td>
+                        <Td className="text-right">{fmtINR(e.priceEach || 0)}</Td>
+                        <Td className="text-right font-semibold">{fmtINR((e.priceEach || 0) * (e.todayQty || 0))}</Td>
+                        <Td className="text-xs text-slate-500 max-w-40 truncate" title={e.remarks}>{e.remarks || "—"}
+                          {(e.editHistory || []).length > 0 && <Badge color="yellow" className="ml-1">{e.editHistory!.length} edits</Badge>}
+                        </Td>
+                        <Td>
+                          {canEditProduction && (
+                            <Button size="sm" variant="ghost" onClick={() => openEditEntry(e)} title="Fix / edit this entry" data-testid={`stage-entry-edit-${e.id}`}>Fix</Button>
+                          )}
+                        </Td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </Table>
+              </div>
+              <div className="flex justify-end pt-1">
+                <Button variant="ghost" onClick={() => setStageDetails(null)} data-testid="stage-details-close">Close</Button>
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
+
+      {/* Fix Entry Modal */}
+      <Modal open={!!editEntry} onClose={() => setEditEntry(null)} title={editEntry ? `Fix Entry — ${editEntry.jobCardNumber} · ${editEntry.stage} · ${editEntry.date}` : ""} size="lg">
+        {editEntry && (
+          <div className="space-y-3" data-testid="stage-entry-fix-modal">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div><Label>Date</Label><Input type="date" value={editEntryForm.date || ""} onChange={(e: any) => setEditEntryForm(f => ({ ...f, date: e.target.value }))} data-testid="fix-date" /></div>
+              <div><Label>Operator</Label><Input value={editEntryForm.operatorName || ""} onChange={(e: any) => setEditEntryForm(f => ({ ...f, operatorName: e.target.value }))} data-testid="fix-operator" /></div>
+              <div><Label>Today Qty</Label><Input type="number" value={editEntryForm.todayQty ?? 0} onChange={(e: any) => setEditEntryForm(f => ({ ...f, todayQty: Number(e.target.value) || 0 }))} data-testid="fix-today" /></div>
+              <div><Label>Shift</Label>
+                <Select value={editEntryForm.shift || "General"} onChange={(e: any) => setEditEntryForm(f => ({ ...f, shift: e.target.value as any }))} data-testid="fix-shift">
+                  <option value="Day">Day</option><option value="Night">Night</option><option value="General">General</option>
+                </Select>
+              </div>
+              <div><Label>Machine</Label><Input value={editEntryForm.machineName || ""} onChange={(e: any) => setEditEntryForm(f => ({ ...f, machineName: e.target.value }))} data-testid="fix-machine" /></div>
+              <div><Label>Price / Unit</Label><Input type="number" value={editEntryForm.priceEach ?? 0} onChange={(e: any) => setEditEntryForm(f => ({ ...f, priceEach: Number(e.target.value) || 0 }))} data-testid="fix-price" /></div>
+              <div className="sm:col-span-2"><Label>Remarks</Label><Input value={editEntryForm.remarks || ""} onChange={(e: any) => setEditEntryForm(f => ({ ...f, remarks: e.target.value }))} data-testid="fix-remarks" /></div>
+              <div className="sm:col-span-2"><Label>Reason for edit (audit note)</Label><Input value={editEntryNote} onChange={(e: any) => setEditEntryNote(e.target.value)} placeholder="e.g. Corrected shift; qty mis-typed" data-testid="fix-note" /></div>
+            </div>
+            {(editEntry.editHistory || []).length > 0 && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-900/10 p-3">
+                <div className="text-xs font-semibold text-amber-800 mb-2">Update History</div>
+                <div className="space-y-1 max-h-40 overflow-y-auto">
+                  {(editEntry.editHistory || []).slice().reverse().map((h, i) => (
+                    <div key={i} className="text-[11px] text-slate-700 dark:text-slate-300 border-b border-amber-100 py-1">
+                      <div><b>{new Date(h.at).toLocaleString()}</b> — {h.byName}{h.note ? ` · ${h.note}` : ""}</div>
+                      <div className="text-slate-500 pl-3">
+                        {Object.entries(h.changes).map(([k, v]) => (<span key={k}>{k}: <b>{String(v.from)}</b> → <b>{String(v.to)}</b>&nbsp;&nbsp;</span>))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div className="flex justify-end gap-2 pt-1">
+              <Button variant="outline" onClick={() => setEditEntry(null)} data-testid="fix-cancel">Cancel</Button>
+              <Button onClick={saveEditedEntry} data-testid="fix-save">Save Changes</Button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );

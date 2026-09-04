@@ -275,6 +275,13 @@ export interface ProductionEntry {
   remarks: string;
   priceEach?: number;
   createdAt: string;
+  // Audit trail of manual edits/fixes
+  editHistory?: Array<{
+    at: string;                          // ISO timestamp
+    byName: string;
+    changes: Record<string, { from: any; to: any }>;
+    note?: string;
+  }>;
 }
 
 export interface Operator {
