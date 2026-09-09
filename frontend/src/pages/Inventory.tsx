@@ -34,7 +34,29 @@ export function Inventory() {
     return arr;
   }, [db.items, filter, search]);
 
-  const totalValue = db.items.reduce((s, i) => s + i.currentStock * i.purchaseRate, 0);
+  const lastPurchaseRates = useMemo(() => {
+    const rows: Record<string, { date: string; rate: number }[]> = {};
+    db.grns.forEach(g => {
+      const po = db.purchaseOrders.find(p => p.id === g.poId);
+      (g.receivedItems || []).forEach(r => {
+        const rate = Number(po?.items.find(x => x.itemId === r.itemId)?.rate) || 0;
+        if (rate > 0) (rows[r.itemId] = rows[r.itemId] || []).push({ date: g.date || "", rate });
+      });
+    });
+    const out: Record<string, { avg: number; count: number }> = {};
+    Object.entries(rows).forEach(([itemId, list]) => {
+      const latest = list.slice().sort((a, b) => b.date.localeCompare(a.date)).slice(0, 3);
+      out[itemId] = { avg: latest.reduce((s, x) => s + x.rate, 0) / latest.length, count: latest.length };
+    });
+    return out;
+  }, [db.grns, db.purchaseOrders]);
+
+  const unitCost = (i: (typeof db.items)[0]) => {
+    if (i.category === "Finished Goods") return i.saleRate || i.purchaseRate;
+    return lastPurchaseRates[i.id]?.avg ?? i.purchaseRate;
+  };
+
+  const totalValue = db.items.reduce((s, i) => s + i.currentStock * unitCost(i), 0);
   const lowCount = db.items.filter(i => i.currentStock <= i.minStock).length;
   const allHeldRows = useMemo(() => {
     const rows = db.jobCards.flatMap(j => j.reservedItems.map(r => {
@@ -78,8 +100,8 @@ export function Inventory() {
         case "current": return r.totalStock;
         case "hold": return r.hold;
         case "available": return r.available;
-        case "cost": return r.item.purchaseRate;
-        case "value": return r.available * r.item.purchaseRate;
+        case "cost": return unitCost(r.item);
+        case "value": return r.available * unitCost(r.item);
         case "status": return statusRank[r.status] ?? -1;
       }
     };
@@ -116,8 +138,8 @@ export function Inventory() {
 
   const exportCSV = () => {
     downloadCSV("inventory.csv", [
-      ["Name", "Category", "Stock", "Unit", "Min", "Reorder", "Value (₹)"],
-      ...items.map(i => [i.name, i.category, i.currentStock, i.unit, i.minStock, i.reorderLevel, (i.currentStock * i.purchaseRate).toFixed(2)])
+      ["Name", "Category", "Stock", "Unit", "Min", "Reorder", "Unit Cost (₹)", "Value (₹)"],
+      ...items.map(i => [i.name, i.category, i.currentStock, i.unit, i.minStock, i.reorderLevel, unitCost(i).toFixed(2), (i.currentStock * unitCost(i)).toFixed(2)])
     ]);
   };
 
@@ -194,7 +216,7 @@ export function Inventory() {
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <KPI label="Total Items" value={String(db.items.length)} color="indigo" icon={<IconBox size={22}/>} />
-        <KPI label="Stock Value" value={fmtINR(totalValue)} color="emerald" icon={<IconBox size={22}/>} hint="at purchase rate"/>
+        <KPI label="Stock Value" value={fmtINR(totalValue)} color="emerald" icon={<IconBox size={22}/>} hint="RM: avg last 3 purchases · FG: sale price"/>
         <KPI label="Low Stock" value={String(lowCount)} color="rose" icon={<IconRefresh size={22}/>} />
         <KPI label="Held Inventory" value={fmt2(activeHeldQty)} color="amber" icon={<IconClipboard size={22}/>} hint="active job holds" />
       </div>
@@ -258,8 +280,14 @@ export function Inventory() {
                   <Td className="font-semibold">{fmt2(totalStock)} {i.unit}</Td>
                   <Td className="font-semibold text-amber-600">{fmt2(hold)} {i.unit}</Td>
                   <Td><span className={low ? "text-rose-600 font-bold" : "font-bold text-emerald-600"}>{fmt2(available)} {i.unit}</span></Td>
-                  <Td>{fmtINR(i.purchaseRate)}</Td>
-                  <Td className="font-semibold text-indigo-700 dark:text-indigo-300">{fmtINR(available * i.purchaseRate)}</Td>
+                  <Td>{fmtINR(unitCost(i))}
+                    {i.category === "Finished Goods"
+                      ? <div className="text-[9px] text-slate-400">latest sale price</div>
+                      : lastPurchaseRates[i.id]
+                        ? <div className="text-[9px] text-slate-400">avg of last {lastPurchaseRates[i.id].count} purchase{lastPurchaseRates[i.id].count > 1 ? "s" : ""}</div>
+                        : <div className="text-[9px] text-slate-400">item master rate</div>}
+                  </Td>
+                  <Td className="font-semibold text-indigo-700 dark:text-indigo-300">{fmtINR(available * unitCost(i))}</Td>
                   <Td><Badge color={statusColor}>{status}</Badge><div className="text-[10px] text-slate-500 mt-1">Min {fmt2(i.minStock)} / Reorder {fmt2(i.reorderLevel)}</div></Td>
                 </tr>
               );
