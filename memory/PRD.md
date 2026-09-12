@@ -54,3 +54,5 @@ Cloud-based Transformer Manufacturing ERP & CRM with modules for Sales CRM, Quot
 - User decision: SFG mapping stays global; consumption is same-JC-first with cross-JC fallback; stock table unchanged (no JC grouping).
 - Testing: testing_agent iteration_5.json — 100% pass (mappings, auto production, auto+manual consumption, history, inventory sync, persistence).
 
+- UPDATE (2026-09-12): Stage→SFG item mapping is now JOB CARD-WISE, not global. Stored in `settings.sfgStageItemsByJc[jobCardId][stage]`; legacy global `sfgStageItems` ignored. SFG page mapping card: select JC → map its stages → per-JC "Configured" chips. Auto-created items named `{JC No} {Stage} SFG`. `applySfgProduction` in sfg.ts looks up per-JC mapping only — entries create stock against their own JC only. Consumption map stays global (user choice), same-JC-first FIFO. NOTE: preview DB is shared live with the user — concurrent whole-DB saves are last-write-wins and can clobber; observed during testing.
+

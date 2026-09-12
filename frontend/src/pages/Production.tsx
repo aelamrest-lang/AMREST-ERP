@@ -554,7 +554,8 @@ export function ProductionDashboard() {
       return next;
     });
     if (sfgShortages.length) alert("SFG shortage — consumed partially:\n" + sfgShortages.join("\n"));
-    if (db.settings.sfgStageItems?.[entryStage]) log(`SFG produced: ${db.items.find(i => i.id === db.settings.sfgStageItems?.[entryStage])?.name || entryStage} × ${qty} (${selectedJob.number})`, "Production SFG");
+    const sfgMappedItemId = db.settings.sfgStageItemsByJc?.[selectedJob.id]?.[entryStage];
+    if (sfgMappedItemId) log(`SFG produced: ${db.items.find(i => i.id === sfgMappedItemId)?.name || entryStage} × ${qty} (${selectedJob.number})`, "Production SFG");
     log(`Production entry ${selectedJob.number} ${entryStage}: ${qty}`, "Production");
     printProductionEntry(entry);
     setEntryQty(0); setOperatorId(""); setPriceEach(0); setMachineName(""); setRemarks(""); setEntryWarning(""); setEntryOpen(false);

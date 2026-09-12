@@ -23,7 +23,7 @@ export function sfgStages(db: DB): string[] {
 export function sfgAvailable(b: SfgBatch) { return Math.max(0, b.qtyProduced - b.qtyUsed); }
 
 export function applySfgProduction(d: DB, args: { jobCardId: string; jobCardNumber: string; stage: string; qty: number; entryId?: string }): Partial<DB> {
-  const itemId = d.settings.sfgStageItems?.[args.stage];
+  const itemId = d.settings.sfgStageItemsByJc?.[args.jobCardId]?.[args.stage];
   if (!itemId || args.qty <= 0) return {};
   const batch: SfgBatch = {
     id: uid(), itemId, jobCardId: args.jobCardId, jobCardNumber: args.jobCardNumber,

@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useStore, uid } from "../lib/store";
 import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Badge, Empty, KPI, Textarea } from "../components/ui";
 import { IconBox, IconFactory, IconPlus, IconTrash, IconSearch, IconRefresh, IconClipboard } from "../components/icons";
-import { fmt2, todayISO } from "../lib/utils";
+import { fmt2 } from "../lib/utils";
 import { userCan } from "../lib/permissions";
 import { sfgStages, sfgAvailable, consumeSfgItems } from "../lib/sfg";
 import type { Item } from "../lib/types";
@@ -14,6 +14,7 @@ export function ProductionSFG() {
   const [stageFilter, setStageFilter] = useState("all");
   const [tab, setTab] = useState<"stock" | "history">("stock");
   const [consumeOpen, setConsumeOpen] = useState(false);
+  const [mapJc, setMapJc] = useState("");
   const [mapDraft, setMapDraft] = useState<Record<string, string>>({});
   const [consStage, setConsStage] = useState("");
   const [consDraft, setConsDraft] = useState<{ itemId: string; qtyPerUnit: number }[]>([]);
@@ -27,7 +28,7 @@ export function ProductionSFG() {
 
   const stages = useMemo(() => sfgStages(db), [db]);
   const sfgItems = useMemo(() => db.items.filter(i => i.category === "Semi-Finished"), [db.items]);
-  const stageMap = db.settings.sfgStageItems || {};
+  const stageMapByJc = db.settings.sfgStageItemsByJc || {};
   const consMap = db.settings.sfgConsumptionMap || {};
   const batches = db.sfgBatches || [];
   const consumptions = db.sfgConsumptions || [];
@@ -42,6 +43,14 @@ export function ProductionSFG() {
   const totalProduced = batches.reduce((s, b) => s + b.qtyProduced, 0);
   const totalUsed = batches.reduce((s, b) => s + b.qtyUsed, 0);
   const totalAvailable = batches.reduce((s, b) => s + sfgAvailable(b), 0);
+  const mappedStageCount = Object.values(stageMapByJc).reduce((s, m) => s + Object.values(m || {}).filter(Boolean).length, 0);
+
+  const mapJcObj = db.jobCards.find(j => j.id === mapJc);
+  const mapJcStages = useMemo(() => {
+    if (!mapJcObj) return [];
+    const names = (mapJcObj.stages || []).map(s => s.stage);
+    return [...new Set(names)];
+  }, [mapJcObj]);
 
   const stockRows = useMemo(() => {
     return batches.filter(b => {
@@ -68,20 +77,27 @@ export function ProductionSFG() {
     return [...prod, ...cons].sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt));
   }, [batches, consumptions, db.items]);
 
-  const getMapVal = (stage: string) => mapDraft[stage] ?? stageMap[stage] ?? "";
+  const getMapVal = (stage: string) => mapDraft[stage] ?? stageMapByJc[mapJc]?.[stage] ?? "";
 
   const saveMapping = () => {
-    setDB(d => ({ ...d, settings: { ...d.settings, sfgStageItems: { ...stageMap, ...mapDraft } } }));
-    log("Updated SFG stage-item mapping", "Production SFG");
+    if (!mapJc) return;
+    const merged: Record<string, string> = { ...(stageMapByJc[mapJc] || {}), ...mapDraft };
+    Object.keys(merged).forEach(k => { if (!merged[k]) delete merged[k]; });
+    setDB(d => ({
+      ...d,
+      settings: { ...d.settings, sfgStageItemsByJc: { ...(d.settings.sfgStageItemsByJc || {}), [mapJc]: merged } },
+    }));
+    log(`Updated SFG stage-item mapping for ${mapJcObj?.number || mapJc}`, "Production SFG");
     setMapDraft({});
   };
 
   const autoCreateItem = (stage: string) => {
-    const name = `${stage} SFG`;
+    const jcPrefix = mapJcObj ? `${mapJcObj.number.split(" - ")[0]} ` : "";
+    const name = `${jcPrefix}${stage} SFG`.trim();
     const existing = db.items.find(i => i.name.toLowerCase() === name.toLowerCase());
     if (existing) { setMapDraft(m => ({ ...m, [stage]: existing.id })); return; }
     const item: Item = {
-      id: uid(), code: `SFG-${stage.replace(/[^A-Za-z0-9]/g, "").slice(0, 10).toUpperCase()}`, name,
+      id: uid(), code: `SFG-${stage.replace(/[^A-Za-z0-9]/g, "").slice(0, 10).toUpperCase()}-${(mapJcObj?.number || "").replace(/[^A-Za-z0-9]/g, "").slice(-4)}`, name,
       category: "Semi-Finished", unit: "Nos", gstRate: 18, openingStock: 0, currentStock: 0,
       minStock: 0, reorderLevel: 0, purchaseRate: 0, saleRate: 0,
     };
@@ -128,13 +144,13 @@ export function ProductionSFG() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">Production SFG</h1>
-          <p className="text-sm text-slate-500">Semi-Finished Goods — stage-wise production, stock and consumption</p>
+          <p className="text-sm text-slate-500">Semi-Finished Goods — job card-wise stage production, stock and consumption</p>
         </div>
         {canEdit && <Button onClick={() => setConsumeOpen(true)} data-testid="open-manual-consume"><IconRefresh size={14}/> Consume SFG</Button>}
       </div>
 
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <KPI label="Mapped Stages" value={String(Object.keys(stageMap).filter(k => stageMap[k]).length)} color="indigo" icon={<IconFactory size={22}/>} hint="stages producing SFG"/>
+        <KPI label="Mapped Stages" value={String(mappedStageCount)} color="indigo" icon={<IconFactory size={22}/>} hint="across job cards"/>
         <KPI label="SFG Produced" value={fmt2(totalProduced)} color="blue" icon={<IconBox size={22}/>} hint="all-time qty"/>
         <KPI label="SFG Available" value={fmt2(totalAvailable)} color="emerald" icon={<IconBox size={22}/>} hint="ready to consume"/>
         <KPI label="SFG Consumed" value={fmt2(totalUsed)} color="amber" icon={<IconClipboard size={22}/>} hint="used in next stages"/>
@@ -142,32 +158,64 @@ export function ProductionSFG() {
 
       {canEdit && (
         <Card>
-          <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+          <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-3 flex-wrap">
             <div>
-              <h3 className="font-semibold">Stage → SFG Item Mapping</h3>
-              <p className="text-xs text-slate-500">A production entry at a mapped stage automatically creates SFG stock of the mapped item</p>
+              <h3 className="font-semibold">Stage → SFG Item Mapping (Job Card-wise)</h3>
+              <p className="text-xs text-slate-500">Select a job card, then map each of its production stages to an SFG item. Production entries create SFG stock against that job card only.</p>
             </div>
-            <Button onClick={saveMapping} disabled={!Object.keys(mapDraft).length} data-testid="save-stage-mapping">Save Mapping</Button>
+            <Button onClick={saveMapping} disabled={!mapJc || !Object.keys(mapDraft).length} data-testid="save-stage-mapping">Save Mapping</Button>
           </div>
-          <Table>
-            <thead><tr><Th>Production Stage</Th><Th>SFG Item (Semi-Finished)</Th><Th className="text-right">Action</Th></tr></thead>
-            <tbody>
-              {stages.map(stage => (
-                <tr key={stage} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                  <Td className="font-medium">{stage}</Td>
-                  <Td>
-                    <Select value={getMapVal(stage)} onChange={(e: any) => setMapDraft(m => ({ ...m, [stage]: e.target.value }))} data-testid={`map-stage-${stage.replace(/\s+/g, "-").toLowerCase()}`}>
-                      <option value="">— Not mapped —</option>
-                      {sfgItems.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
-                    </Select>
-                  </Td>
-                  <Td className="text-right">
-                    <Button variant="outline" onClick={() => autoCreateItem(stage)} data-testid={`auto-create-${stage.replace(/\s+/g, "-").toLowerCase()}`}>Auto-create Item</Button>
-                  </Td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
+          <div className="p-4 border-b border-slate-100 dark:border-slate-800">
+            <div className="max-w-xl">
+              <Label className="text-[10px]">Job Card</Label>
+              <Select value={mapJc} onChange={(e: any) => { setMapJc(e.target.value); setMapDraft({}); }} data-testid="map-jc-picker">
+                <option value="">Select job card…</option>
+                {db.jobCards.map(j => <option key={j.id} value={j.id}>{j.number} · {j.product} ({j.status})</option>)}
+              </Select>
+            </div>
+            {Object.keys(stageMapByJc).some(k => Object.values(stageMapByJc[k] || {}).some(Boolean)) && (
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                <span>Configured:</span>
+                {Object.entries(stageMapByJc).filter(([, m]) => Object.values(m || {}).some(Boolean)).map(([jcId, m]) => {
+                  const jc = db.jobCards.find(j => j.id === jcId);
+                  return (
+                    <button key={jcId} type="button" onClick={() => { setMapJc(jcId); setMapDraft({}); }}
+                      className="px-2 py-1 rounded-md border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 hover:border-indigo-400"
+                      data-testid={`map-jc-chip-${(jc?.number || jcId).replace(/[^A-Za-z0-9]/g, "-")}`}>
+                      {jc?.number || jcId} · {Object.values(m).filter(Boolean).length} stage{Object.values(m).filter(Boolean).length > 1 ? "s" : ""}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          {mapJcObj ? (
+            <Table>
+              <thead><tr><Th>Production Stage</Th><Th>Status</Th><Th>SFG Item (Semi-Finished)</Th><Th className="text-right">Action</Th></tr></thead>
+              <tbody>
+                {mapJcStages.map(stage => {
+                  const st = (mapJcObj.stages || []).find(s => s.stage === stage);
+                  return (
+                    <tr key={stage} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                      <Td className="font-medium">{stage}</Td>
+                      <Td><Badge color={st?.status === "done" ? "green" : st?.status === "in-progress" ? "yellow" : "red"}>{st?.status || "pending"}</Badge></Td>
+                      <Td>
+                        <Select value={getMapVal(stage)} onChange={(e: any) => setMapDraft(m => ({ ...m, [stage]: e.target.value }))} data-testid={`map-stage-${stage.replace(/\s+/g, "-").toLowerCase()}`}>
+                          <option value="">— Not mapped —</option>
+                          {sfgItems.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+                        </Select>
+                      </Td>
+                      <Td className="text-right">
+                        <Button variant="outline" onClick={() => autoCreateItem(stage)} data-testid={`auto-create-${stage.replace(/\s+/g, "-").toLowerCase()}`}>Auto-create Item</Button>
+                      </Td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </Table>
+          ) : (
+            <div className="p-4"><Empty title="Select a job card to configure its stage mappings" subtitle="Each job card can have its own Stage → SFG item mapping" /></div>
+          )}
         </Card>
       )}
 
@@ -175,7 +223,7 @@ export function ProductionSFG() {
         <Card>
           <div className="p-4 border-b border-slate-100 dark:border-slate-800">
             <h3 className="font-semibold">SFG Consumption Mapping</h3>
-            <p className="text-xs text-slate-500">Inputs auto-consumed when a production entry is logged at the output stage. Supports single or multiple SFG inputs (e.g. LV Winding SFG + HV Winding SFG + Core SFG → Assembly)</p>
+            <p className="text-xs text-slate-500">Inputs auto-consumed when a production entry is logged at the output stage. Supports single or multiple SFG inputs (e.g. LV Winding SFG + HV Winding SFG + Core SFG → Assembly). Same job card's stock is used first.</p>
           </div>
           <Table>
             <thead><tr><Th>Output Stage</Th><Th>Consumes (per 1 unit produced)</Th><Th className="text-right">Action</Th></tr></thead>
@@ -282,7 +330,7 @@ export function ProductionSFG() {
                 })}
               </tbody>
             </Table>
-            {stockRows.length === 0 && <Empty title="No SFG stock yet" subtitle="Map stages to SFG items above, then log production entries" />}
+            {stockRows.length === 0 && <Empty title="No SFG stock yet" subtitle="Map a job card's stages to SFG items above, then log production entries" />}
           </>
         )}
 
