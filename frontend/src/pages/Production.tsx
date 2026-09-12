@@ -183,6 +183,18 @@ export function JobCards() {
     return [...inKnown, ...custom];
   };
 
+  const [dragStage, setDragStage] = useState<string | null>(null);
+
+  const reorderStages = (from: string, to: string) => {
+    if (from === to) return;
+    const arr = stageMaster.slice();
+    const fi = arr.indexOf(from), ti = arr.indexOf(to);
+    if (fi < 0 || ti < 0) return;
+    arr.splice(ti, 0, arr.splice(fi, 1)[0]);
+    setDB(d => ({ ...d, settings: { ...d.settings, productionStages: arr } }));
+    log(`Reordered production stages: ${from} moved before ${to}`, "Job Card");
+  };
+
   const toggleStage = (stage: string) => {
     const on = !selectedStages.includes(stage);
     setSelectedStages(prev => on ? [...prev, stage] : prev.filter(s => s !== stage));
@@ -357,7 +369,7 @@ export function JobCards() {
       </tbody></table>
       <div class="section-title">Production Stages</div>
       <table><thead><tr><th>#</th><th>Stage</th><th>Status</th><th>Worker</th><th>Date</th></tr></thead><tbody>
-      ${j.stages.map((s, idx) => `<tr><td>${idx+1}</td><td>${s.stage}</td><td>${s.status}</td><td>${s.worker || "-"}</td><td>${s.date || "-"}</td></tr>`).join("")}
+      ${j.stages.slice().sort((a, b) => { const i = (s: string) => { const x = stageMaster.indexOf(s); return x < 0 ? stageMaster.length : x; }; return i(a.stage) - i(b.stage); }).map((s, idx) => `<tr><td>${idx+1}</td><td>${s.stage}</td><td>${s.status}</td><td>${s.worker || "-"}</td><td>${s.date || "-"}</td></tr>`).join("")}
       </tbody></table>
       <div class="section-title">Production Stage Quantity Calculation</div>
       <table><thead><tr><th>Stage</th><th class="right">Job Qty</th><th class="right">Multiplier</th><th class="right">Total Stage Qty</th></tr></thead><tbody>
@@ -512,16 +524,26 @@ export function JobCards() {
           <div className="flex flex-wrap gap-2 mb-3" data-testid="jc-stage-selector">
             {stageMaster.map(stage => {
               const on = selectedStages.includes(stage);
+              const slug = stage.replace(/\s+/g, "-").toLowerCase();
               return (
                 <button
                   key={stage}
                   type="button"
                   onClick={() => toggleStage(stage)}
-                  className={"text-xs px-3 py-1.5 rounded-full border font-medium transition-colors " + (on
+                  draggable={isAdmin}
+                  onDragStart={() => setDragStage(stage)}
+                  onDragOver={(e: any) => { if (isAdmin && dragStage && dragStage !== stage) e.preventDefault(); }}
+                  onDrop={(e: any) => { e.preventDefault(); if (isAdmin && dragStage) reorderStages(dragStage, stage); setDragStage(null); }}
+                  onDragEnd={() => setDragStage(null)}
+                  className={"text-xs px-3 py-1.5 rounded-full border font-medium transition-colors inline-flex items-center " + (on
                     ? "bg-indigo-600 border-indigo-600 text-white"
-                    : "bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-indigo-400")}
-                  data-testid={`jc-stage-toggle-${stage.replace(/\s+/g, "-").toLowerCase()}`}
-                >{stage}</button>
+                    : "bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-indigo-400") + (dragStage === stage ? " opacity-50" : "")}
+                  data-testid={`jc-stage-toggle-${slug}`}
+                  title={isAdmin ? "Click to select · drag to reorder stages" : "Click to select"}
+                >
+                  {isAdmin && <span className="mr-1.5 cursor-grab opacity-60 tracking-tighter" data-testid={`jc-stage-drag-${slug}`}>⋮⋮</span>}
+                  {stage}
+                </button>
               );
             })}
           </div>
@@ -665,6 +687,11 @@ export function ProductionDashboard() {
   const completed = db.jobCards.filter(j => j.status === "Completed").length;
   const stageMaster: string[] = db.settings.productionStages?.length ? db.settings.productionStages : STAGES;
 
+  const orderStages = <T extends { stage: string }>(arr: T[]): T[] => {
+    const idx = (s: string) => { const i = stageMaster.indexOf(s); return i < 0 ? stageMaster.length : i; };
+    return arr.slice().sort((a, b) => idx(a.stage) - idx(b.stage));
+  };
+
   const stageCounts = stageMaster.map(s => ({
     label: s.replace(" / ", " ").split(" ")[0],
     count: db.jobCards.reduce((acc, j) => acc + j.stages.filter(x => x.stage === s && x.status === "in-progress").length, 0),
@@ -674,7 +701,8 @@ export function ProductionDashboard() {
   const enabledStages = useMemo(() => {
     if (!selectedJob) return stageMaster;
     if (!selectedJob.stageQuantities || selectedJob.stageQuantities.length === 0) return stageMaster;
-    return selectedJob.stageQuantities.filter(row => (row.multiplier ?? 0) > 0).map(row => row.stage);
+    const active = selectedJob.stageQuantities.filter(row => (row.multiplier ?? 0) > 0).map(row => row.stage);
+    return [...stageMaster.filter(s => active.includes(s)), ...active.filter(s => !stageMaster.includes(s))];
   }, [selectedJob, stageMaster]);
   // Auto-correct entryStage when it's not enabled for the current job
   useEffect(() => {
@@ -844,7 +872,7 @@ export function ProductionDashboard() {
                 <Badge color={j.status === "In Progress" ? "yellow" : "blue"}>{j.status}</Badge>
               </div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                {j.stages.map(s => (
+                {orderStages(j.stages).map(s => (
                   <div key={s.stage} className="relative">
                   <button onClick={() => s.status !== "done" && completeStage(j.id, s.stage)}
                     disabled={!canEditProduction || (currentUser?.role === "testing" && s.stage !== "Testing") || (currentUser?.role === "production" && s.stage === "Testing")}

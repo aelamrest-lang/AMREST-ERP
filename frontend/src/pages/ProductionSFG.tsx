@@ -51,9 +51,9 @@ export function ProductionSFG() {
   const mapJcObj = db.jobCards.find(j => j.id === mapJc);
   const mapJcStages = useMemo(() => {
     if (!mapJcObj) return [];
-    const names = (mapJcObj.stages || []).map(s => s.stage);
-    return [...new Set(names)];
-  }, [mapJcObj]);
+    const uniq = [...new Set((mapJcObj.stages || []).map(s => s.stage))];
+    return [...stages.filter(s => uniq.includes(s)), ...uniq.filter(s => !stages.includes(s))];
+  }, [mapJcObj, stages]);
 
   const stockRows = useMemo(() => {
     return batches.filter(b => {
