@@ -65,6 +65,7 @@ export function JobCards() {
   const canPrint = userCan(currentUser, "jobcards", "print");
   const [open, setOpen] = useState(false);
   const [edit, setEdit] = useState<JobCard | null>(null);
+  const [selectedStages, setSelectedStages] = useState<string[]>([]);
 
   const defaultStageQuantities = (qty: number) => STAGES.map(stage => ({
     stage,
@@ -72,14 +73,37 @@ export function JobCards() {
     totalQty: qty * (STAGE_MULTIPLIERS[stage] ?? 1),
   }));
 
+  const orderedSelectedStages = () => {
+    const inKnown = STAGES.filter(s => selectedStages.includes(s));
+    const custom = selectedStages.filter(s => !STAGES.includes(s));
+    return [...inKnown, ...custom];
+  };
+
+  const toggleStage = (stage: string) => {
+    const on = !selectedStages.includes(stage);
+    setSelectedStages(prev => on ? [...prev, stage] : prev.filter(s => s !== stage));
+    setForm(f => {
+      const mult = STAGE_MULTIPLIERS[stage] ?? 1;
+      return {
+        ...f,
+        stageQuantities: on
+          ? [...(f.stageQuantities || []).filter(r => r.stage !== stage), { stage, multiplier: mult, totalQty: f.qty * mult }]
+          : (f.stageQuantities || []).filter(r => r.stage !== stage),
+        stages: on
+          ? [...(f.stages || []).filter(x => x.stage !== stage), { stage, status: "pending" as const }]
+          : (f.stages || []).filter(x => x.stage !== stage),
+      };
+    });
+  };
+
   const blank = (): JobCard => {
     const firstBom = db.boms[0];
     return {
       id: "", number: `${nextNumber("JC", db.jobCards)}${firstBom ? ` - ${firstBom.name}` : ""}`, date: todayISO(), salesOrderId: "", bomId: firstBom?.id || "",
       qcFormatId: db.qcFormats[0]?.id || "", serialStart: "",
       product: firstBom?.name || "", qty: 1, reservedItems: firstBom ? firstBom.materials.filter(m => m.itemId).map(m => ({ itemId: m.itemId!, qty: m.qty })) : [],
-      stageQuantities: defaultStageQuantities(1),
-      stages: STAGES.map(s => ({ stage: s, status: "pending" as const })), status: "Open",
+      stageQuantities: [],
+      stages: [], status: "Open",
       createdAt: new Date().toISOString(),
     };
   };
@@ -105,7 +129,7 @@ export function JobCards() {
       f.number = `${f.number.split(" - ")[0]} - ${bom.name}`;
     }
     f.stagePrices = inheritStagePrices(f.product);
-    setEdit(null); setForm(f); setOpen(true);
+    setEdit(null); setForm(f); setSelectedStages([]); setOpen(true);
   };
   const openEdit = (j: JobCard) => {
     setEdit(j);
@@ -119,30 +143,27 @@ export function JobCards() {
           }))
         : [sq],
       );
-    // Ensure any missing STAGES have a row (with 0 multiplier if the sub-stage wasn't there yet)
-    const known = new Set(migratedStageQuantities.map(x => x.stage));
-    STAGES.forEach(s => {
-      if (!known.has(s)) migratedStageQuantities.push({ stage: s, multiplier: STAGE_MULTIPLIERS[s] ?? 0, totalQty: (STAGE_MULTIPLIERS[s] ?? 0) * j.qty });
-    });
     const migratedStages = j.stages.flatMap(st => st.stage === "Secondary Winding"
       ? ["Secondary Winding 1", "Secondary Winding 2", "Secondary Winding 3"].map((s, i) => ({ stage: s as ProductionStage, status: i === 0 ? st.status : "pending" as const, worker: i === 0 ? st.worker : undefined, date: i === 0 ? st.date : undefined }))
       : [st],
     );
-    const stagesKnown = new Set(migratedStages.map(x => x.stage));
-    STAGES.forEach(s => {
-      if (!stagesKnown.has(s)) migratedStages.push({ stage: s, status: "pending" as const });
-    });
+    // Selected stages = rows with a multiplier, or stages already worked on
+    const sel = new Set<string>();
+    migratedStageQuantities.forEach(sq => { if (sq.multiplier > 0) sel.add(sq.stage); });
+    migratedStages.forEach(st => { if (st.status !== "pending" || st.worker) sel.add(st.stage); });
+    setSelectedStages([...sel]);
     setForm({
       ...j,
       reservedItems: j.reservedItems.map(i => ({ ...i })),
-      stageQuantities: migratedStageQuantities,
-      stages: migratedStages,
+      stageQuantities: migratedStageQuantities.filter(sq => sel.has(sq.stage)),
+      stages: migratedStages.filter(st => sel.has(st.stage)),
     });
     setOpen(true);
   };
 
   const save = () => {
     if (!form.qcFormatId) return alert("QC Format selection is mandatory in Job Card.");
+    if ((form.stageQuantities || []).length === 0) return alert("Select at least one Production Stage for this Job Card.");
     if (edit) {
       setDB(d => {
         const itemIds = new Set([...edit.reservedItems.map(r => r.itemId), ...form.reservedItems.map(r => r.itemId)]);
@@ -373,12 +394,32 @@ export function JobCards() {
         </div>
 
         <div className="mt-4">
+          <h4 className="font-semibold text-sm mb-2">Select Production Stages</h4>
+          <div className="flex flex-wrap gap-2 mb-3" data-testid="jc-stage-selector">
+            {STAGES.map(stage => {
+              const on = selectedStages.includes(stage);
+              return (
+                <button
+                  key={stage}
+                  type="button"
+                  onClick={() => toggleStage(stage)}
+                  className={"text-xs px-3 py-1.5 rounded-full border font-medium transition-colors " + (on
+                    ? "bg-indigo-600 border-indigo-600 text-white"
+                    : "bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-indigo-400")}
+                  data-testid={`jc-stage-toggle-${stage.replace(/\s+/g, "-").toLowerCase()}`}
+                >{stage}</button>
+              );
+            })}
+          </div>
           <h4 className="font-semibold text-sm mb-2">Production Stage Quantity Calculation</h4>
           <div className="rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
             <Table>
               <thead><tr><Th>Stage</Th><Th>Job Qty</Th><Th>Multiplier</Th><Th>Total Stage Qty</Th><Th>Price / Unit (₹)</Th></tr></thead>
               <tbody>
-                {(form.stageQuantities || defaultStageQuantities(form.qty)).map(row => (
+                {orderedSelectedStages().length === 0 && <tr><Td colSpan={5} className="text-slate-500">No stages selected — pick the required production stages above.</Td></tr>}
+                {orderedSelectedStages().map(stageName => {
+                  const row = (form.stageQuantities || []).find(r => r.stage === stageName) || { stage: stageName, multiplier: 0, totalQty: 0 };
+                  return (
                   <tr key={row.stage}>
                     <Td className="font-medium">{row.stage}</Td>
                     <Td>{form.qty}</Td>
@@ -397,11 +438,12 @@ export function JobCards() {
                       />
                     </Td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </Table>
           </div>
-          <p className="mt-2 text-xs text-slate-500">Total Stage Qty = Job Qty x Stage Multiplier. Set a multiplier of <b>0</b> to skip that stage — it will not appear in the Production dropdown. Enter <b>Price / Unit</b> to auto-fill Price Each on Production Entries; new Job Cards for the same product auto-inherit these prices.</p>
+          <p className="mt-2 text-xs text-slate-500">Only selected stages appear in Daily Production Entry and Production SFG mapping. Total Stage Qty = Job Qty x Stage Multiplier. Enter <b>Price / Unit</b> to auto-fill Price Each on Production Entries; new Job Cards for the same product auto-inherit these prices.</p>
         </div>
 
         <div className="mt-5 flex justify-end gap-2"><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={save}>{edit ? "Update" : "Create & Reserve Stock"}</Button></div>

@@ -62,3 +62,5 @@ Cloud-based Transformer Manufacturing ERP & CRM with modules for Sales CRM, Quot
 
 - UPDATE (2026-09-12): SFG stage mapping now shows ONLY user-selected stages per JC. Flow: Select JC → "Add Production Stage" dropdown (lists JC's unmapped stages) → map Produced + Consumed → Save. Rows removable via × per row (clears both mappings on save). Selecting a JC pre-loads its already-mapped stages. TestIDs: map-add-stage, stage-remove-<slug>.
 
+- UPDATE (2026-09-12): Job Card creation now has "Select Production Stages" pill toggles — no stages pre-selected; only toggled stages get Multiplier/Qty/Price rows and are saved to stageQuantities/stages. Save blocks with alert if none selected. Edit flow infers selected stages (multiplier>0 or worked-on). Downstream auto-respects selection: Daily Production Entry stage dropdown and Production SFG "Add Production Stage" both derive from the JC's stages. TestIDs: jc-stage-toggle-<slug>.
+
