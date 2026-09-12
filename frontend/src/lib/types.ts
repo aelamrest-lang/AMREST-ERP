@@ -515,7 +515,8 @@ export interface CompanySettings {
   stagePrices?: Record<string, number>; // key: ProductionStage → ₹ per unit
   sfgStageItems?: Record<string, string>; // key: ProductionStage → SFG item id produced by that stage (legacy global, superseded by sfgStageItemsByJc)
   sfgStageItemsByJc?: Record<string, Record<string, string>>; // key: jobCardId → (ProductionStage → SFG item id)
-  sfgConsumptionMap?: Record<string, { itemId: string; qtyPerUnit: number }[]>; // key: output ProductionStage → SFG inputs consumed per unit
+  sfgConsumptionMap?: Record<string, { itemId: string; qtyPerUnit: number }[]>; // key: output ProductionStage → SFG inputs consumed per unit (legacy global, superseded by sfgConsumptionMapByJc)
+  sfgConsumptionMapByJc?: Record<string, Record<string, { itemId: string; qtyPerUnit: number }[]>>; // key: jobCardId → (output stage → inputs)
   stageDays?: Record<string, number>; // key: ProductionStage → working days per stage (Mfg Time Calculator, legacy)
   stageCapacity?: Record<string, number>; // key: MfgStage → daily output (Nos/day) for Mfg Time Calculator
   rawMaterialProcurementDays?: number; // editable RM procurement window (days)

@@ -56,3 +56,5 @@ Cloud-based Transformer Manufacturing ERP & CRM with modules for Sales CRM, Quot
 
 - UPDATE (2026-09-12): Stage→SFG item mapping is now JOB CARD-WISE, not global. Stored in `settings.sfgStageItemsByJc[jobCardId][stage]`; legacy global `sfgStageItems` ignored. SFG page mapping card: select JC → map its stages → per-JC "Configured" chips. Auto-created items named `{JC No} {Stage} SFG`. `applySfgProduction` in sfg.ts looks up per-JC mapping only — entries create stock against their own JC only. Consumption map stays global (user choice), same-JC-first FIFO. NOTE: preview DB is shared live with the user — concurrent whole-DB saves are last-write-wins and can clobber; observed during testing.
 
+- UPDATE (2026-09-12): SFG mapping table merged — single JC-wise table with columns Production Stage | Status | SFG Produced | SFG Consumed (multi-add + qty per unit, remove ×). Separate "SFG Consumption Mapping" card removed. Consumption map now stored per JC in `settings.sfgConsumptionMapByJc[jobCardId][stage]`; auto-consumption falls back to legacy global `sfgConsumptionMap` when a JC has no per-JC map. One "Save Mapping" persists both maps.
+

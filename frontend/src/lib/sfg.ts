@@ -83,7 +83,7 @@ export function consumeSfgItems(d: DB, args: {
 }
 
 export function applySfgAutoConsumption(d: DB, args: { stage: string; qty: number; jobCardId: string; jobCardNumber: string }) {
-  const rules = d.settings.sfgConsumptionMap?.[args.stage] || [];
+  const rules = d.settings.sfgConsumptionMapByJc?.[args.jobCardId]?.[args.stage] ?? d.settings.sfgConsumptionMap?.[args.stage] ?? [];
   const needs = rules.map(r => ({ itemId: r.itemId, qty: r.qtyPerUnit * args.qty })).filter(n => n.qty > 0);
   if (!needs.length) return { updates: {}, shortages: [] as string[] };
   return consumeSfgItems(d, { needs, outputStage: args.stage, outputJobCardId: args.jobCardId, outputJobCardNumber: args.jobCardNumber, mode: "auto" });

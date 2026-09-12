@@ -1,11 +1,13 @@
 import { useMemo, useState } from "react";
 import { useStore, uid } from "../lib/store";
 import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Badge, Empty, KPI, Textarea } from "../components/ui";
-import { IconBox, IconFactory, IconPlus, IconTrash, IconSearch, IconRefresh, IconClipboard } from "../components/icons";
+import { IconBox, IconFactory, IconSearch, IconRefresh, IconClipboard, IconX } from "../components/icons";
 import { fmt2 } from "../lib/utils";
 import { userCan } from "../lib/permissions";
 import { sfgStages, sfgAvailable, consumeSfgItems } from "../lib/sfg";
 import type { Item } from "../lib/types";
+
+type ConsRow = { itemId: string; qtyPerUnit: number };
 
 export function ProductionSFG() {
   const { db, setDB, log, currentUser } = useStore();
@@ -16,8 +18,7 @@ export function ProductionSFG() {
   const [consumeOpen, setConsumeOpen] = useState(false);
   const [mapJc, setMapJc] = useState("");
   const [mapDraft, setMapDraft] = useState<Record<string, string>>({});
-  const [consStage, setConsStage] = useState("");
-  const [consDraft, setConsDraft] = useState<{ itemId: string; qtyPerUnit: number }[]>([]);
+  const [consDraft, setConsDraft] = useState<Record<string, ConsRow[]>>({});
   const [mcItem, setMcItem] = useState("");
   const [mcQty, setMcQty] = useState(0);
   const [mcStage, setMcStage] = useState("");
@@ -29,7 +30,8 @@ export function ProductionSFG() {
   const stages = useMemo(() => sfgStages(db), [db]);
   const sfgItems = useMemo(() => db.items.filter(i => i.category === "Semi-Finished"), [db.items]);
   const stageMapByJc = db.settings.sfgStageItemsByJc || {};
-  const consMap = db.settings.sfgConsumptionMap || {};
+  const consMapByJc = db.settings.sfgConsumptionMapByJc || {};
+  const consMapLegacy = db.settings.sfgConsumptionMap || {};
   const batches = db.sfgBatches || [];
   const consumptions = db.sfgConsumptions || [];
 
@@ -78,17 +80,30 @@ export function ProductionSFG() {
   }, [batches, consumptions, db.items]);
 
   const getMapVal = (stage: string) => mapDraft[stage] ?? stageMapByJc[mapJc]?.[stage] ?? "";
+  const getConsRows = (stage: string): ConsRow[] => consDraft[stage] ?? consMapByJc[mapJc]?.[stage] ?? consMapLegacy[stage] ?? [];
+  const setConsRows = (stage: string, rows: ConsRow[]) => setConsDraft(d => ({ ...d, [stage]: rows }));
+
+  const mappingDirty = Object.keys(mapDraft).length + Object.keys(consDraft).length > 0;
 
   const saveMapping = () => {
     if (!mapJc) return;
-    const merged: Record<string, string> = { ...(stageMapByJc[mapJc] || {}), ...mapDraft };
-    Object.keys(merged).forEach(k => { if (!merged[k]) delete merged[k]; });
+    const mergedProd: Record<string, string> = { ...(stageMapByJc[mapJc] || {}), ...mapDraft };
+    Object.keys(mergedProd).forEach(k => { if (!mergedProd[k]) delete mergedProd[k]; });
+    const mergedCons: Record<string, ConsRow[]> = { ...(consMapByJc[mapJc] || {}), ...consDraft };
+    Object.keys(mergedCons).forEach(k => {
+      mergedCons[k] = (mergedCons[k] || []).filter(r => r.itemId && r.qtyPerUnit > 0);
+      if (!mergedCons[k].length) delete mergedCons[k];
+    });
     setDB(d => ({
       ...d,
-      settings: { ...d.settings, sfgStageItemsByJc: { ...(d.settings.sfgStageItemsByJc || {}), [mapJc]: merged } },
+      settings: {
+        ...d.settings,
+        sfgStageItemsByJc: { ...(d.settings.sfgStageItemsByJc || {}), [mapJc]: mergedProd },
+        sfgConsumptionMapByJc: { ...(d.settings.sfgConsumptionMapByJc || {}), [mapJc]: mergedCons },
+      },
     }));
-    log(`Updated SFG stage-item mapping for ${mapJcObj?.number || mapJc}`, "Production SFG");
-    setMapDraft({});
+    log(`Updated SFG stage mapping for ${mapJcObj?.number || mapJc}`, "Production SFG");
+    setMapDraft({}); setConsDraft({});
   };
 
   const autoCreateItem = (stage: string) => {
@@ -104,21 +119,6 @@ export function ProductionSFG() {
     setDB(d => ({ ...d, items: [...d.items, item] }));
     log(`Created SFG item ${name}`, "Production SFG");
     setMapDraft(m => ({ ...m, [stage]: item.id }));
-  };
-
-  const openConsEditor = (stage: string) => {
-    setConsStage(stage);
-    setConsDraft((consMap[stage] || []).map(r => ({ ...r })));
-  };
-
-  const saveConsMapping = () => {
-    const cleaned = consDraft.filter(r => r.itemId && r.qtyPerUnit > 0);
-    setDB(d => ({
-      ...d,
-      settings: { ...d.settings, sfgConsumptionMap: { ...(d.settings.sfgConsumptionMap || {}), [consStage]: cleaned } },
-    }));
-    log(`Updated SFG consumption map for ${consStage} (${cleaned.length} inputs)`, "Production SFG");
-    setConsStage(""); setConsDraft([]);
   };
 
   const runManualConsume = () => {
@@ -161,14 +161,14 @@ export function ProductionSFG() {
           <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-3 flex-wrap">
             <div>
               <h3 className="font-semibold">Stage → SFG Item Mapping (Job Card-wise)</h3>
-              <p className="text-xs text-slate-500">Select a job card, then map each of its production stages to an SFG item. Production entries create SFG stock against that job card only.</p>
+              <p className="text-xs text-slate-500">Select a job card, then for each stage set the SFG it produces and the SFGs it consumes (with qty per unit). Entries create stock against this job card only.</p>
             </div>
-            <Button onClick={saveMapping} disabled={!mapJc || !Object.keys(mapDraft).length} data-testid="save-stage-mapping">Save Mapping</Button>
+            <Button onClick={saveMapping} disabled={!mapJc || !mappingDirty} data-testid="save-stage-mapping">Save Mapping</Button>
           </div>
           <div className="p-4 border-b border-slate-100 dark:border-slate-800">
             <div className="max-w-xl">
               <Label className="text-[10px]">Job Card</Label>
-              <Select value={mapJc} onChange={(e: any) => { setMapJc(e.target.value); setMapDraft({}); }} data-testid="map-jc-picker">
+              <Select value={mapJc} onChange={(e: any) => { setMapJc(e.target.value); setMapDraft({}); setConsDraft({}); }} data-testid="map-jc-picker">
                 <option value="">Select job card…</option>
                 {db.jobCards.map(j => <option key={j.id} value={j.id}>{j.number} · {j.product} ({j.status})</option>)}
               </Select>
@@ -179,7 +179,7 @@ export function ProductionSFG() {
                 {Object.entries(stageMapByJc).filter(([, m]) => Object.values(m || {}).some(Boolean)).map(([jcId, m]) => {
                   const jc = db.jobCards.find(j => j.id === jcId);
                   return (
-                    <button key={jcId} type="button" onClick={() => { setMapJc(jcId); setMapDraft({}); }}
+                    <button key={jcId} type="button" onClick={() => { setMapJc(jcId); setMapDraft({}); setConsDraft({}); }}
                       className="px-2 py-1 rounded-md border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 hover:border-indigo-400"
                       data-testid={`map-jc-chip-${(jc?.number || jcId).replace(/[^A-Za-z0-9]/g, "-")}`}>
                       {jc?.number || jcId} · {Object.values(m).filter(Boolean).length} stage{Object.values(m).filter(Boolean).length > 1 ? "s" : ""}
@@ -191,22 +191,52 @@ export function ProductionSFG() {
           </div>
           {mapJcObj ? (
             <Table>
-              <thead><tr><Th>Production Stage</Th><Th>Status</Th><Th>SFG Item (Semi-Finished)</Th><Th className="text-right">Action</Th></tr></thead>
+              <thead><tr>
+                <Th>Production Stage</Th><Th>Status</Th><Th>SFG Produced</Th><Th>SFG Consumed (per 1 unit produced)</Th>
+              </tr></thead>
               <tbody>
                 {mapJcStages.map(stage => {
                   const st = (mapJcObj.stages || []).find(s => s.stage === stage);
+                  const slug = stage.replace(/\s+/g, "-").toLowerCase();
+                  const consRows = getConsRows(stage);
                   return (
-                    <tr key={stage} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                    <tr key={stage} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 align-top">
                       <Td className="font-medium">{stage}</Td>
                       <Td><Badge color={st?.status === "done" ? "green" : st?.status === "in-progress" ? "yellow" : "red"}>{st?.status || "pending"}</Badge></Td>
                       <Td>
-                        <Select value={getMapVal(stage)} onChange={(e: any) => setMapDraft(m => ({ ...m, [stage]: e.target.value }))} data-testid={`map-stage-${stage.replace(/\s+/g, "-").toLowerCase()}`}>
-                          <option value="">— Not mapped —</option>
-                          {sfgItems.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
-                        </Select>
+                        <div className="flex items-center gap-1.5 min-w-56">
+                          <Select value={getMapVal(stage)} onChange={(e: any) => setMapDraft(m => ({ ...m, [stage]: e.target.value }))} data-testid={`map-stage-${slug}`}>
+                            <option value="">— Not mapped —</option>
+                            {sfgItems.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+                          </Select>
+                          <button type="button" onClick={() => autoCreateItem(stage)} title="Auto-create SFG item for this stage"
+                            className="shrink-0 text-[10px] font-semibold text-indigo-600 hover:underline whitespace-nowrap"
+                            data-testid={`auto-create-${slug}`}>+ New</button>
+                        </div>
                       </Td>
-                      <Td className="text-right">
-                        <Button variant="outline" onClick={() => autoCreateItem(stage)} data-testid={`auto-create-${stage.replace(/\s+/g, "-").toLowerCase()}`}>Auto-create Item</Button>
+                      <Td>
+                        <div className="space-y-1.5 min-w-72" data-testid={`cons-cell-${slug}`}>
+                          {consRows.map((row, idx) => (
+                            <div key={idx} className="flex items-center gap-1.5">
+                              <span className="flex-1 text-xs font-medium truncate">{itemById(row.itemId)?.name || "—"}</span>
+                              <Input type="number" className="!w-20 !py-1 text-xs" value={row.qtyPerUnit || ""} placeholder="Qty"
+                                onChange={(e: any) => setConsRows(stage, consRows.map((r, i) => i === idx ? { ...r, qtyPerUnit: Number(e.target.value) } : r))}
+                                data-testid={`cons-qty-${slug}-${idx}`} />
+                              <button type="button" onClick={() => setConsRows(stage, consRows.filter((_, i) => i !== idx))}
+                                className="text-slate-400 hover:text-rose-600" title="Remove input"
+                                data-testid={`cons-remove-${slug}-${idx}`}><IconX size={13}/></button>
+                            </div>
+                          ))}
+                          <Select value="" onChange={(e: any) => {
+                            const v = e.target.value;
+                            if (v) setConsRows(stage, [...consRows, { itemId: v, qtyPerUnit: 1 }]);
+                          }} data-testid={`cons-add-${slug}`}>
+                            <option value="">+ Add SFG consumed…</option>
+                            {sfgItems.filter(i => !consRows.some(r => r.itemId === i.id)).map(i => (
+                              <option key={i.id} value={i.id}>{i.name} (avail {fmt2(batchAvailableByItem.get(i.id) || 0)})</option>
+                            ))}
+                          </Select>
+                        </div>
                       </Td>
                     </tr>
                   );
@@ -214,72 +244,7 @@ export function ProductionSFG() {
               </tbody>
             </Table>
           ) : (
-            <div className="p-4"><Empty title="Select a job card to configure its stage mappings" subtitle="Each job card can have its own Stage → SFG item mapping" /></div>
-          )}
-        </Card>
-      )}
-
-      {canEdit && (
-        <Card>
-          <div className="p-4 border-b border-slate-100 dark:border-slate-800">
-            <h3 className="font-semibold">SFG Consumption Mapping</h3>
-            <p className="text-xs text-slate-500">Inputs auto-consumed when a production entry is logged at the output stage. Supports single or multiple SFG inputs (e.g. LV Winding SFG + HV Winding SFG + Core SFG → Assembly). Same job card's stock is used first.</p>
-          </div>
-          <Table>
-            <thead><tr><Th>Output Stage</Th><Th>Consumes (per 1 unit produced)</Th><Th className="text-right">Action</Th></tr></thead>
-            <tbody>
-              {stages.filter(s => (consMap[s] || []).length > 0).map(stage => (
-                <tr key={stage} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                  <Td className="font-medium">{stage}</Td>
-                  <Td>
-                    <div className="flex flex-wrap gap-1.5">
-                      {(consMap[stage] || []).map((r, idx) => (
-                        <Badge key={idx} color="blue">{itemById(r.itemId)?.name || "?"} × {r.qtyPerUnit}</Badge>
-                      ))}
-                    </div>
-                  </Td>
-                  <Td className="text-right"><Button variant="outline" onClick={() => openConsEditor(stage)} data-testid={`edit-cons-${stage.replace(/\s+/g, "-").toLowerCase()}`}>Edit</Button></Td>
-                </tr>
-              ))}
-              {stages.every(s => !(consMap[s] || []).length) && (
-                <tr><Td colSpan={3}><Empty title="No consumption mappings yet" subtitle="Pick a stage below to define its SFG inputs" /></Td></tr>
-              )}
-            </tbody>
-          </Table>
-          <div className="p-4 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-end gap-2">
-            <div className="w-56">
-              <Label className="text-[10px]">Output Stage</Label>
-              <Select value={consStage} onChange={(e: any) => e.target.value ? openConsEditor(e.target.value) : setConsStage("")} data-testid="cons-stage-picker">
-                <option value="">Select stage to configure…</option>
-                {stages.map(s => <option key={s} value={s}>{s}</option>)}
-              </Select>
-            </div>
-          </div>
-          {consStage && (
-            <div className="p-4 border-t border-slate-100 dark:border-slate-800 space-y-3" data-testid="cons-editor">
-              <div className="text-sm font-semibold">Inputs for <span className="text-indigo-600">{consStage}</span> (consumed per 1 unit produced)</div>
-              {consDraft.map((row, idx) => (
-                <div key={idx} className="flex flex-wrap items-end gap-2">
-                  <div className="flex-1 min-w-52">
-                    <Label className="text-[10px]">Input SFG Item</Label>
-                    <Select value={row.itemId} onChange={(e: any) => setConsDraft(d => d.map((r, i) => i === idx ? { ...r, itemId: e.target.value } : r))} data-testid={`cons-input-item-${idx}`}>
-                      <option value="">Select SFG item…</option>
-                      {sfgItems.map(i => <option key={i.id} value={i.id}>{i.name} (avail {fmt2(batchAvailableByItem.get(i.id) || 0)})</option>)}
-                    </Select>
-                  </div>
-                  <div className="w-28">
-                    <Label className="text-[10px]">Qty / Unit</Label>
-                    <Input type="number" value={row.qtyPerUnit || ""} onChange={(e: any) => setConsDraft(d => d.map((r, i) => i === idx ? { ...r, qtyPerUnit: Number(e.target.value) } : r))} data-testid={`cons-input-qty-${idx}`} />
-                  </div>
-                  <Button variant="outline" onClick={() => setConsDraft(d => d.filter((_, i) => i !== idx))} data-testid={`cons-input-remove-${idx}`}><IconTrash size={14}/></Button>
-                </div>
-              ))}
-              <div className="flex gap-2">
-                <Button variant="outline" onClick={() => setConsDraft(d => [...d, { itemId: "", qtyPerUnit: 1 }])} data-testid="cons-add-input"><IconPlus size={14}/> Add Input</Button>
-                <Button onClick={saveConsMapping} data-testid="cons-save">Save Consumption Map</Button>
-                <Button variant="outline" onClick={() => { setConsStage(""); setConsDraft([]); }}>Cancel</Button>
-              </div>
-            </div>
+            <div className="p-4"><Empty title="Select a job card to configure its stage mappings" subtitle="Each job card can have its own Stage → SFG produce/consume mapping" /></div>
           )}
         </Card>
       )}
