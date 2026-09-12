@@ -506,6 +506,7 @@ export function ProductionDashboard() {
     }
   }, [entryOpen, enabledStages, entryStage]);
   const entryTotalQty = selectedJob?.stageQuantities?.find(row => row.stage === entryStage)?.totalQty || selectedJob?.qty || 0;
+  const mappedSfgItem = selectedJob ? db.items.find(i => i.id === db.settings.sfgStageItemsByJc?.[selectedJob.id]?.[entryStage]) : undefined;
   const previousCompleted = selectedJob ? db.productionEntries.filter(e => e.jobCardId === selectedJob.id && e.stage === entryStage).reduce((s, e) => s + e.todayQty, 0) : 0;
   const balanceQty = selectedJob ? Math.max(0, entryTotalQty - previousCompleted) : 0;
   const projectedBalanceQty = selectedJob ? Math.max(0, entryTotalQty - previousCompleted - entryQty) : 0;
@@ -726,6 +727,11 @@ export function ProductionDashboard() {
             )}
           </div>
           <div><Label>Product Name</Label><Input value={selectedJob?.product || ""} disabled /></div>
+          <div>
+            <Label>Semi-Finished Product (Auto-Mapped)</Label>
+            <Input value={mappedSfgItem ? mappedSfgItem.name : "— Not mapped for this JC + Stage —"} disabled data-testid="prod-entry-sfg-item" />
+            {mappedSfgItem && <div className="text-[10px] text-emerald-600 mt-1">Saving will add Today Qty to this SFG's stock under {selectedJob?.number}</div>}
+          </div>
           <div><Label>Total {entryStage} Quantity</Label><Input type="number" value={entryTotalQty} disabled /></div>
           <div><Label>Previously Completed Quantity</Label><Input value={previousCompleted} disabled /></div>
           <div><Label>Today {entryStage} Quantity</Label><Input type="number" value={entryQty} max={balanceQty} onChange={(e: any) => setEntryQtySafe(Number(e.target.value))} /></div>

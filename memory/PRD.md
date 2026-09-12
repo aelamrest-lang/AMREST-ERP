@@ -58,3 +58,5 @@ Cloud-based Transformer Manufacturing ERP & CRM with modules for Sales CRM, Quot
 
 - UPDATE (2026-09-12): SFG mapping table merged — single JC-wise table with columns Production Stage | Status | SFG Produced | SFG Consumed (multi-add + qty per unit, remove ×). Separate "SFG Consumption Mapping" card removed. Consumption map now stored per JC in `settings.sfgConsumptionMapByJc[jobCardId][stage]`; auto-consumption falls back to legacy global `sfgConsumptionMap` when a JC has no per-JC map. One "Save Mapping" persists both maps.
 
+- UPDATE (2026-09-12): Daily Production Entry modal now shows "Semi-Finished Product (Auto-Mapped)" — auto-fetched from `sfgStageItemsByJc[jobCardId][stage]`, read-only, with green hint that saving adds Today Qty to that SFG's stock under the same JC. data-testid: prod-entry-sfg-item. Save flow already increments SFG stock via applySfgProduction (no change needed).
+
