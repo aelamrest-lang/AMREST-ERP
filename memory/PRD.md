@@ -45,3 +45,12 @@ Cloud-based Transformer Manufacturing ERP & CRM with modules for Sales CRM, Quot
 
 ## Notes
 - The console hydration warning `<span> cannot be a child of <option>` from the raw-material `<datalist>` in Costings is dev-mode only (ve-dynamic wrapper). No functional impact; can be silenced later.
+
+## Session Updates (2026-09-12)
+- DONE: Production Stage Details KPI rework — Total Qty (JC stage target), Previously Completed, Balance Qty (auto), Total Amount cards in `/app/frontend/src/pages/Production.tsx` Stage Details modal.
+- DONE: Inventory valuation logic — RM Avg Unit Cost = mean of latest 3 GRN purchase rates (fallback Item Master rate); FG valued at latest Item Master `saleRate`; applied to column, valuation, KPI, sorting, CSV export (`/app/frontend/src/pages/Inventory.tsx`).
+- DONE: New "Production SFG" page (`/app/frontend/src/pages/ProductionSFG.tsx`, route id `sfg`): stage→SFG item mapping with auto-create item; consumption mapping (N SFGs → 1 stage, configurable qty/unit); auto SFG batch creation + stock increment on production entry; auto-consumption FIFO (same job card first, then others) + manual "Consume SFG" modal; stock table (SFG/Used/Available qty, JC, stage, date); full produced+consumed history ledger; JC-wise consumption drill-down modal on Used Qty. Shared logic in `/app/frontend/src/lib/sfg.ts`; types `SfgBatch`/`SfgConsumption` + `settings.sfgStageItems`/`sfgConsumptionMap`; persistence via whole-DB save.
+- DONE: Data-loss guard — pending DB save flushes on beforeunload/visibilitychange (`saveRemoteDBFinal` with keepalive in `/app/frontend/src/lib/api.ts`, wired in store.tsx).
+- User decision: SFG mapping stays global; consumption is same-JC-first with cross-JC fallback; stock table unchanged (no JC grouping).
+- Testing: testing_agent iteration_5.json — 100% pass (mappings, auto production, auto+manual consumption, history, inventory sync, persistence).
+

@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useState, useCallback, useRef, Re
 import type { DB, User, ActivityLog } from "./types";
 import { defaultDocumentFormats, seedDB } from "./seed";
 import { defaultPermissionsForRole, normalizePermissions } from "./permissions";
-import { apiLogin, fetchRemoteDB, saveRemoteDB, fetchRemoteVersion, getToken, setToken } from "./api";
+import { apiLogin, fetchRemoteDB, saveRemoteDB, saveRemoteDBFinal, fetchRemoteVersion, getToken, setToken } from "./api";
 
 const SESSION_KEY = "amrest_erp_session";
 const THEME_KEY = "amrest_theme";
@@ -69,6 +69,8 @@ function migrateDB(db: DB): DB {
     ctCostings: db.ctCostings || [],
     materialIssues: db.materialIssues || [],
     productionEntries: db.productionEntries || [],
+    sfgBatches: db.sfgBatches || [],
+    sfgConsumptions: db.sfgConsumptions || [],
     operators: db.operators || [],
     serials: db.serials || [],
     qcTests: db.qcTests || [],
@@ -201,6 +203,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setSyncError(err?.message || "Save failed");
       }
     }, 400);
+  }, []);
+
+  useEffect(() => {
+    const flush = () => {
+      const p = pendingSave.current;
+      if (!p) return;
+      pendingSave.current = null;
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveRemoteDBFinal(p);
+    };
+    const onVis = () => { if (document.visibilityState === "hidden") flush(); };
+    window.addEventListener("beforeunload", flush);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.removeEventListener("beforeunload", flush);
+      document.removeEventListener("visibilitychange", onVis);
+    };
   }, []);
 
   const setDB = useCallback((updater: (db: DB) => DB) => {

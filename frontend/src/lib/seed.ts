@@ -132,6 +132,8 @@ export function seedDB(): DB {
     jobCards: [],
     challans: [],
     productionEntries: [],
+    sfgBatches: [],
+    sfgConsumptions: [],
     operators: [],
     serials: [],
     qcTests: [],

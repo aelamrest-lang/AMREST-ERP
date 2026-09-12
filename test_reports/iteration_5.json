@@ -1,0 +1,34 @@
+{
+  "summary": "End-to-end frontend testing of the new 'Production SFG' feature completed successfully on the preview URL. Logged in as admin/admin123. On the SFG page: (1) Auto-created LV Winding SFG, HV Winding SFG, and Core Coil Assembly SFG via the 'Auto-create Item' buttons; each dropdown correctly displayed the new SFG item as the selected value; Save Mapping persisted and 'Mapped Stages' KPI updated to 3. (2) Configured SFG Consumption Mapping for output stage 'Core Coil Assembly' with two inputs: LV Winding SFG x 1 and HV Winding SFG x 1; badges rendered correctly in the mapping table. (3) On Production page, logged 3 entries on JC-2026-008 (11 kV Pilfer Metering Cubicle): LV Winding qty 2 (operator Jeetu), HV Winding qty 2, Core Coil Assembly qty 1. (4) On Production SFG page: three SFG stock rows appeared with correct Date=2026-09-12, JC=JC-2026-008, Stage, SFG Item; LV SFG Qty=2 Used=1 Avail=1; HV SFG Qty=2 Used=1 Avail=1 (auto-consumed by CCA); CCA SFG Qty=1 Used=0 Avail=1. KPIs: SFG Produced=5, Available=3, Consumed=2. (5) History tab showed 3 'Produced' rows and 2 'Consumed' rows with mode 'Auto', correct output stage 'Core Coil Assembly', JC numbers, dates and detail strings '→ Core Coil Assembly (JC-2026-008 ...)'. (6) Manual consumption: opening 'Consume SFG' modal, selecting LV Winding SFG with qty=999 and stage Tanking shows validation error 'Only 1.00 available for this SFG' via data-testid mc-error — validation works. Submitting a valid qty=1 to stage Tanking succeeded; Used Qty on LV batch rose to 2 (Fully Consumed), a history row with mode 'Manual' appeared, and KPI Consumed went to 3, Available to 2. (7) Persistence: after reload+re-login, mappings, batches, history and KPIs are intact (backend whole-DB persistence works, but only after the 400ms save-debounce flushes — see minor issue below). (8) Main Inventory page (via search): LV Winding SFG shows Current Stock 0.00 Nos (2 produced - 1 auto - 1 manual = 0) and HV Winding SFG shows Current Stock 1.00 Nos, Available 1.00 — currentStock is correctly kept in sync with SFG batches by applySfgProduction and consumeSfgItems. All acceptance criteria from the review request are met.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Production SFG — Stage Mapping & Consumption tables", "issues": [
+        "Dev-mode console spam: repeated 'Encountered two children with the same key' warnings whenever the mapping table renders — likely because sfgStages(db) can return duplicate stage names when a job card stage name matches DEFAULT_SFG_STAGES (the Set-based dedup is fine, but React key={stage} collides if two rendered lists show the same stage in the same table due to ve-dynamic wrapper). Not functionally broken but pollutes console.",
+        "Hydration warning '<span> cannot be a child of <option>' — same as previous iteration; caused by the dev-mode ve-dynamic wrappers on <option> children (in Select components). Not new to this feature."
+      ]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Consider a beforeunload guard or a shorter debounce (or flush-on-visibility-change) — currently persistRemote debounces 400ms so a page-reload within 400ms of an action can lose data. Reproduced accidentally the first attempt (mapping saved only LV) when I reloaded immediately.",
+    "Investigate duplicate-key React warnings in mapping/consumption tables (likely stage names appearing twice in sfgStages() output for edge cases where user added a job-card stage identical in text but different casing/spacing).",
+    "Consider disabling the manual 'Consume SFG' button when there are no SFG items with available stock (currently the modal opens with an empty item list)."
+  ],
+  "critical_code_review_comments": [
+    "ProductionSFG.tsx `runManualConsume` does client-side validation `mcQty > avail` but backend has no such check (all logic is client-side). Fine for now since DB is a single JSON blob, but if backend gains any validation later, replicate.",
+    "sfg.ts `consumeSfgItems` on shortage still writes partial consumptions and returns shortages via alert. Consider surfacing shortages inline in a toast instead of window.alert (Production.tsx line 556 also uses alert).",
+    "Production.tsx line 557: `if (db.settings.sfgStageItems?.[entryStage])` references the CLOSED-OVER stale `db` (not `next`) — logging works because value doesn't change during this call, but it's a subtle staleness pattern.",
+    "store.tsx persistRemote 400ms debounce could lose data on rapid reload; consider `navigator.sendBeacon` on `visibilitychange`/`beforeunload` to flush pendingSave."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (frontend-only per request)", "frontend": "100%"},
+  "test_credentials": "admin / admin123 (verified).",
+  "seed_data_creation": "Created 3 Semi-Finished items via Auto-create: 'LV Winding SFG', 'HV Winding SFG', 'Core Coil Assembly SFG'. Configured settings.sfgStageItems for 3 stages and settings.sfgConsumptionMap for 'Core Coil Assembly'. Logged 3 production entries on JC-2026-008 (LV=2, HV=2, CCA=1). Created 2 SfgConsumption records (auto) and 1 (manual, LV Winding SFG × 1 → Tanking).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "All new data-testids in the review request are present and working: production-sfg-page, save-stage-mapping, auto-create-<stage-slug>, cons-stage-picker, cons-add-input, cons-input-item-<idx>, cons-input-qty-<idx>, cons-save, tab-stock, tab-history, open-manual-consume, mc-item/qty/stage/jc/submit/error, sfg-batch-<id>. Login inputs use placeholders 'Enter username'/'Enter password' (no name/id attrs). Sidebar items render as <button role='button'>. Debounced persist is 400ms — always wait >=2s after clicking Save/Consume before reloading. Job Card select options include a leading dash-space (e.g. 'JC-2026-008 - 11 kV ...'), so match with startsWith('JC-2026-008'). The Select component for SFG input items includes '(avail X)' suffix in the option text, so use JS `Array.from(opts).find(o => o.text.startsWith(name))` to locate them. Print window opens after 'Save Production Entry'; close via context.pages loop.",
+  "rca of the issue": "No product bugs found. False alarm during test: on the first reload attempt the Mapped Stages KPI dropped from 3 to 1 after reload — root cause was that I reloaded within ~1s of Save, before the 400ms debounced persistRemote had flushed (and the first setDB call had already flushed with only LV). Rerun with a >2s wait after Save Mapping/Save Consumption reliably persisted all changes."
+}

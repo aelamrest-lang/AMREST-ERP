@@ -284,6 +284,36 @@ export interface ProductionEntry {
   }>;
 }
 
+export interface SfgBatch {
+  id: string;
+  itemId: string;
+  jobCardId: string;
+  jobCardNumber: string;
+  stage: ProductionStage;
+  qtyProduced: number;
+  qtyUsed: number;
+  date: string;
+  entryId?: string;
+  createdAt: string;
+}
+
+export interface SfgConsumption {
+  id: string;
+  date: string;
+  itemId: string;
+  batchId: string;
+  qty: number;
+  sourceJobCardId: string;
+  sourceJobCardNumber: string;
+  outputStage: string;
+  outputJobCardId?: string;
+  outputJobCardNumber?: string;
+  mode: "auto" | "manual";
+  remarks?: string;
+  createdAt: string;
+}
+
+
 export interface Operator {
   id: string;
   name: string;
@@ -483,6 +513,8 @@ export interface CompanySettings {
   documentFormats?: DocumentFormat[];
   expectedSales?: Record<string, number>; // key: "YYYY-MM" → ₹ expected sales for that month
   stagePrices?: Record<string, number>; // key: ProductionStage → ₹ per unit
+  sfgStageItems?: Record<string, string>; // key: ProductionStage → SFG item id produced by that stage
+  sfgConsumptionMap?: Record<string, { itemId: string; qtyPerUnit: number }[]>; // key: output ProductionStage → SFG inputs consumed per unit
   stageDays?: Record<string, number>; // key: ProductionStage → working days per stage (Mfg Time Calculator, legacy)
   stageCapacity?: Record<string, number>; // key: MfgStage → daily output (Nos/day) for Mfg Time Calculator
   rawMaterialProcurementDays?: number; // editable RM procurement window (days)
@@ -555,6 +587,8 @@ export interface DB {
   jobCards: JobCard[];
   challans: DeliveryChallan[];
   productionEntries: ProductionEntry[];
+  sfgBatches: SfgBatch[];
+  sfgConsumptions: SfgConsumption[];
   operators: Operator[];
   serials: SerialRecord[];
   qcTests: QCTestRecord[];

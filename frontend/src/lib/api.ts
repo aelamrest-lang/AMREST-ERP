@@ -66,6 +66,16 @@ export async function saveRemoteDB(dbState: DB): Promise<void> {
   });
 }
 
+export function saveRemoteDBFinal(dbState: DB): void {
+  const token = getToken();
+  fetch(`${API}/erp/state`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify({ data: dbState }),
+    keepalive: true,
+  }).catch(() => {});
+}
+
 export async function fetchRemoteVersion(): Promise<number> {
   const res = await request("/erp/version");
   return res?.version ?? 0;

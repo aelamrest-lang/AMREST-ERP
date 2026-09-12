@@ -14,6 +14,7 @@ import { Inventory } from "./pages/Inventory";
 import { RawMaterialIssue } from "./pages/RawMaterialIssue";
 import { BOMPage } from "./pages/BOM";
 import { JobCards, ProductionDashboard } from "./pages/Production";
+import { ProductionSFG } from "./pages/ProductionSFG";
 import { OperatorsPage } from "./pages/Operators";
 import { ManufacturingTime } from "./pages/ManufacturingTime";
 import { ManufacturingCost } from "./pages/ManufacturingCost";
@@ -80,6 +81,7 @@ function Shell() {
       {effective === "bom" && <BOMPage />}
       {effective === "jobcards" && <JobCards />}
       {effective === "production" && <ProductionDashboard />}
+      {effective === "sfg" && <ProductionSFG />}
       {effective === "operators" && <OperatorsPage />}
       {effective === "mfgtime" && <ManufacturingTime />}
       {effective === "mfgcost" && <ManufacturingCost />}

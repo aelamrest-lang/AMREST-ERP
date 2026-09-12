@@ -3,7 +3,7 @@ import type { ModulePermission, PermissionAction, PermissionMatrix, Role, User }
 export type RouteId =
   | "dashboard" | "leads" | "parties" | "items" | "costing" | "quotations" | "proformas" | "salesorders"
   | "purchase" | "grn" | "inventory" | "rawissue" | "bom" | "jobcards" | "production" | "testing" | "challans"
-  | "operators" | "mfgtime" | "mfgcost" | "pnl" | "psreport"
+  | "operators" | "mfgtime" | "mfgcost" | "pnl" | "psreport" | "sfg"
   | "reports" | "taxdash" | "users" | "settings" | "docformats" | "logs" | "profile";
 
 export const permissionActions: PermissionAction[] = ["view", "create", "edit", "delete", "approve", "print", "export"];
@@ -29,6 +29,7 @@ export const moduleLabels: Record<RouteId, string> = {
   operators: "Operators & Ledger",
   mfgtime: "Manufacturing Time",
   mfgcost: "Manufacturing Cost",
+  sfg: "Production SFG",
   pnl: "Monthly P&L",
   psreport: "Monthly P&S Report",
   reports: "Reports",
@@ -43,7 +44,7 @@ export const moduleLabels: Record<RouteId, string> = {
 export const permissionModules: RouteId[] = [
   "dashboard", "leads", "parties", "items", "costing", "quotations", "proformas", "salesorders",
   "purchase", "grn", "inventory", "rawissue", "bom", "jobcards", "production", "testing", "challans",
-  "operators", "mfgtime", "mfgcost", "pnl", "psreport",
+  "operators", "mfgtime", "mfgcost", "pnl", "psreport", "sfg",
   "reports", "taxdash", "users", "settings", "docformats", "logs", "profile",
 ];
 
@@ -97,6 +98,7 @@ export function defaultPermissionsForRole(role: Role): PermissionMatrix {
     grant(p, "jobcards", ["view", "create", "edit", "delete", "print", "export"]);
     grant(p, "rawissue", ["view", "create", "edit", "print", "export"]);
     grant(p, "production", ["view", "edit", "print", "export"]);
+    grant(p, "sfg", ["view", "create", "edit", "export"]);
     grant(p, "testing", ["view", "create", "edit", "approve", "print", "export"]);
     grant(p, "inventory", ["view", "export"]);
     grant(p, "operators", ["view", "create", "edit", "delete", "export"]);
@@ -120,6 +122,7 @@ export function defaultPermissionsForRole(role: Role): PermissionMatrix {
   if (role === "store") {
     grant(p, "items", ["view", "create", "edit", "delete", "export"]);
     grant(p, "inventory", ["view", "create", "edit", "export"]);
+    grant(p, "sfg", ["view", "export"]);
     grant(p, "rawissue", ["view", "create", "edit", "print", "export"]);
     grant(p, "grn", ["view", "create", "edit", "print", "export"]);
     grant(p, "jobcards", ["view", "edit", "print", "export"]);

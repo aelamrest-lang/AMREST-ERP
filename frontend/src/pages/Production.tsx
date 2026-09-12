@@ -5,6 +5,7 @@ import type { DB, JobCard, ProductionEntry, ProductionStage, QCTestRecord, Seria
 import { IconPlus, IconEdit, IconTrash, IconFactory, IconCheck, IconPrint } from "../components/icons";
 import { fmtINR, nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
 import { userCan } from "../lib/permissions";
+import { applySfgProduction, applySfgAutoConsumption } from "../lib/sfg";
 
 const STAGES: ProductionStage[] = ["LV Winding", "HV Winding", "Primary Winding", "Secondary Winding 1", "Secondary Winding 2", "Secondary Winding 3", "Core Coil Assembly", "Tanking", "Finishing", "Testing Ready", "Dispatch Ready"];
 const STAGE_MULTIPLIERS: Record<string, number> = {
@@ -531,18 +532,29 @@ export function ProductionDashboard() {
       operatorName, operatorId, shift, machineName, priceEach: Number(priceEach) || 0,
       status: previousCompleted + qty >= entryTotalQty ? "Completed" : "Running", remarks, createdAt: new Date().toISOString(),
     };
-    setDB(d => ({
-      ...d,
-      productionEntries: [entry, ...d.productionEntries],
-      jobCards: d.jobCards.map(j => {
-        if (j.id !== selectedJob.id) return j;
-        const stageTotal = previousCompleted + qty;
-        const stages = j.stages.map(s => s.stage === entryStage ? { ...s, status: stageTotal >= entryTotalQty ? "done" as const : "in-progress" as const, date: todayISO(), worker: operatorName } : s);
-        const complete = stages.every(s => s.status === "done");
-        return { ...j, stages, status: complete ? "Completed" as const : "In Progress" as const };
-      }),
-      serials: d.serials.map(s => s.jobCardId === selectedJob.id && entryStage === "Dispatch Ready" ? { ...s, productionStatus: "Completed" as const } : s.jobCardId === selectedJob.id ? { ...s, productionStatus: "In Production" as const } : s),
-    }));
+    let sfgShortages: string[] = [];
+    setDB(d => {
+      let next: DB = {
+        ...d,
+        productionEntries: [entry, ...d.productionEntries],
+        jobCards: d.jobCards.map(j => {
+          if (j.id !== selectedJob.id) return j;
+          const stageTotal = previousCompleted + qty;
+          const stages = j.stages.map(s => s.stage === entryStage ? { ...s, status: stageTotal >= entryTotalQty ? "done" as const : "in-progress" as const, date: todayISO(), worker: operatorName } : s);
+          const complete = stages.every(s => s.status === "done");
+          return { ...j, stages, status: complete ? "Completed" as const : "In Progress" as const };
+        }),
+        serials: d.serials.map(s => s.jobCardId === selectedJob.id && entryStage === "Dispatch Ready" ? { ...s, productionStatus: "Completed" as const } : s.jobCardId === selectedJob.id ? { ...s, productionStatus: "In Production" as const } : s),
+      };
+      const prodUpd = applySfgProduction(next, { jobCardId: selectedJob.id, jobCardNumber: selectedJob.number, stage: entryStage, qty, entryId: entry.id });
+      next = { ...next, ...prodUpd };
+      const cons = applySfgAutoConsumption(next, { stage: entryStage, qty, jobCardId: selectedJob.id, jobCardNumber: selectedJob.number });
+      next = { ...next, ...cons.updates };
+      sfgShortages = cons.shortages;
+      return next;
+    });
+    if (sfgShortages.length) alert("SFG shortage — consumed partially:\n" + sfgShortages.join("\n"));
+    if (db.settings.sfgStageItems?.[entryStage]) log(`SFG produced: ${db.items.find(i => i.id === db.settings.sfgStageItems?.[entryStage])?.name || entryStage} × ${qty} (${selectedJob.number})`, "Production SFG");
     log(`Production entry ${selectedJob.number} ${entryStage}: ${qty}`, "Production");
     printProductionEntry(entry);
     setEntryQty(0); setOperatorId(""); setPriceEach(0); setMachineName(""); setRemarks(""); setEntryWarning(""); setEntryOpen(false);
