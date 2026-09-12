@@ -60,3 +60,5 @@ Cloud-based Transformer Manufacturing ERP & CRM with modules for Sales CRM, Quot
 
 - UPDATE (2026-09-12): Daily Production Entry modal now shows "Semi-Finished Product (Auto-Mapped)" — auto-fetched from `sfgStageItemsByJc[jobCardId][stage]`, read-only, with green hint that saving adds Today Qty to that SFG's stock under the same JC. data-testid: prod-entry-sfg-item. Save flow already increments SFG stock via applySfgProduction (no change needed).
 
+- UPDATE (2026-09-12): SFG stage mapping now shows ONLY user-selected stages per JC. Flow: Select JC → "Add Production Stage" dropdown (lists JC's unmapped stages) → map Produced + Consumed → Save. Rows removable via × per row (clears both mappings on save). Selecting a JC pre-loads its already-mapped stages. TestIDs: map-add-stage, stage-remove-<slug>.
+

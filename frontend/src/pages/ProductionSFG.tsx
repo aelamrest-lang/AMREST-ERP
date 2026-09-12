@@ -19,6 +19,7 @@ export function ProductionSFG() {
   const [mapJc, setMapJc] = useState("");
   const [mapDraft, setMapDraft] = useState<Record<string, string>>({});
   const [consDraft, setConsDraft] = useState<Record<string, ConsRow[]>>({});
+  const [addedStages, setAddedStages] = useState<string[]>([]);
   const [mcItem, setMcItem] = useState("");
   const [mcQty, setMcQty] = useState(0);
   const [mcStage, setMcStage] = useState("");
@@ -82,6 +83,24 @@ export function ProductionSFG() {
   const getMapVal = (stage: string) => mapDraft[stage] ?? stageMapByJc[mapJc]?.[stage] ?? "";
   const getConsRows = (stage: string): ConsRow[] => consDraft[stage] ?? consMapByJc[mapJc]?.[stage] ?? consMapLegacy[stage] ?? [];
   const setConsRows = (stage: string, rows: ConsRow[]) => setConsDraft(d => ({ ...d, [stage]: rows }));
+
+  const selectMapJc = (jcId: string) => {
+    setMapJc(jcId); setMapDraft({}); setConsDraft({});
+    const keys = new Set<string>();
+    Object.entries(stageMapByJc[jcId] || {}).forEach(([s, v]) => { if (v) keys.add(s); });
+    Object.entries(consMapByJc[jcId] || {}).forEach(([s, v]) => { if ((v || []).length) keys.add(s); });
+    setAddedStages([...keys]);
+  };
+
+  const addStageRow = (stage: string) => {
+    if (stage && !addedStages.includes(stage)) setAddedStages(a => [...a, stage]);
+  };
+
+  const removeStageRow = (stage: string) => {
+    setAddedStages(a => a.filter(s => s !== stage));
+    setMapDraft(m => ({ ...m, [stage]: "" }));
+    setConsDraft(d => ({ ...d, [stage]: [] }));
+  };
 
   const mappingDirty = Object.keys(mapDraft).length + Object.keys(consDraft).length > 0;
 
@@ -168,7 +187,7 @@ export function ProductionSFG() {
           <div className="p-4 border-b border-slate-100 dark:border-slate-800">
             <div className="max-w-xl">
               <Label className="text-[10px]">Job Card</Label>
-              <Select value={mapJc} onChange={(e: any) => { setMapJc(e.target.value); setMapDraft({}); setConsDraft({}); }} data-testid="map-jc-picker">
+              <Select value={mapJc} onChange={(e: any) => selectMapJc(e.target.value)} data-testid="map-jc-picker">
                 <option value="">Select job card…</option>
                 {db.jobCards.map(j => <option key={j.id} value={j.id}>{j.number} · {j.product} ({j.status})</option>)}
               </Select>
@@ -179,7 +198,7 @@ export function ProductionSFG() {
                 {Object.entries(stageMapByJc).filter(([, m]) => Object.values(m || {}).some(Boolean)).map(([jcId, m]) => {
                   const jc = db.jobCards.find(j => j.id === jcId);
                   return (
-                    <button key={jcId} type="button" onClick={() => { setMapJc(jcId); setMapDraft({}); setConsDraft({}); }}
+                    <button key={jcId} type="button" onClick={() => selectMapJc(jcId)}
                       className="px-2 py-1 rounded-md border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 hover:border-indigo-400"
                       data-testid={`map-jc-chip-${(jc?.number || jcId).replace(/[^A-Za-z0-9]/g, "-")}`}>
                       {jc?.number || jcId} · {Object.values(m).filter(Boolean).length} stage{Object.values(m).filter(Boolean).length > 1 ? "s" : ""}
@@ -190,59 +209,80 @@ export function ProductionSFG() {
             )}
           </div>
           {mapJcObj ? (
-            <Table>
-              <thead><tr>
-                <Th>Production Stage</Th><Th>Status</Th><Th>SFG Produced</Th><Th>SFG Consumed (per 1 unit produced)</Th>
-              </tr></thead>
-              <tbody>
-                {mapJcStages.map(stage => {
-                  const st = (mapJcObj.stages || []).find(s => s.stage === stage);
-                  const slug = stage.replace(/\s+/g, "-").toLowerCase();
-                  const consRows = getConsRows(stage);
-                  return (
-                    <tr key={stage} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 align-top">
-                      <Td className="font-medium">{stage}</Td>
-                      <Td><Badge color={st?.status === "done" ? "green" : st?.status === "in-progress" ? "yellow" : "red"}>{st?.status || "pending"}</Badge></Td>
-                      <Td>
-                        <div className="flex items-center gap-1.5 min-w-56">
-                          <Select value={getMapVal(stage)} onChange={(e: any) => setMapDraft(m => ({ ...m, [stage]: e.target.value }))} data-testid={`map-stage-${slug}`}>
-                            <option value="">— Not mapped —</option>
-                            {sfgItems.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
-                          </Select>
-                          <button type="button" onClick={() => autoCreateItem(stage)} title="Auto-create SFG item for this stage"
-                            className="shrink-0 text-[10px] font-semibold text-indigo-600 hover:underline whitespace-nowrap"
-                            data-testid={`auto-create-${slug}`}>+ New</button>
-                        </div>
-                      </Td>
-                      <Td>
-                        <div className="space-y-1.5 min-w-72" data-testid={`cons-cell-${slug}`}>
-                          {consRows.map((row, idx) => (
-                            <div key={idx} className="flex items-center gap-1.5">
-                              <span className="flex-1 text-xs font-medium truncate">{itemById(row.itemId)?.name || "—"}</span>
-                              <Input type="number" className="!w-20 !py-1 text-xs" value={row.qtyPerUnit || ""} placeholder="Qty"
-                                onChange={(e: any) => setConsRows(stage, consRows.map((r, i) => i === idx ? { ...r, qtyPerUnit: Number(e.target.value) } : r))}
-                                data-testid={`cons-qty-${slug}-${idx}`} />
-                              <button type="button" onClick={() => setConsRows(stage, consRows.filter((_, i) => i !== idx))}
-                                className="text-slate-400 hover:text-rose-600" title="Remove input"
-                                data-testid={`cons-remove-${slug}-${idx}`}><IconX size={13}/></button>
-                            </div>
-                          ))}
-                          <Select value="" onChange={(e: any) => {
-                            const v = e.target.value;
-                            if (v) setConsRows(stage, [...consRows, { itemId: v, qtyPerUnit: 1 }]);
-                          }} data-testid={`cons-add-${slug}`}>
-                            <option value="">+ Add SFG consumed…</option>
-                            {sfgItems.filter(i => !consRows.some(r => r.itemId === i.id)).map(i => (
-                              <option key={i.id} value={i.id}>{i.name} (avail {fmt2(batchAvailableByItem.get(i.id) || 0)})</option>
+            <>
+              <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex flex-wrap items-end gap-3">
+                <div className="w-72">
+                  <Label className="text-[10px]">Add Production Stage</Label>
+                  <Select value="" onChange={(e: any) => addStageRow(e.target.value)} data-testid="map-add-stage">
+                    <option value="">+ Select stage to map…</option>
+                    {mapJcStages.filter(s => !addedStages.includes(s)).map(s => <option key={s} value={s}>{s}</option>)}
+                  </Select>
+                </div>
+                <div className="text-[11px] text-slate-500 pb-2">Only the stages you add are mapped — add or remove anytime.</div>
+              </div>
+              <Table>
+                <thead><tr>
+                  <Th>Production Stage</Th><Th>Status</Th><Th>SFG Produced</Th><Th>SFG Consumed (per 1 unit produced)</Th>
+                </tr></thead>
+                <tbody>
+                  {addedStages.map(stage => {
+                    const st = (mapJcObj.stages || []).find(s => s.stage === stage);
+                    const slug = stage.replace(/\s+/g, "-").toLowerCase();
+                    const consRows = getConsRows(stage);
+                    return (
+                      <tr key={stage} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 align-top">
+                        <Td className="font-medium">
+                          <div className="flex items-center gap-2">
+                            <button type="button" onClick={() => removeStageRow(stage)} title="Remove this stage from mapping"
+                              className="text-slate-400 hover:text-rose-600 shrink-0" data-testid={`stage-remove-${slug}`}><IconX size={14}/></button>
+                            {stage}
+                          </div>
+                        </Td>
+                        <Td><Badge color={st?.status === "done" ? "green" : st?.status === "in-progress" ? "yellow" : "red"}>{st?.status || "pending"}</Badge></Td>
+                        <Td>
+                          <div className="flex items-center gap-1.5 min-w-56">
+                            <Select value={getMapVal(stage)} onChange={(e: any) => setMapDraft(m => ({ ...m, [stage]: e.target.value }))} data-testid={`map-stage-${slug}`}>
+                              <option value="">— Not mapped —</option>
+                              {sfgItems.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+                            </Select>
+                            <button type="button" onClick={() => autoCreateItem(stage)} title="Auto-create SFG item for this stage"
+                              className="shrink-0 text-[10px] font-semibold text-indigo-600 hover:underline whitespace-nowrap"
+                              data-testid={`auto-create-${slug}`}>+ New</button>
+                          </div>
+                        </Td>
+                        <Td>
+                          <div className="space-y-1.5 min-w-72" data-testid={`cons-cell-${slug}`}>
+                            {consRows.map((row, idx) => (
+                              <div key={idx} className="flex items-center gap-1.5">
+                                <span className="flex-1 text-xs font-medium truncate">{itemById(row.itemId)?.name || "—"}</span>
+                                <Input type="number" className="!w-20 !py-1 text-xs" value={row.qtyPerUnit || ""} placeholder="Qty"
+                                  onChange={(e: any) => setConsRows(stage, consRows.map((r, i) => i === idx ? { ...r, qtyPerUnit: Number(e.target.value) } : r))}
+                                  data-testid={`cons-qty-${slug}-${idx}`} />
+                                <button type="button" onClick={() => setConsRows(stage, consRows.filter((_, i) => i !== idx))}
+                                  className="text-slate-400 hover:text-rose-600" title="Remove input"
+                                  data-testid={`cons-remove-${slug}-${idx}`}><IconX size={13}/></button>
+                              </div>
                             ))}
-                          </Select>
-                        </div>
-                      </Td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </Table>
+                            <Select value="" onChange={(e: any) => {
+                              const v = e.target.value;
+                              if (v) setConsRows(stage, [...consRows, { itemId: v, qtyPerUnit: 1 }]);
+                            }} data-testid={`cons-add-${slug}`}>
+                              <option value="">+ Add SFG consumed…</option>
+                              {sfgItems.filter(i => !consRows.some(r => r.itemId === i.id)).map(i => (
+                                <option key={i.id} value={i.id}>{i.name} (avail {fmt2(batchAvailableByItem.get(i.id) || 0)})</option>
+                              ))}
+                            </Select>
+                          </div>
+                        </Td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </Table>
+              {addedStages.length === 0 && (
+                <div className="p-4"><Empty title="No stages selected" subtitle="Use the dropdown above to add the production stages you want to map for this job card" /></div>
+              )}
+            </>
           ) : (
             <div className="p-4"><Empty title="Select a job card to configure its stage mappings" subtitle="Each job card can have its own Stage → SFG produce/consume mapping" /></div>
           )}
