@@ -23,6 +23,7 @@ function OperatorsMaster() {
   const [edit, setEdit] = useState<Operator | null>(null);
   const blank: Operator = { id: "", name: "", department: "", stages: [], defaultRate: 0, active: true, createdAt: new Date().toISOString() };
   const [form, setForm] = useState<Operator>(blank);
+  const stageMaster: string[] = db.settings.productionStages?.length ? db.settings.productionStages : PRODUCTION_STAGES;
 
   const toggleStage = (stage: ProductionStage) => {
     setForm(f => {
@@ -31,7 +32,7 @@ function OperatorsMaster() {
     });
   };
   const toggleAllStages = () => {
-    setForm(f => ({ ...f, stages: (f.stages || []).length === PRODUCTION_STAGES.length ? [] : [...PRODUCTION_STAGES] }));
+    setForm(f => ({ ...f, stages: (f.stages || []).length === stageMaster.length ? [] : [...stageMaster] }));
   };
 
   const list = useMemo(() => {
@@ -140,11 +141,11 @@ function OperatorsMaster() {
                 className="text-xs text-indigo-600 hover:underline"
                 data-testid="operator-toggle-all-stages"
               >
-                {(form.stages || []).length === PRODUCTION_STAGES.length ? "Clear all" : "Select all"}
+                {(form.stages || []).length === stageMaster.length ? "Clear all" : "Select all"}
               </button>
             </div>
             <div className="grid sm:grid-cols-3 gap-2 rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-slate-50 dark:bg-slate-800/30">
-              {PRODUCTION_STAGES.map(stage => {
+              {stageMaster.map(stage => {
                 const checked = (form.stages || []).includes(stage);
                 return (
                   <label key={stage} className="flex items-center gap-2 text-sm cursor-pointer">

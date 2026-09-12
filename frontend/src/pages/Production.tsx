@@ -66,6 +66,110 @@ export function JobCards() {
   const [open, setOpen] = useState(false);
   const [edit, setEdit] = useState<JobCard | null>(null);
   const [selectedStages, setSelectedStages] = useState<string[]>([]);
+  const isAdmin = currentUser?.role === "admin";
+  const stageMaster: string[] = db.settings.productionStages?.length ? db.settings.productionStages : STAGES;
+  const [stageModal, setStageModal] = useState<{ mode: "create" | "edit" | "delete"; stage?: string } | null>(null);
+  const [stageName, setStageName] = useState("");
+
+  const renameKeyRec = <T,>(rec: Record<string, T> | undefined, oldN: string, newN: string): Record<string, T> | undefined => {
+    if (!rec || !(oldN in rec)) return rec;
+    const out: Record<string, T> = {};
+    Object.entries(rec).forEach(([k, v]) => { out[k === oldN ? newN : k] = v; });
+    return out;
+  };
+
+  const stageHasTransactions = (stage: string) =>
+    db.productionEntries.some(e => e.stage === stage) ||
+    db.jobCards.some(j => (j.stages || []).some(s => s.stage === stage && (s.status !== "pending" || s.worker))) ||
+    (db.sfgBatches || []).some(b => b.stage === stage) ||
+    (db.sfgConsumptions || []).some(c => c.outputStage === stage);
+
+  const createStage = () => {
+    const name = stageName.trim();
+    if (!name) return;
+    if (stageMaster.some(s => s.toLowerCase() === name.toLowerCase())) return alert("A stage with this name already exists");
+    setDB(d => ({ ...d, settings: { ...d.settings, productionStages: [...stageMaster, name] } }));
+    log(`Created production stage ${name}`, "Job Card");
+    setStageModal(null); setStageName("");
+  };
+
+  const renameStage = () => {
+    const oldN = stageModal?.stage || "";
+    const newN = stageName.trim();
+    if (!newN || newN === oldN) { setStageModal(null); return; }
+    if (stageMaster.some(s => s !== oldN && s.toLowerCase() === newN.toLowerCase())) return alert("Another stage with this name already exists");
+    setDB(d => ({
+      ...d,
+      settings: {
+        ...d.settings,
+        productionStages: stageMaster.map(s => s === oldN ? newN : s),
+        stagePrices: renameKeyRec(d.settings.stagePrices, oldN, newN),
+        stageDays: renameKeyRec(d.settings.stageDays, oldN, newN),
+        stageCapacity: renameKeyRec(d.settings.stageCapacity, oldN, newN),
+        sfgStageItems: renameKeyRec(d.settings.sfgStageItems, oldN, newN),
+        sfgConsumptionMap: renameKeyRec(d.settings.sfgConsumptionMap, oldN, newN),
+        sfgStageItemsByJc: d.settings.sfgStageItemsByJc ? Object.fromEntries(Object.entries(d.settings.sfgStageItemsByJc).map(([k, v]) => [k, renameKeyRec(v, oldN, newN)!])) : d.settings.sfgStageItemsByJc,
+        sfgConsumptionMapByJc: d.settings.sfgConsumptionMapByJc ? Object.fromEntries(Object.entries(d.settings.sfgConsumptionMapByJc).map(([k, v]) => [k, renameKeyRec(v, oldN, newN)!])) : d.settings.sfgConsumptionMapByJc,
+      },
+      jobCards: d.jobCards.map(j => ({
+        ...j,
+        stages: (j.stages || []).map(s => s.stage === oldN ? { ...s, stage: newN } : s),
+        stageQuantities: (j.stageQuantities || []).map(sq => sq.stage === oldN ? { ...sq, stage: newN } : sq),
+        stagePrices: renameKeyRec(j.stagePrices, oldN, newN),
+      })),
+      productionEntries: d.productionEntries.map(e => e.stage === oldN ? { ...e, stage: newN } : e),
+      sfgBatches: (d.sfgBatches || []).map(b => b.stage === oldN ? { ...b, stage: newN } : b),
+      sfgConsumptions: (d.sfgConsumptions || []).map(c => c.outputStage === oldN ? { ...c, outputStage: newN } : c),
+      operators: (d.operators || []).map(o => ({ ...o, stages: (o.stages || []).map(s => s === oldN ? newN : s) })),
+    }));
+    setSelectedStages(prev => prev.map(s => s === oldN ? newN : s));
+    setForm(f => ({
+      ...f,
+      stageQuantities: (f.stageQuantities || []).map(sq => sq.stage === oldN ? { ...sq, stage: newN } : sq),
+      stages: (f.stages || []).map(s => s.stage === oldN ? { ...s, stage: newN } : s),
+    }));
+    log(`Renamed production stage ${oldN} → ${newN}`, "Job Card");
+    setStageModal(null); setStageName("");
+  };
+
+  const deleteStage = () => {
+    const stage = stageModal?.stage || "";
+    if (!stage || stageHasTransactions(stage)) return;
+    const rmKey = <T,>(rec: Record<string, T> | undefined): Record<string, T> | undefined => {
+      if (!rec) return rec;
+      const out = { ...rec };
+      delete out[stage];
+      return out;
+    };
+    setDB(d => ({
+      ...d,
+      settings: {
+        ...d.settings,
+        productionStages: stageMaster.filter(s => s !== stage),
+        stagePrices: rmKey(d.settings.stagePrices),
+        stageDays: rmKey(d.settings.stageDays),
+        stageCapacity: rmKey(d.settings.stageCapacity),
+        sfgStageItems: rmKey(d.settings.sfgStageItems),
+        sfgConsumptionMap: rmKey(d.settings.sfgConsumptionMap),
+        sfgStageItemsByJc: d.settings.sfgStageItemsByJc ? Object.fromEntries(Object.entries(d.settings.sfgStageItemsByJc).map(([k, v]) => [k, rmKey(v)!])) : d.settings.sfgStageItemsByJc,
+        sfgConsumptionMapByJc: d.settings.sfgConsumptionMapByJc ? Object.fromEntries(Object.entries(d.settings.sfgConsumptionMapByJc).map(([k, v]) => [k, rmKey(v)!])) : d.settings.sfgConsumptionMapByJc,
+      },
+      jobCards: d.jobCards.map(j => ({
+        ...j,
+        stages: (j.stages || []).filter(s => s.stage !== stage),
+        stageQuantities: (j.stageQuantities || []).filter(sq => sq.stage !== stage),
+      })),
+      operators: (d.operators || []).map(o => ({ ...o, stages: (o.stages || []).filter(s => s !== stage) })),
+    }));
+    setSelectedStages(prev => prev.filter(s => s !== stage));
+    setForm(f => ({
+      ...f,
+      stageQuantities: (f.stageQuantities || []).filter(sq => sq.stage !== stage),
+      stages: (f.stages || []).filter(s => s.stage !== stage),
+    }));
+    log(`Deleted production stage ${stage}`, "Job Card");
+    setStageModal(null);
+  };
 
   const defaultStageQuantities = (qty: number) => STAGES.map(stage => ({
     stage,
@@ -74,8 +178,8 @@ export function JobCards() {
   }));
 
   const orderedSelectedStages = () => {
-    const inKnown = STAGES.filter(s => selectedStages.includes(s));
-    const custom = selectedStages.filter(s => !STAGES.includes(s));
+    const inKnown = stageMaster.filter(s => selectedStages.includes(s));
+    const custom = selectedStages.filter(s => !stageMaster.includes(s));
     return [...inKnown, ...custom];
   };
 
@@ -394,9 +498,19 @@ export function JobCards() {
         </div>
 
         <div className="mt-4">
-          <h4 className="font-semibold text-sm mb-2">Select Production Stages</h4>
+          <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
+            <h4 className="font-semibold text-sm">Select Production Stages</h4>
+            {isAdmin && (
+              <div className="flex gap-2">
+                <Button size="sm" variant="outline" onClick={() => { setStageName(""); setStageModal({ mode: "create" }); }} data-testid="stage-create-btn"><IconPlus size={12}/> Create Stage</Button>
+                <Button size="sm" variant="outline" disabled={!selectedStages.length} onClick={() => { const s = selectedStages[selectedStages.length - 1]; setStageName(s); setStageModal({ mode: "edit", stage: s }); }} data-testid="stage-edit-btn"><IconEdit size={12}/> Edit Stage</Button>
+                <Button size="sm" variant="outline" disabled={!selectedStages.length} onClick={() => { const s = selectedStages[selectedStages.length - 1]; setStageModal({ mode: "delete", stage: s }); }} data-testid="stage-delete-btn"><IconTrash size={12}/> Delete Stage</Button>
+              </div>
+            )}
+          </div>
+          {isAdmin && <p className="text-[10px] text-slate-500 mb-2">Tip: select a stage pill below, then use Edit/Delete to manage it. Edit renames the stage everywhere (job cards, entries, SFG mappings).</p>}
           <div className="flex flex-wrap gap-2 mb-3" data-testid="jc-stage-selector">
-            {STAGES.map(stage => {
+            {stageMaster.map(stage => {
               const on = selectedStages.includes(stage);
               return (
                 <button
@@ -446,7 +560,31 @@ export function JobCards() {
           <p className="mt-2 text-xs text-slate-500">Only selected stages appear in Daily Production Entry and Production SFG mapping. Total Stage Qty = Job Qty x Stage Multiplier. Enter <b>Price / Unit</b> to auto-fill Price Each on Production Entries; new Job Cards for the same product auto-inherit these prices.</p>
         </div>
 
-        <div className="mt-5 flex justify-end gap-2"><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={save}>{edit ? "Update" : "Create & Reserve Stock"}</Button></div>
+        <div className="mt-5 flex justify-end gap-2"><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={save} data-testid="jc-save-btn">{edit ? "Update" : "Create & Reserve Stock"}</Button></div>
+      </Modal>
+
+      <Modal open={!!stageModal} onClose={() => setStageModal(null)} title={stageModal?.mode === "create" ? "Create Production Stage" : stageModal?.mode === "edit" ? `Edit Stage — ${stageModal.stage}` : `Delete Stage — ${stageModal?.stage}`} size="sm">
+        {stageModal && (
+          <div className="space-y-3" data-testid="stage-manage-modal">
+            {stageModal.mode !== "delete" ? (
+              <div><Label>Stage Name</Label><Input value={stageName} onChange={(e: any) => setStageName(e.target.value)} placeholder="e.g. Oil Filling" data-testid="stage-name-input" /></div>
+            ) : (
+              stageHasTransactions(stageModal.stage || "") ? (
+                <div className="rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-3 py-2 text-sm text-amber-800 dark:text-amber-200" data-testid="stage-delete-warning">
+                  <b>{stageModal.stage}</b> has production transactions (entries, worked job cards or SFG records) and cannot be deleted. You can rename it instead.
+                </div>
+              ) : (
+                <div className="text-sm text-slate-600 dark:text-slate-300">Delete stage <b>{stageModal.stage}</b>? It will be removed from the stage master, all job cards and SFG mappings. This cannot be undone.</div>
+              )
+            )}
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-700">
+              <Button variant="outline" onClick={() => setStageModal(null)}>Cancel</Button>
+              {stageModal.mode === "create" && <Button onClick={createStage} data-testid="stage-create-save">Create</Button>}
+              {stageModal.mode === "edit" && <Button onClick={renameStage} data-testid="stage-edit-save">Save</Button>}
+              {stageModal.mode === "delete" && !stageHasTransactions(stageModal.stage || "") && <Button onClick={deleteStage} data-testid="stage-delete-confirm">Delete</Button>}
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );
@@ -525,21 +663,19 @@ export function ProductionDashboard() {
 
   const inProg = db.jobCards.filter(j => j.status !== "Completed");
   const completed = db.jobCards.filter(j => j.status === "Completed").length;
+  const stageMaster: string[] = db.settings.productionStages?.length ? db.settings.productionStages : STAGES;
 
-  const stageCounts = STAGES.map(s => ({
+  const stageCounts = stageMaster.map(s => ({
     label: s.replace(" / ", " ").split(" ")[0],
     count: db.jobCards.reduce((acc, j) => acc + j.stages.filter(x => x.stage === s && x.status === "in-progress").length, 0),
   }));
 
   const selectedJob = db.jobCards.find(j => j.id === entryJobId) || db.jobCards[0];
   const enabledStages = useMemo(() => {
-    if (!selectedJob) return STAGES;
-    if (!selectedJob.stageQuantities || selectedJob.stageQuantities.length === 0) return STAGES;
-    return STAGES.filter(s => {
-      const sq = selectedJob.stageQuantities?.find(row => row.stage === s);
-      return (sq?.multiplier ?? 0) > 0;
-    });
-  }, [selectedJob]);
+    if (!selectedJob) return stageMaster;
+    if (!selectedJob.stageQuantities || selectedJob.stageQuantities.length === 0) return stageMaster;
+    return selectedJob.stageQuantities.filter(row => (row.multiplier ?? 0) > 0).map(row => row.stage);
+  }, [selectedJob, stageMaster]);
   // Auto-correct entryStage when it's not enabled for the current job
   useEffect(() => {
     if (!entryOpen) return;
@@ -682,7 +818,7 @@ export function ProductionDashboard() {
             )}
           </div>
           <div className="mt-3 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2">
-            {STAGES.map(s => {
+            {stageMaster.map(s => {
               const price = (db.settings.stagePrices || {})[s] || 0;
               return (
                 <div key={s} className="rounded-lg border border-slate-200 dark:border-slate-700 p-2 bg-slate-50 dark:bg-slate-800/40" data-testid={`stage-price-tile-${s}`}>
@@ -764,7 +900,7 @@ export function ProductionDashboard() {
                 ? enabledStages.map(s => <option key={s} value={s}>{s}</option>)
                 : <option value="">— No stages enabled in Job Card —</option>}
             </Select>
-            {enabledStages.length < STAGES.length && selectedJob && (
+            {enabledStages.length < stageMaster.length && selectedJob && (
               <div className="text-[10px] text-slate-500 mt-1">Showing only stages enabled in this Job Card.</div>
             )}
           </div>
@@ -819,7 +955,7 @@ export function ProductionDashboard() {
         <div className="space-y-3 text-sm">
           <p className="text-xs text-slate-500">Enter a fixed rate (₹ per unit) for each production stage. When you create a Production Entry for a stage, its price auto-fills from here.</p>
           <div className="grid sm:grid-cols-2 gap-3">
-            {STAGES.map(s => (
+            {stageMaster.map(s => (
               <div key={s}>
                 <Label>{s}</Label>
                 <Input
@@ -833,7 +969,7 @@ export function ProductionDashboard() {
             ))}
           </div>
           <div className="pt-3 border-t border-slate-200 dark:border-slate-700 flex justify-between items-center">
-            <Button variant="ghost" onClick={() => setStagePriceDraft(Object.fromEntries(STAGES.map(s => [s, 0])))} data-testid="stage-prices-reset">Reset All to 0</Button>
+            <Button variant="ghost" onClick={() => setStagePriceDraft(Object.fromEntries(stageMaster.map(s => [s, 0])))} data-testid="stage-prices-reset">Reset All to 0</Button>
             <div className="flex gap-2">
               <Button variant="outline" onClick={() => setStagePricesOpen(false)}>Cancel</Button>
               <Button

@@ -8,7 +8,8 @@ export const DEFAULT_SFG_STAGES = [
 ];
 
 export function sfgStages(db: DB): string[] {
-  const set = new Set<string>(DEFAULT_SFG_STAGES);
+  const master = db.settings.productionStages?.length ? db.settings.productionStages : DEFAULT_SFG_STAGES;
+  const set = new Set<string>(master);
   const seen = new Set([...set].map(s => s.toLowerCase()));
   const add = (s: string) => {
     const t = (s || "").trim();
