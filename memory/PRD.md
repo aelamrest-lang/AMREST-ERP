@@ -78,3 +78,5 @@ Cloud-based Transformer Manufacturing ERP & CRM with modules for Sales CRM, Quot
 
 - UPDATE (2026-09-29): Central stock sync fix. Root cause: Inventory's "Current Stock" column re-added job-card holds (currentStock + hold) while Item Master showed currentStock. Now Inventory Current Stock = central `item.currentStock` (holds already deducted at JC reservation); banner updated to "Single Central Stock Active". Added idempotency guard in applySfgProduction (same entryId never double-adds stock). Added admin "Sync Stock" button in Inventory (testid: sync-stock-btn) — recomputes SFG item stock from the SFG ledger (opening + produced − used) and fixes mismatches. Verified: Core 61x83x32 shows 1107.00 on both pages.
 
+- VERIFY (2026-09-29): Re-confirmed Inventory Current Stock == Item Master Stock on preview (Core 61x83x30 = 2369.00 both; Core 61x83x32 = 1107.00 both). User likely saw old build on production (erp.crmamrest.com) — production redeploy needed for the fix to appear there.
+
