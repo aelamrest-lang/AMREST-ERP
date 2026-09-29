@@ -76,3 +76,5 @@ Cloud-based Transformer Manufacturing ERP & CRM with modules for Sales CRM, Quot
 
 - UPDATE (2026-09-29): New GRN item table now shows PO Rate column — Item | PO Qty | Rate | Already Received | Balance | Receive Now | Status. Rate is read-only, pulled from the selected PO line (`oi.rate`, approved price) with "as per PO" caption. TestID: grn-rate-<itemId>. Verified on PO-2026-119 (₹230.00).
 
+- UPDATE (2026-09-29): Central stock sync fix. Root cause: Inventory's "Current Stock" column re-added job-card holds (currentStock + hold) while Item Master showed currentStock. Now Inventory Current Stock = central `item.currentStock` (holds already deducted at JC reservation); banner updated to "Single Central Stock Active". Added idempotency guard in applySfgProduction (same entryId never double-adds stock). Added admin "Sync Stock" button in Inventory (testid: sync-stock-btn) — recomputes SFG item stock from the SFG ledger (opening + produced − used) and fixes mismatches. Verified: Core 61x83x32 shows 1107.00 on both pages.
+

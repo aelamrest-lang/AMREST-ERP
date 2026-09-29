@@ -26,6 +26,7 @@ export function sfgAvailable(b: SfgBatch) { return Math.max(0, b.qtyProduced - b
 export function applySfgProduction(d: DB, args: { jobCardId: string; jobCardNumber: string; stage: string; qty: number; entryId?: string; date?: string }): Partial<DB> {
   const itemId = d.settings.sfgStageItemsByJc?.[args.jobCardId]?.[args.stage];
   if (!itemId || args.qty <= 0) return {};
+  if (args.entryId && (d.sfgBatches || []).some(b => b.entryId === args.entryId)) return {}; // idempotent — never double-add stock for the same entry
   const batch: SfgBatch = {
     id: uid(), itemId, jobCardId: args.jobCardId, jobCardNumber: args.jobCardNumber,
     stage: args.stage, qtyProduced: args.qty, qtyUsed: 0, date: args.date || todayISO(), entryId: args.entryId,

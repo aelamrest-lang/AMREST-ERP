@@ -90,7 +90,7 @@ export function Inventory() {
     const rows = items.map(item => {
       const hold = heldByItem.get(item.id) || 0;
       const available = item.currentStock;
-      const totalStock = item.currentStock + hold;
+      const totalStock = item.currentStock; // single central stock value — identical to Item Master; holds are already deducted at reservation
       const status = available < 0 ? "Over-Committed" : available <= item.minStock ? "Below Buffer" : available <= item.reorderLevel ? "Reorder Soon" : "Healthy";
       return { item, hold, available, totalStock, status };
     });
@@ -143,8 +143,24 @@ export function Inventory() {
     ]);
   };
 
-  const downloadUploadTemplate = () => {
-    downloadCSV("inventory-upload-template.csv", [
+  const reconcileSfgStock = () => {
+    let fixed = 0;
+    setDB(d => {
+      const net: Record<string, number> = {};
+      (d.sfgBatches || []).forEach(b => { net[b.itemId] = (net[b.itemId] || 0) + (b.qtyProduced - b.qtyUsed); });
+      const items = d.items.map(i => {
+        if (i.category !== "Semi-Finished" || !(i.id in net)) return i;
+        const expected = (i.openingStock || 0) + net[i.id];
+        if (Math.abs((i.currentStock || 0) - expected) > 1e-9) { fixed++; return { ...i, currentStock: expected }; }
+        return i;
+      });
+      return { ...d, items };
+    });
+    log("Reconciled SFG stock with SFG ledger", "Inventory");
+    setUploadMessage(fixed ? `Fixed stock for ${fixed} SFG item(s) to match the SFG ledger.` : "All stock values already in sync.");
+  };
+
+  const downloadUploadTemplate = () => {    downloadCSV("inventory-upload-template.csv", [
       ["Item Name", "Current Stock", "Purchase Rate", "Minimum Stock", "Reorder Level"],
       ...db.items.map(i => [i.name, i.currentStock, i.purchaseRate, i.minStock, i.reorderLevel]),
     ]);
@@ -246,14 +262,15 @@ export function Inventory() {
             </label>
           )}
           {canExport && <Button variant="outline" onClick={exportCSV}><IconDownload size={14}/> Export</Button>}
+          {canUpload && <Button variant="outline" onClick={reconcileSfgStock} title="Recompute SFG item stock from the SFG production/consumption ledger and fix any mismatch" data-testid="sync-stock-btn"><IconRefresh size={14}/> Sync Stock</Button>}
         </div>
         {canUpload && uploadMessage && <div className="px-4 py-2 text-xs border-b border-slate-100 dark:border-slate-800 text-slate-600 dark:text-slate-300">{uploadMessage}</div>}
         <div className="px-4 py-3 border-b border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/20 flex items-center justify-between gap-3 flex-wrap text-sm">
           <div>
-            <div className="font-semibold text-amber-800 dark:text-amber-300">Stock Reservation Engine Active</div>
-            <div className="text-xs text-amber-700 dark:text-amber-400">Available Stock = Current Stock - Hold (Job Card)</div>
+            <div className="font-semibold text-amber-800 dark:text-amber-300">Single Central Stock Active</div>
+            <div className="text-xs text-amber-700 dark:text-amber-400">Current Stock is the same central quantity shown in Item Master — Job Card holds are already deducted from it</div>
           </div>
-          <div className="font-mono text-xs text-amber-800 dark:text-amber-300">Current Stock - Hold (Job Card) = Available</div>
+          <div className="font-mono text-xs text-amber-800 dark:text-amber-300">Item Master = Inventory = Current Stock</div>
         </div>
         <Table>
           <thead><tr>
