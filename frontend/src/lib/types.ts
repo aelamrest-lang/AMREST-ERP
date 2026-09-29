@@ -320,6 +320,7 @@ export interface Operator {
   department?: string;
   stages?: ProductionStage[];
   defaultRate?: number;
+  stageRates?: Record<string, number>; // key: ProductionStage → ₹ per unit for this operator at that stage
   active: boolean;
   createdAt: string;
 }

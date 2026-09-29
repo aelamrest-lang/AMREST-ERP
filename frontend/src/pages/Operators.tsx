@@ -144,21 +144,41 @@ function OperatorsMaster() {
                 {(form.stages || []).length === stageMaster.length ? "Clear all" : "Select all"}
               </button>
             </div>
-            <div className="grid sm:grid-cols-3 gap-2 rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-slate-50 dark:bg-slate-800/30">
-              {stageMaster.map(stage => {
-                const checked = (form.stages || []).includes(stage);
-                return (
-                  <label key={stage} className="flex items-center gap-2 text-sm cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => toggleStage(stage)}
-                      data-testid={`operator-stage-${stage.replace(/\s+/g, "-").toLowerCase()}`}
-                    />
-                    <span>{stage}</span>
-                  </label>
-                );
-              })}
+            <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-slate-50 dark:bg-slate-800/30">
+              <div className="grid grid-cols-[1fr_auto] sm:grid-cols-[1fr_auto_1fr_auto] gap-x-6 gap-y-2 items-center">
+                {stageMaster.map(stage => {
+                  const checked = (form.stages || []).includes(stage);
+                  const slug = stage.replace(/\s+/g, "-").toLowerCase();
+                  return (
+                    <div key={stage} className="contents">
+                      <label className="flex items-center gap-2 text-sm cursor-pointer min-w-0">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleStage(stage)}
+                          data-testid={`operator-stage-${slug}`}
+                        />
+                        <span className="truncate">{stage}</span>
+                      </label>
+                      <span className="w-28">
+                        {checked && (
+                          <Input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            className="!py-1 text-xs"
+                            placeholder="₹ / unit"
+                            value={form.stageRates?.[stage] ?? ""}
+                            onChange={(e: any) => setForm({ ...form, stageRates: { ...(form.stageRates || {}), [stage]: Number(e.target.value) || 0 } })}
+                            data-testid={`operator-stage-rate-${slug}`}
+                          />
+                        )}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="text-[10px] text-slate-500 mt-2">Rate / Unit applies when this operator works that stage — it auto-fills Price Each in Daily Production Entry. Blank falls back to Default Rate.</div>
             </div>
             {(form.stages || []).length === 0 && (
               <div className="text-xs text-amber-600 mt-1">Pick at least one stage — the operator will only appear in the dropdown for those stages.</div>

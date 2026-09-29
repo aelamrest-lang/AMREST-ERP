@@ -70,3 +70,5 @@ Cloud-based Transformer Manufacturing ERP & CRM with modules for Sales CRM, Quot
 
 - UPDATE (2026-09-29): Daily Production Entry now has mandatory Production Date at top (Today | Yesterday | Select Date pills; default Today; custom limited to last 7 days via min/max + save validation). Saved date flows into entry.date, JC stage completion date, SFG batch date and SFG consumption date (applySfgProduction/consumeSfgItems accept `date` arg), so reports/operator ledger/history all use it. TestIDs: entry-date-today/yesterday/custom, entry-date-picker, entry-date-preview, open-daily-entry.
 
+- UPDATE (2026-09-29): Stage-wise operator pricing. `Operator.stageRates?: Record<stage, ₹/unit>`; Operators form shows a Rate/Unit input next to each checked stage (blank → falls back to Default Rate). Daily Production Entry auto-fills Price Each with priority: operator stage rate → JC stage price → company stage price (fires on both stage change and operator select). Operator Cost = qty × stage-wise rate via entry.priceEach (flows to ledger/cost reports). TestIDs: operator-stage-rate-<slug>.
+

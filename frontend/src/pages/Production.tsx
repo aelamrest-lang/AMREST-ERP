@@ -920,12 +920,14 @@ export function ProductionDashboard() {
                 setEntryStage(newStage);
                 setEntryQty(0);
                 setOperatorId("");
-                // Prefer JC-level stage price, then company-level Stage Prices master
+                // Operator stage-wise rate wins, then JC-level stage price, then company-level Stage Prices master
+                const op = db.operators.find(o => o.id === operatorId);
+                const opRate = op?.stageRates?.[newStage];
                 const currentJc = db.jobCards.find(j => j.id === entryJobId);
                 const jcPrice = (currentJc?.stagePrices || {})[newStage];
                 const settingsPrice = (db.settings.stagePrices || {})[newStage];
-                const priceToUse = (typeof jcPrice === "number" && jcPrice > 0)
-                  ? jcPrice
+                const priceToUse = (typeof opRate === "number" && opRate > 0) ? opRate
+                  : (typeof jcPrice === "number" && jcPrice > 0) ? jcPrice
                   : (typeof settingsPrice === "number" && settingsPrice > 0) ? settingsPrice : 0;
                 if (priceToUse > 0) setPriceEach(priceToUse);
               }}
@@ -972,7 +974,11 @@ export function ProductionDashboard() {
                 const id = e.target.value;
                 setOperatorId(id);
                 const op = db.operators.find(o => o.id === id);
-                if (op && !priceEach) setPriceEach(op.defaultRate || 0);
+                if (op) {
+                  const stageRate = op.stageRates?.[entryStage];
+                  if (stageRate && stageRate > 0) setPriceEach(stageRate);
+                  else if (!priceEach && op.defaultRate) setPriceEach(op.defaultRate);
+                }
               }}
               data-testid="production-operator-select"
             >
