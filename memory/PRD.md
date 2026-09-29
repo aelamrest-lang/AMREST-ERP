@@ -68,3 +68,5 @@ Cloud-based Transformer Manufacturing ERP & CRM with modules for Sales CRM, Quot
 
 - UPDATE (2026-09-12): Drag & drop stage sequencing in Job Card form's Select Production Stages (admin only, ⋮⋮ handle per pill, HTML5 DnD, auto-saves `settings.productionStages`). Master order now drives: JC stage qty table, JC stage tiles on Production dashboard (orderStages helper), Daily Production Entry dropdown, printed Job Card stage table, and Production SFG mapping stage lists. Verified drag reorder + revert via dispatched drag events.
 
+- UPDATE (2026-09-29): Daily Production Entry now has mandatory Production Date at top (Today | Yesterday | Select Date pills; default Today; custom limited to last 7 days via min/max + save validation). Saved date flows into entry.date, JC stage completion date, SFG batch date and SFG consumption date (applySfgProduction/consumeSfgItems accept `date` arg), so reports/operator ledger/history all use it. TestIDs: entry-date-today/yesterday/custom, entry-date-picker, entry-date-preview, open-daily-entry.
+

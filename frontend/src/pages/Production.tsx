@@ -666,6 +666,11 @@ export function ProductionDashboard() {
   const [stagePriceDraft, setStagePriceDraft] = useState<Record<string, number>>(db.settings.stagePrices || {});
   const [remarks, setRemarks] = useState("");
   const [entryWarning, setEntryWarning] = useState("");
+  const [dateMode, setDateMode] = useState<"today" | "yesterday" | "custom">("today");
+  const [customDate, setCustomDate] = useState("");
+  const shiftDays = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); };
+  const entryMinDate = shiftDays(7);
+  const entryDate = dateMode === "today" ? todayISO() : dateMode === "yesterday" ? shiftDays(1) : customDate;
 
   // Handle deep-link from Operator Ledger: read amrest_goto_jc_id and scroll+highlight.
   useEffect(() => {
@@ -729,11 +734,13 @@ export function ProductionDashboard() {
     if (entryQty <= 0) return alert("Enter today's production quantity");
     if (!operatorId) return alert("Please select an operator");
     if (entryQty > balanceQty && !isAdmin) return setEntryWarning("Entered quantity exceeds pending quantity");
+    if (!entryDate) return alert("Select a production date");
+    if (entryDate > todayISO() || entryDate < entryMinDate) return alert("Production date must be within the last 7 days and cannot be a future date");
     const qty = isAdmin ? entryQty : Math.min(entryQty, balanceQty);
     const operator = db.operators.find(o => o.id === operatorId);
     const operatorName = operator?.name || "";
     const entry: ProductionEntry = {
-      id: uid(), date: todayISO(), jobCardId: selectedJob.id, jobCardNumber: selectedJob.number,
+      id: uid(), date: entryDate, jobCardId: selectedJob.id, jobCardNumber: selectedJob.number,
       stage: entryStage, productName: selectedJob.product, totalJobQty: entryTotalQty,
       previousCompletedQty: previousCompleted, todayQty: qty, balanceQty: Math.max(0, entryTotalQty - previousCompleted - qty),
       operatorName, operatorId, shift, machineName, priceEach: Number(priceEach) || 0,
@@ -747,15 +754,15 @@ export function ProductionDashboard() {
         jobCards: d.jobCards.map(j => {
           if (j.id !== selectedJob.id) return j;
           const stageTotal = previousCompleted + qty;
-          const stages = j.stages.map(s => s.stage === entryStage ? { ...s, status: stageTotal >= entryTotalQty ? "done" as const : "in-progress" as const, date: todayISO(), worker: operatorName } : s);
+          const stages = j.stages.map(s => s.stage === entryStage ? { ...s, status: stageTotal >= entryTotalQty ? "done" as const : "in-progress" as const, date: entryDate, worker: operatorName } : s);
           const complete = stages.every(s => s.status === "done");
           return { ...j, stages, status: complete ? "Completed" as const : "In Progress" as const };
         }),
         serials: d.serials.map(s => s.jobCardId === selectedJob.id && entryStage === "Dispatch Ready" ? { ...s, productionStatus: "Completed" as const } : s.jobCardId === selectedJob.id ? { ...s, productionStatus: "In Production" as const } : s),
       };
-      const prodUpd = applySfgProduction(next, { jobCardId: selectedJob.id, jobCardNumber: selectedJob.number, stage: entryStage, qty, entryId: entry.id });
+      const prodUpd = applySfgProduction(next, { jobCardId: selectedJob.id, jobCardNumber: selectedJob.number, stage: entryStage, qty, entryId: entry.id, date: entryDate });
       next = { ...next, ...prodUpd };
-      const cons = applySfgAutoConsumption(next, { stage: entryStage, qty, jobCardId: selectedJob.id, jobCardNumber: selectedJob.number });
+      const cons = applySfgAutoConsumption(next, { stage: entryStage, qty, jobCardId: selectedJob.id, jobCardNumber: selectedJob.number, date: entryDate });
       next = { ...next, ...cons.updates };
       sfgShortages = cons.shortages;
       return next;
@@ -804,7 +811,7 @@ export function ProductionDashboard() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3 flex-wrap"><div><h1 className="text-2xl font-bold">Production Dashboard</h1><p className="text-sm text-slate-500">Stage-wise tracking and daily updates</p></div><div className="flex gap-2"><Button variant="outline" onClick={printDailyProduction}><IconPrint size={14}/> Daily Report</Button>{canEditProduction && <Button onClick={() => setEntryOpen(true)}><IconPlus size={14}/> Daily Production Entry</Button>}</div></div>
+      <div className="flex items-center justify-between gap-3 flex-wrap"><div><h1 className="text-2xl font-bold">Production Dashboard</h1><p className="text-sm text-slate-500">Stage-wise tracking and daily updates</p></div><div className="flex gap-2"><Button variant="outline" onClick={printDailyProduction}><IconPrint size={14}/> Daily Report</Button>{canEditProduction && <Button onClick={() => { setDateMode("today"); setCustomDate(""); setEntryOpen(true); }} data-testid="open-daily-entry"><IconPlus size={14}/> Daily Production Entry</Button>}</div></div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <KPI label="Daily Production" value={String(dailyProduction)} color="indigo" icon={<IconFactory size={22}/>}/>
@@ -931,6 +938,20 @@ export function ProductionDashboard() {
             {enabledStages.length < stageMaster.length && selectedJob && (
               <div className="text-[10px] text-slate-500 mt-1">Showing only stages enabled in this Job Card.</div>
             )}
+          </div>
+          <div className="sm:col-span-2">
+            <Label>Production Date *</Label>
+            <div className="flex flex-wrap items-center gap-2" data-testid="entry-date-picker">
+              {([["today", "Today"], ["yesterday", "Yesterday"], ["custom", "Select Date"]] as const).map(([k, lbl]) => (
+                <button key={k} type="button" onClick={() => setDateMode(k)}
+                  className={"text-xs px-3 py-1.5 rounded-full border font-medium " + (dateMode === k ? "bg-indigo-600 border-indigo-600 text-white" : "bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-600 hover:border-indigo-400")}
+                  data-testid={`entry-date-${k}`}>{lbl}</button>
+              ))}
+              {dateMode === "custom" && (
+                <Input type="date" className="!w-44" min={entryMinDate} max={todayISO()} value={customDate} onChange={(e: any) => setCustomDate(e.target.value)} data-testid="entry-date-custom" />
+              )}
+              <span className="text-xs text-slate-500">Entry will be saved with date: <b data-testid="entry-date-preview">{entryDate || "—"}</b></span>
+            </div>
           </div>
           <div><Label>Product Name</Label><Input value={selectedJob?.product || ""} disabled /></div>
           <div>

@@ -23,12 +23,12 @@ export function sfgStages(db: DB): string[] {
 
 export function sfgAvailable(b: SfgBatch) { return Math.max(0, b.qtyProduced - b.qtyUsed); }
 
-export function applySfgProduction(d: DB, args: { jobCardId: string; jobCardNumber: string; stage: string; qty: number; entryId?: string }): Partial<DB> {
+export function applySfgProduction(d: DB, args: { jobCardId: string; jobCardNumber: string; stage: string; qty: number; entryId?: string; date?: string }): Partial<DB> {
   const itemId = d.settings.sfgStageItemsByJc?.[args.jobCardId]?.[args.stage];
   if (!itemId || args.qty <= 0) return {};
   const batch: SfgBatch = {
     id: uid(), itemId, jobCardId: args.jobCardId, jobCardNumber: args.jobCardNumber,
-    stage: args.stage, qtyProduced: args.qty, qtyUsed: 0, date: todayISO(), entryId: args.entryId,
+    stage: args.stage, qtyProduced: args.qty, qtyUsed: 0, date: args.date || todayISO(), entryId: args.entryId,
     createdAt: new Date().toISOString(),
   };
   return {
@@ -44,6 +44,7 @@ export function consumeSfgItems(d: DB, args: {
   outputJobCardNumber?: string;
   mode: "auto" | "manual";
   remarks?: string;
+  date?: string;
 }): { updates: Partial<DB>; shortages: string[] } {
   let batches = (d.sfgBatches || []).slice();
   let items = d.items.slice();
@@ -65,7 +66,7 @@ export function consumeSfgItems(d: DB, args: {
       const take = Math.min(sfgAvailable(c), remaining);
       batches = batches.map(b => b.id === c.id ? { ...b, qtyUsed: b.qtyUsed + take } : b);
       consumptions.push({
-        id: uid(), date: todayISO(), itemId: need.itemId, batchId: c.id, qty: take,
+        id: uid(), date: args.date || todayISO(), itemId: need.itemId, batchId: c.id, qty: take,
         sourceJobCardId: c.jobCardId, sourceJobCardNumber: c.jobCardNumber,
         outputStage: args.outputStage, outputJobCardId: args.outputJobCardId, outputJobCardNumber: args.outputJobCardNumber,
         mode: args.mode, remarks: args.remarks, createdAt: new Date().toISOString(),
@@ -83,9 +84,9 @@ export function consumeSfgItems(d: DB, args: {
   return { updates: { sfgBatches: batches, sfgConsumptions: [...consumptions, ...(d.sfgConsumptions || [])], items }, shortages };
 }
 
-export function applySfgAutoConsumption(d: DB, args: { stage: string; qty: number; jobCardId: string; jobCardNumber: string }) {
+export function applySfgAutoConsumption(d: DB, args: { stage: string; qty: number; jobCardId: string; jobCardNumber: string; date?: string }) {
   const rules = d.settings.sfgConsumptionMapByJc?.[args.jobCardId]?.[args.stage] ?? d.settings.sfgConsumptionMap?.[args.stage] ?? [];
   const needs = rules.map(r => ({ itemId: r.itemId, qty: r.qtyPerUnit * args.qty })).filter(n => n.qty > 0);
   if (!needs.length) return { updates: {}, shortages: [] as string[] };
-  return consumeSfgItems(d, { needs, outputStage: args.stage, outputJobCardId: args.jobCardId, outputJobCardNumber: args.jobCardNumber, mode: "auto" });
+  return consumeSfgItems(d, { needs, outputStage: args.stage, outputJobCardId: args.jobCardId, outputJobCardNumber: args.jobCardNumber, mode: "auto", date: args.date });
 }
