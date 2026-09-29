@@ -72,3 +72,5 @@ Cloud-based Transformer Manufacturing ERP & CRM with modules for Sales CRM, Quot
 
 - UPDATE (2026-09-29): Stage-wise operator pricing. `Operator.stageRates?: Record<stage, ₹/unit>`; Operators form shows a Rate/Unit input next to each checked stage (blank → falls back to Default Rate). Daily Production Entry auto-fills Price Each with priority: operator stage rate → JC stage price → company stage price (fires on both stage change and operator select). Operator Cost = qty × stage-wise rate via entry.priceEach (flows to ledger/cost reports). TestIDs: operator-stage-rate-<slug>.
 
+- UPDATE (2026-09-29): Purchase Order preview/print/PDF item table now includes Unit column — `# | Item | Qty | Unit | Rate | GST% | Amount`, UOM auto-pulled from Item Master (`it.unit`). Single template `buildPOHtml` in Procurement.tsx covers both preview and print. Verified on PO-2026-119.
+

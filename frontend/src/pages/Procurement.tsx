@@ -379,8 +379,8 @@ export function PurchaseOrders() {
       ${approvalBannerHtml(p)}
       <div class="box"><div class="section-title">Vendor Details</div><b>${v?.name || ""}</b><br/>${v?.address || ""}${v?.city ? `, ${v.city}` : ""}<br/>GST: ${v?.gst || ""}<br/>Contact: ${v?.mobile || ""} | ${v?.email || ""}</div>
       <div class="box"><span class="badge">${p.status}</span> &nbsp; <b>Expected Delivery:</b> ${p.expectedDeliveryDate || "—"}</div>
-      <table><thead><tr><th>#</th><th>Item</th><th class="right">Qty</th><th class="right">Rate</th><th class="right">GST%</th><th class="right">Amount</th></tr></thead>
-      <tbody>${p.items.map((i, idx) => { const it = db.items.find(x => x.id === i.itemId); const g = Number(i.gst) || 0; const amt = i.qty * i.rate * (1 + g / 100); return `<tr><td>${idx+1}</td><td><b>${it?.name || "-"}</b>${i.description ? `<br/><span class="muted">${i.description}</span>` : ""}</td><td class="right">${i.qty}</td><td class="right">${fmtINR(i.rate)}</td><td class="right">${g}%</td><td class="right">${fmtINR(amt)}</td></tr>`; }).join("")}</tbody></table>
+      <table><thead><tr><th>#</th><th>Item</th><th class="right">Qty</th><th>Unit</th><th class="right">Rate</th><th class="right">GST%</th><th class="right">Amount</th></tr></thead>
+      <tbody>${p.items.map((i, idx) => { const it = db.items.find(x => x.id === i.itemId); const g = Number(i.gst) || 0; const amt = i.qty * i.rate * (1 + g / 100); return `<tr><td>${idx+1}</td><td><b>${it?.name || "-"}</b>${i.description ? `<br/><span class="muted">${i.description}</span>` : ""}</td><td class="right">${i.qty}</td><td>${it?.unit || "-"}</td><td class="right">${fmtINR(i.rate)}</td><td class="right">${g}%</td><td class="right">${fmtINR(amt)}</td></tr>`; }).join("")}</tbody></table>
       <div class="totals">
         <div><span>Sub Total</span><b>${fmtINR(sub)}</b></div>
         <div><span>GST</span><b>${fmtINR(gst)}</b></div>
