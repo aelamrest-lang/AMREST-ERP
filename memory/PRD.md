@@ -74,3 +74,5 @@ Cloud-based Transformer Manufacturing ERP & CRM with modules for Sales CRM, Quot
 
 - UPDATE (2026-09-29): Purchase Order preview/print/PDF item table now includes Unit column — `# | Item | Qty | Unit | Rate | GST% | Amount`, UOM auto-pulled from Item Master (`it.unit`). Single template `buildPOHtml` in Procurement.tsx covers both preview and print. Verified on PO-2026-119.
 
+- UPDATE (2026-09-29): New GRN item table now shows PO Rate column — Item | PO Qty | Rate | Already Received | Balance | Receive Now | Status. Rate is read-only, pulled from the selected PO line (`oi.rate`, approved price) with "as per PO" caption. TestID: grn-rate-<itemId>. Verified on PO-2026-119 (₹230.00).
+

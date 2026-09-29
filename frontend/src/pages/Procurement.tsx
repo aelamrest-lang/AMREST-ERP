@@ -1175,7 +1175,7 @@ export function GRNPage() {
             return (
               <>
                 <Table>
-                  <thead><tr><Th>Item</Th><Th>PO Qty</Th><Th>Already Received</Th><Th>Balance</Th><Th>Receive Now</Th><Th>Status</Th><Th></Th></tr></thead>
+                  <thead><tr><Th>Item</Th><Th>PO Qty</Th><Th className="text-right">Rate</Th><Th>Already Received</Th><Th>Balance</Th><Th>Receive Now</Th><Th>Status</Th><Th></Th></tr></thead>
                   <tbody>
                     {po.items.map((oi, idx) => {
                       const it = db.items.find(x => x.id === oi.itemId);
@@ -1189,6 +1189,7 @@ export function GRNPage() {
                         <tr key={idx} className={isOver ? "bg-amber-50 dark:bg-amber-900/20" : ""}>
                           <Td>{it?.name}</Td>
                           <Td>{fmt2(oi.qty)} {it?.unit}</Td>
+                          <Td className="text-right font-medium" data-testid={`grn-rate-${oi.itemId}`}>{fmtINR(Number(oi.rate) || 0)}<div className="text-[9px] text-slate-400">as per PO</div></Td>
                           <Td>{fmt2(alr)} {it?.unit}</Td>
                           <Td className="font-semibold">{fmt2(balance)} {it?.unit}</Td>
                           <Td>
