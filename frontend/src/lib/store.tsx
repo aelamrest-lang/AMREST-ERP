@@ -63,6 +63,27 @@ function migrateDB(db: DB): DB {
   const boms = hasBase ? (db.boms || []) : seeded.boms;
   const purchaseOrders = hasBase ? (db.purchaseOrders || []) : seeded.purchaseOrders;
 
+  // One-time stock model migration: holds no longer deduct Current Stock (only issues do) —
+  // add back the still-active holds that were deducted by the old reservation model
+  let migratedItems = items;
+  let migratedSettings = { ...(db.settings || {}) } as DB["settings"];
+  if (!migratedSettings.stockModelV2) {
+    const activeHold = new Map<string, number>();
+    (db.jobCards || []).filter(j => j.status !== "Completed").forEach(j => (j.reservedItems || []).forEach(r => {
+      const issuedQty = (db.materialIssues || [])
+        .filter(mi => mi.jobCardId === j.id)
+        .flatMap(mi => mi.lines || [])
+        .filter(l => l.itemId === r.itemId)
+        .reduce((s, l) => s + (l.issueQty || 0), 0);
+      const pending = Math.max(0, r.qty - issuedQty);
+      if (pending > 0) activeHold.set(r.itemId, (activeHold.get(r.itemId) || 0) + pending);
+    }));
+    if (activeHold.size) {
+      migratedItems = (items || []).map(i => activeHold.has(i.id) ? { ...i, currentStock: (i.currentStock || 0) + (activeHold.get(i.id) || 0) } : i);
+    }
+    migratedSettings = { ...migratedSettings, stockModelV2: true };
+  }
+
   return {
     ...db,
     leads: db.leads || [],
@@ -76,9 +97,9 @@ function migrateDB(db: DB): DB {
     qcTests: db.qcTests || [],
     qcFinalReports: db.qcFinalReports || [],
     qcFormats,
-    parties, items, costings, quotations, boms, purchaseOrders,
+    parties, items: migratedItems, costings, quotations, boms, purchaseOrders,
     users,
-    settings: { ...seeded.settings, ...db.settings, documentFormats: mergedDocumentFormats },
+    settings: { ...seeded.settings, ...migratedSettings, documentFormats: mergedDocumentFormats },
   };
 }
 

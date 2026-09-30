@@ -80,3 +80,5 @@ Cloud-based Transformer Manufacturing ERP & CRM with modules for Sales CRM, Quot
 
 - VERIFY (2026-09-29): Re-confirmed Inventory Current Stock == Item Master Stock on preview (Core 61x83x30 = 2369.00 both; Core 61x83x32 = 1107.00 both). User likely saw old build on production (erp.crmamrest.com) — production redeploy needed for the fix to appear there.
 
+- UPDATE (2026-09-30): Stock model change — job-card holds NO LONGER deduct Current Stock; Raw Material Issue deducts it immediately on save (per line, clamped ≥0). Removed reservation deductions on JC create/edit/delete and QC-fail add-back. Inventory: "Available Stock" column renamed "Required Quantity" = max(0, Hold − Current Stock), red + "shortfall to procure" when >0; Hold/valuation/safety-buffer unchanged. One-time migration in migrateDB (`settings.stockModelV2`) adds back still-active holds to Current Stock. Verified: Core 61x83x30 = 5359.00 on both pages, Hold 4359, Required 0.
+

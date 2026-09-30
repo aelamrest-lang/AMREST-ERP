@@ -89,19 +89,19 @@ export function Inventory() {
   const controlRows = useMemo(() => {
     const rows = items.map(item => {
       const hold = heldByItem.get(item.id) || 0;
-      const available = item.currentStock;
-      const totalStock = item.currentStock; // single central stock value — identical to Item Master; holds are already deducted at reservation
-      const status = available < 0 ? "Over-Committed" : available <= item.minStock ? "Below Buffer" : available <= item.reorderLevel ? "Reorder Soon" : "Healthy";
-      return { item, hold, available, totalStock, status };
+      const required = hold > item.currentStock ? hold - item.currentStock : 0; // shortfall to procure
+      const totalStock = item.currentStock; // single central stock value — identical to Item Master
+      const status = item.currentStock <= item.minStock ? "Below Buffer" : item.currentStock <= item.reorderLevel ? "Reorder Soon" : "Healthy";
+      return { item, hold, required, totalStock, status };
     });
     if (!sortKey) return rows;
     const val = (r: typeof rows[0]) => {
       switch (sortKey) {
         case "current": return r.totalStock;
         case "hold": return r.hold;
-        case "available": return r.available;
+        case "available": return r.required;
         case "cost": return unitCost(r.item);
-        case "value": return r.available * unitCost(r.item);
+        case "value": return r.totalStock * unitCost(r.item);
         case "status": return statusRank[r.status] ?? -1;
       }
     };
@@ -268,7 +268,7 @@ export function Inventory() {
         <div className="px-4 py-3 border-b border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/20 flex items-center justify-between gap-3 flex-wrap text-sm">
           <div>
             <div className="font-semibold text-amber-800 dark:text-amber-300">Single Central Stock Active</div>
-            <div className="text-xs text-amber-700 dark:text-amber-400">Current Stock is the same central quantity shown in Item Master — Job Card holds are already deducted from it</div>
+            <div className="text-xs text-amber-700 dark:text-amber-400">Required Quantity = Hold (Job Card) − Current Stock, only when Hold is greater — issues deduct Current Stock immediately</div>
           </div>
           <div className="font-mono text-xs text-amber-800 dark:text-amber-300">Item Master = Inventory = Current Stock</div>
         </div>
@@ -278,14 +278,14 @@ export function Inventory() {
             <Th>UOM</Th>
             <Th className="cursor-pointer select-none hover:text-indigo-600" onClick={() => toggleSort("current")} data-testid="inv-sort-current">Current Stock{arrow("current")}</Th>
             <Th className="cursor-pointer select-none hover:text-indigo-600" onClick={() => toggleSort("hold")} data-testid="inv-sort-hold">Hold (Job Card){arrow("hold")}</Th>
-            <Th className="cursor-pointer select-none hover:text-indigo-600" onClick={() => toggleSort("available")} data-testid="inv-sort-available">Available Stock{arrow("available")}</Th>
+            <Th className="cursor-pointer select-none hover:text-indigo-600" onClick={() => toggleSort("available")} data-testid="inv-sort-available">Required Quantity{arrow("available")}</Th>
             <Th className="cursor-pointer select-none hover:text-indigo-600" onClick={() => toggleSort("cost")} data-testid="inv-sort-cost">Avg Unit Cost{arrow("cost")}</Th>
             <Th className="cursor-pointer select-none hover:text-indigo-600" onClick={() => toggleSort("value")} data-testid="inv-sort-value">Total Valuation (₹){arrow("value")}</Th>
             <Th className="cursor-pointer select-none hover:text-indigo-600" onClick={() => toggleSort("status")} data-testid="inv-sort-status">Safety Buffer Status{arrow("status")}</Th>
           </tr></thead>
           <tbody>
-            {controlRows.map(({ item: i, hold, available, totalStock, status }) => {
-              const low = available <= i.minStock;
+            {controlRows.map(({ item: i, hold, required, totalStock, status }) => {
+              const low = i.currentStock <= i.minStock;
               const statusColor = status === "Healthy" ? "green" : status === "Reorder Soon" ? "yellow" : "red";
               return (
                 <tr key={i.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
@@ -296,7 +296,7 @@ export function Inventory() {
                   <Td className="font-medium">{i.unit}</Td>
                   <Td className="font-semibold">{fmt2(totalStock)} {i.unit}</Td>
                   <Td className="font-semibold text-amber-600">{fmt2(hold)} {i.unit}</Td>
-                  <Td><span className={low ? "text-rose-600 font-bold" : "font-bold text-emerald-600"}>{fmt2(available)} {i.unit}</span></Td>
+                  <Td><span className={required > 0 ? "text-rose-600 font-bold" : "font-bold text-emerald-600"}>{fmt2(required)} {i.unit}</span>{required > 0 && <div className="text-[9px] text-rose-500">shortfall to procure</div>}</Td>
                   <Td>{fmtINR(unitCost(i))}
                     {i.category === "Finished Goods"
                       ? <div className="text-[9px] text-slate-400">latest sale price</div>
@@ -304,7 +304,7 @@ export function Inventory() {
                         ? <div className="text-[9px] text-slate-400">avg of last {lastPurchaseRates[i.id].count} purchase{lastPurchaseRates[i.id].count > 1 ? "s" : ""}</div>
                         : <div className="text-[9px] text-slate-400">item master rate</div>}
                   </Td>
-                  <Td className="font-semibold text-indigo-700 dark:text-indigo-300">{fmtINR(available * unitCost(i))}</Td>
+                  <Td className="font-semibold text-indigo-700 dark:text-indigo-300">{fmtINR(i.currentStock * unitCost(i))}</Td>
                   <Td><Badge color={statusColor}>{status}</Badge><div className="text-[10px] text-slate-500 mt-1">Min {fmt2(i.minStock)} / Reorder {fmt2(i.reorderLevel)}</div></Td>
                 </tr>
               );

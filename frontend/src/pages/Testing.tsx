@@ -180,21 +180,13 @@ export function TestingPage() {
   const updateTest = (id: string, patch: Partial<QCTestRecord>) => {
     setDB(d => {
       const old = d.qcTests.find(t => t.id === id);
-      let items = d.items;
       let serials = d.serials;
-      if (old && patch.result && (patch.result === "Fail" || patch.result === "Hold") && !old.returnedToInventory) {
-        const job = d.jobCards.find(j => j.id === old.jobCardId);
-        if (job) items = d.items.map(item => {
-          const reserved = job.reservedItems.find(r => r.itemId === item.id);
-          return reserved ? { ...item, currentStock: item.currentStock + reserved.qty / Math.max(1, job.qty) } : item;
-        });
-      }
       if (old && patch.result) {
         serials = d.serials.map(s => s.serialNo === old.serialNo
           ? { ...s, qcStatus: patch.result!, reworkStatus: patch.result === "Fail" ? "Scrap" : patch.result === "Hold" ? "Rework" : "None", dispatchStatus: patch.result === "Pass" ? "Ready" : "Pending" }
           : s);
       }
-      return { ...d, items, serials, qcTests: d.qcTests.map(t => t.id === id ? { ...t, ...patch, returnedToInventory: patch.result === "Fail" || patch.result === "Hold" ? true : t.returnedToInventory } : t) };
+      return { ...d, serials, qcTests: d.qcTests.map(t => t.id === id ? { ...t, ...patch, returnedToInventory: patch.result === "Fail" || patch.result === "Hold" ? true : t.returnedToInventory } : t) };
     });
     log("QC test updated", "QC Testing");
     if (patch.result === "Pass") setTimeout(() => printRoutine("Routine Test Result Sheet"), 250);

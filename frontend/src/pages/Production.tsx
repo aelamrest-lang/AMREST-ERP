@@ -282,26 +282,15 @@ export function JobCards() {
     if ((form.stageQuantities || []).length === 0) return alert("Select at least one Production Stage for this Job Card.");
     if (edit) {
       setDB(d => {
-        const itemIds = new Set([...edit.reservedItems.map(r => r.itemId), ...form.reservedItems.map(r => r.itemId)]);
-        const items = d.items.map(it => {
-          if (!itemIds.has(it.id)) return it;
-          const oldQty = edit.reservedItems.find(r => r.itemId === it.id)?.qty || 0;
-          const newQty = form.reservedItems.find(r => r.itemId === it.id)?.qty || 0;
-          return { ...it, currentStock: Math.max(0, it.currentStock + oldQty - newQty) };
-        });
+        // Holds no longer change central stock — only Raw Material Issue deducts it
         const generated = makeSerials(form, { ...d, jobCards: d.jobCards.map(x => x.id === edit.id ? form : x) });
-        return {...d, items, jobCards: d.jobCards.map(x => x.id === edit.id ? form : x), serials: [...d.serials, ...generated.serials], qcTests: [...d.qcTests, ...generated.tests]};
+        return {...d, jobCards: d.jobCards.map(x => x.id === edit.id ? form : x), serials: [...d.serials, ...generated.serials], qcTests: [...d.qcTests, ...generated.tests]};
       });
     } else {
-      // reserve inventory: subtract from current stock
       setDB(d => {
         const newJob = {...form, id: uid()};
-        const items = d.items.map(it => {
-          const r = newJob.reservedItems.find(x => x.itemId === it.id);
-          return r ? {...it, currentStock: Math.max(0, it.currentStock - r.qty)} : it;
-        });
         const generated = makeSerials(newJob, d);
-        return {...d, items, jobCards: [newJob, ...d.jobCards], serials: [...d.serials, ...generated.serials], qcTests: [...d.qcTests, ...generated.tests]};
+        return {...d, jobCards: [newJob, ...d.jobCards], serials: [...d.serials, ...generated.serials], qcTests: [...d.qcTests, ...generated.tests]};
       });
     }
     log(`${edit ? "Updated" : "Created"} Job Card ${form.number}`, "Job Card");
@@ -309,14 +298,8 @@ export function JobCards() {
   };
   const remove = (j: JobCard) => {
     if (!confirm(`Delete ${j.number}?`)) return;
-    // restore reserved stock
-    setDB(d => {
-      const items = d.items.map(it => {
-        const r = j.reservedItems.find(x => x.itemId === it.id);
-        return r ? {...it, currentStock: it.currentStock + r.qty} : it;
-      });
-      return {...d, items, jobCards: d.jobCards.filter(x => x.id !== j.id)};
-    });
+    // holds do not affect central stock — nothing to restore
+    setDB(d => ({ ...d, jobCards: d.jobCards.filter(x => x.id !== j.id) }));
     log(`Deleted Job Card ${j.number}`, "Job Card");
   };
 

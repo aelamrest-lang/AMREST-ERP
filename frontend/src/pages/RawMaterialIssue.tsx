@@ -78,7 +78,15 @@ export function RawMaterialIssue() {
       issueBy: currentUser?.id || "", remarks, lines, createdAt: new Date().toISOString(),
     };
 
-    setDB(d => ({ ...d, materialIssues: [issue, ...d.materialIssues] }));
+    setDB(d => ({
+      ...d,
+      materialIssues: [issue, ...d.materialIssues],
+      // Issuing immediately deducts from central Current Stock (same value shown in Item Master & Inventory)
+      items: d.items.map(it => {
+        const qty = issue.lines.filter(l => l.itemId === it.id).reduce((s, l) => s + (l.issueQty || 0), 0);
+        return qty > 0 ? { ...it, currentStock: Math.max(0, (it.currentStock || 0) - qty) } : it;
+      }),
+    }));
     log(`Material Issue ${issue.number} saved for ${job.number}`, "Raw Material Issue");
     setIssueQty({}); setRemarks(""); setWarning("");
     printIssue(issue);
@@ -125,7 +133,7 @@ function buildRows(job: JobCard | undefined, issues: MaterialIssue[], items: any
     const alreadyIssuedQty = issues.filter(issue => issue.jobCardId === job.id).flatMap(issue => issue.lines).filter(line => line.itemId === r.itemId).reduce((sum, line) => sum + line.issueQty, 0);
     const pendingQty = Math.max(0, r.qty - alreadyIssuedQty);
     const status: MaterialIssueLine["status"] = pendingQty <= 0 ? "Fully Issued" : alreadyIssuedQty > 0 ? "Partial Issued" : "Pending";
-    const inventoryCurrentStock = (item?.currentStock || 0) + (heldByItem.get(r.itemId) || 0);
+    const inventoryCurrentStock = item?.currentStock || 0; // physical stock — holds don't reduce it; issuing deducts it
     return { itemId: r.itemId, requiredQty: r.qty, alreadyIssuedQty, pendingQty, currentStock: inventoryCurrentStock, issueQty: 0, unit: item?.unit || "", status };
   });
 }
