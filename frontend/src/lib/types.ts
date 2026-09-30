@@ -218,6 +218,15 @@ export interface GRN {
   createdAt: string;
 }
 
+export interface GrnAuditEntry {
+  id: string;
+  grnNumber: string;
+  action: "Created" | "Edited" | "Deleted";
+  changes: string;
+  byName: string;
+  at: string;
+}
+
 export interface MaterialIssueLine {
   itemId: string;
   requiredQty: number;
@@ -587,6 +596,7 @@ export interface DB {
   salesOrders: SalesOrder[];
   purchaseOrders: PurchaseOrder[];
   grns: GRN[];
+  grnAudit: GrnAuditEntry[];
   materialIssues: MaterialIssue[];
   boms: BOM[];
   jobCards: JobCard[];

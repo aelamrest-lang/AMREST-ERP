@@ -1,8 +1,8 @@
 import { useMemo, useRef, useState } from "react";
 import { useStore, uid } from "../lib/store";
 import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Badge, Empty, Textarea } from "../components/ui";
-import type { PurchaseOrder, GRN, Party, POApprovalEvent } from "../lib/types";
-import { IconPlus, IconEdit, IconTrash, IconPrint, IconSearch, IconCheck } from "../components/icons";
+import type { PurchaseOrder, GRN, GrnAuditEntry, Party, POApprovalEvent } from "../lib/types";
+import { IconPlus, IconEdit, IconTrash, IconPrint, IconSearch, IconCheck, IconHistory } from "../components/icons";
 import { fmtINR, fmt2, nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
 import { userCan } from "../lib/permissions";
 
@@ -818,6 +818,113 @@ function POCombobox({
 export function GRNPage() {
   const { db, setDB, log, currentUser } = useStore();
   const canCreate = userCan(currentUser, "grn", "create");
+  const canEditGrn = userCan(currentUser, "grn", "edit");
+  const canDeleteGrn = userCan(currentUser, "grn", "delete");
+  const [editGRN, setEditGRN] = useState<GRN | null>(null);
+  const [editDraft, setEditDraft] = useState<{ date: string; vendorInvoiceNo: string; vendorInvoiceAmount: number; freightEnabled: boolean; freight: number; freightGst: number; packingEnabled: boolean; packing: number; packingGst: number; items: { itemId: string; qty: number }[] } | null>(null);
+  const [auditGRN, setAuditGRN] = useState<string | null>(null);
+
+  const grnAuditEntry = (g: { number: string }, action: GrnAuditEntry["action"], changes: string): GrnAuditEntry => ({
+    id: uid(), grnNumber: g.number, action, changes, byName: currentUser?.name || "Unknown", at: new Date().toISOString(),
+  });
+
+  const poStatusFor = (grns: GRN[], p?: PurchaseOrder): PurchaseOrder["status"] | undefined => {
+    if (!p) return undefined;
+    const cum: Record<string, number> = {};
+    grns.filter(g => g.poId === p.id).forEach(g => g.receivedItems.forEach(r => { cum[r.itemId] = (cum[r.itemId] || 0) + r.qty; }));
+    const full = p.items.every(i => (cum[i.itemId] || 0) >= i.qty);
+    const any = p.items.some(i => (cum[i.itemId] || 0) > 0);
+    return full ? "Completed" : any ? "Partially Received" : "Approved";
+  };
+
+  const openEditGRN = (g: GRN) => {
+    setEditGRN(g);
+    setEditDraft({
+      date: g.date, vendorInvoiceNo: g.vendorInvoiceNo || "", vendorInvoiceAmount: g.vendorInvoiceAmount || 0,
+      freightEnabled: !!g.freightEnabled, freight: g.freight || 0, freightGst: g.freightGst ?? 18,
+      packingEnabled: !!g.packingEnabled, packing: g.packing || 0, packingGst: g.packingGst ?? 18,
+      items: g.receivedItems.map(r => ({ ...r })),
+    });
+  };
+
+  const saveEditGRN = () => {
+    if (!editGRN || !editDraft) return;
+    if (editDraft.items.some(r => (Number(r.qty) || 0) < 0)) return alert("Quantities cannot be negative");
+    const deltaByItem: Record<string, number> = {};
+    editDraft.items.forEach(r => {
+      const old = editGRN.receivedItems.find(x => x.itemId === r.itemId)?.qty || 0;
+      const delta = (Number(r.qty) || 0) - old;
+      if (delta) deltaByItem[r.itemId] = delta;
+    });
+    const blockers = Object.entries(deltaByItem).map(([itemId, delta]) => {
+      const it = db.items.find(i => i.id === itemId);
+      const resulting = (it?.currentStock || 0) + delta;
+      return resulting < 0 ? `${it?.name || itemId} (stock ${fmt2(it?.currentStock || 0)}, change ${fmt2(delta)})` : null;
+    }).filter(Boolean) as string[];
+    if (blockers.length) return alert("Cannot save — stock would go negative for:\n" + blockers.join("\n"));
+
+    const changes: string[] = [];
+    if (editDraft.date !== editGRN.date) changes.push(`Date ${editGRN.date} → ${editDraft.date}`);
+    if ((editDraft.vendorInvoiceNo || "") !== (editGRN.vendorInvoiceNo || "")) changes.push(`Invoice# ${editGRN.vendorInvoiceNo || "—"} → ${editDraft.vendorInvoiceNo || "—"}`);
+    if ((Number(editDraft.vendorInvoiceAmount) || 0) !== (editGRN.vendorInvoiceAmount || 0)) changes.push(`Invoice Amt ${fmtINR(editGRN.vendorInvoiceAmount || 0)} → ${fmtINR(Number(editDraft.vendorInvoiceAmount) || 0)}`);
+    (["freight", "packing"] as const).forEach(k => {
+      const en = `${k}Enabled` as "freightEnabled" | "packingEnabled";
+      const gstK = `${k}Gst` as "freightGst" | "packingGst";
+      if ((editDraft as any)[en] !== !!editGRN[en] || (Number((editDraft as any)[k]) || 0) !== (editGRN[k] || 0) || (Number((editDraft as any)[gstK]) || 0) !== (editGRN[gstK] || 0)) {
+        changes.push(`${k === "freight" ? "Freight" : "Packing"} ${editGRN[en] ? fmtINR(editGRN[k] || 0) : "off"} → ${(editDraft as any)[en] ? fmtINR(Number((editDraft as any)[k]) || 0) : "off"}`);
+      }
+    });
+    editDraft.items.forEach(r => {
+      const old = editGRN.receivedItems.find(x => x.itemId === r.itemId)?.qty || 0;
+      const nw = Number(r.qty) || 0;
+      if (nw !== old) changes.push(`${db.items.find(i => i.id === r.itemId)?.name || r.itemId} qty ${fmt2(old)} → ${fmt2(nw)}`);
+    });
+    if (!changes.length) { setEditGRN(null); setEditDraft(null); return; }
+
+    const updated: GRN = {
+      ...editGRN, date: editDraft.date,
+      vendorInvoiceNo: editDraft.vendorInvoiceNo.trim() || undefined,
+      vendorInvoiceAmount: Number(editDraft.vendorInvoiceAmount) || undefined,
+      freightEnabled: editDraft.freightEnabled, freight: editDraft.freightEnabled ? Number(editDraft.freight) || 0 : 0, freightGst: editDraft.freightEnabled ? Number(editDraft.freightGst) || 0 : 0,
+      packingEnabled: editDraft.packingEnabled, packing: editDraft.packingEnabled ? Number(editDraft.packing) || 0 : 0, packingGst: editDraft.packingEnabled ? Number(editDraft.packingGst) || 0 : 0,
+      receivedItems: editDraft.items.filter(r => (Number(r.qty) || 0) > 0).map(r => ({ itemId: r.itemId, qty: Number(r.qty) || 0 })),
+    };
+    setDB(d => {
+      const grns = d.grns.map(x => x.id === editGRN.id ? updated : x);
+      const items = d.items.map(it => deltaByItem[it.id] ? { ...it, currentStock: (it.currentStock || 0) + deltaByItem[it.id] } : it);
+      return {
+        ...d, grns, items,
+        purchaseOrders: d.purchaseOrders.map(p => p.id === editGRN.poId ? { ...p, status: poStatusFor(grns, p) || p.status } : p),
+        grnAudit: [grnAuditEntry(updated, "Edited", changes.join("; ")), ...(d.grnAudit || [])],
+      };
+    });
+    log(`Edited GRN ${editGRN.number}: ${changes.join("; ")}`, "GRN");
+    setEditGRN(null); setEditDraft(null);
+  };
+
+  const deleteGRN = (g: GRN) => {
+    if (!canDeleteGrn) return alert("Permission denied.");
+    const blockers = g.receivedItems.map(r => {
+      const it = db.items.find(i => i.id === r.itemId);
+      return (it?.currentStock || 0) - r.qty < 0 ? `${it?.name || r.itemId} (stock ${fmt2(it?.currentStock || 0)}, GRN qty ${fmt2(r.qty)})` : null;
+    }).filter(Boolean) as string[];
+    if (blockers.length) return alert(`Cannot delete ${g.number} — reversing it would make stock negative for:\n${blockers.join("\n")}`);
+    if (!confirm(`Delete ${g.number}? Received stock will be reversed from Current Stock.`)) return;
+    const detail = g.receivedItems.map(r => `${db.items.find(i => i.id === r.itemId)?.name || r.itemId} × ${fmt2(r.qty)}`).join(", ");
+    setDB(d => {
+      const grns = d.grns.filter(x => x.id !== g.id);
+      const items = d.items.map(it => {
+        const r = g.receivedItems.find(x => x.itemId === it.id);
+        return r ? { ...it, currentStock: Math.max(0, (it.currentStock || 0) - r.qty) } : it;
+      });
+      return {
+        ...d, grns, items,
+        purchaseOrders: d.purchaseOrders.map(p => p.id === g.poId ? { ...p, status: poStatusFor(grns, p) || p.status } : p),
+        grnAudit: [grnAuditEntry(g, "Deleted", `Reversed stock: ${detail}`), ...(d.grnAudit || [])],
+      };
+    });
+    log(`Deleted GRN ${g.number} (reversed: ${detail})`, "GRN");
+  };
   const [open, setOpen] = useState(false);
   const [viewGRN, setViewGRN] = useState<GRN | null>(null);
   const [poId, setPoId] = useState<string>(db.purchaseOrders[0]?.id || "");
@@ -931,6 +1038,7 @@ export function GRNPage() {
       return {
         ...d, grns: [grn, ...d.grns], items,
         purchaseOrders: d.purchaseOrders.map(p => p.id === poId ? { ...p, status: nextStatus } : p),
+        grnAudit: [grnAuditEntry(grn, "Created", `Received: ${cleaned.map(r => `${db.items.find(i => i.id === r.itemId)?.name || r.itemId} × ${fmt2(r.qty)}`).join(", ")}${grn.vendorInvoiceNo ? ` · Inv# ${grn.vendorInvoiceNo}` : ""}`), ...(d.grnAudit || [])],
       };
     });
     log(`GRN ${grn.number} created (PO ${po?.number}) → PO ${nextStatus}`, "GRN");
@@ -1114,7 +1222,12 @@ export function GRNPage() {
                   <Td className="text-right font-semibold">{fmtINR(grand)}</Td>
                   <Td><Badge color={g.qcPassed ? "green" : "red"}>{g.qcPassed ? "Passed" : "Failed"}</Badge></Td>
                   <Td>
-                    <Button size="sm" variant="ghost" title="Print GRN" onClick={() => printGRN(g)} data-testid={`grn-print-${g.id}`}><IconPrint size={14}/></Button>
+                    <div className="flex items-center gap-1">
+                      <Button size="sm" variant="ghost" title="Print GRN" onClick={() => printGRN(g)} data-testid={`grn-print-${g.id}`}><IconPrint size={14}/></Button>
+                      <Button size="sm" variant="ghost" title="GRN Audit History" onClick={() => setAuditGRN(g.number)} data-testid={`grn-audit-${g.id}`}><IconHistory size={14}/></Button>
+                      {canEditGrn && <Button size="sm" variant="ghost" title="Edit GRN" onClick={() => openEditGRN(g)} data-testid={`grn-edit-${g.id}`}><IconEdit size={14}/></Button>}
+                      {canDeleteGrn && <Button size="sm" variant="ghost" title="Delete GRN (reverses stock)" className="text-rose-600 hover:text-rose-700" onClick={() => deleteGRN(g)} data-testid={`grn-delete-${g.id}`}><IconTrash size={14}/></Button>}
+                    </div>
                   </Td>
                 </tr>
               );
@@ -1408,6 +1521,89 @@ export function GRNPage() {
             </div>
           );
         })()}
+      </Modal>
+
+      <Modal open={!!editGRN && !!editDraft} onClose={() => { setEditGRN(null); setEditDraft(null); }} title={editGRN ? `Edit GRN — ${editGRN.number}` : ""} size="lg">
+        {editGRN && editDraft && (
+          <div className="space-y-4" data-testid="grn-edit-modal">
+            <div className="grid sm:grid-cols-3 gap-3">
+              <div><Label>GRN Date</Label><Input type="date" value={editDraft.date} onChange={(e: any) => setEditDraft({ ...editDraft, date: e.target.value })} data-testid="grn-edit-date" /></div>
+              <div><Label>Vendor Invoice #</Label><Input value={editDraft.vendorInvoiceNo} onChange={(e: any) => setEditDraft({ ...editDraft, vendorInvoiceNo: e.target.value })} data-testid="grn-edit-invno" /></div>
+              <div><Label>Vendor Invoice Amount (₹)</Label><Input type="number" value={editDraft.vendorInvoiceAmount || ""} onChange={(e: any) => setEditDraft({ ...editDraft, vendorInvoiceAmount: Number(e.target.value) || 0 })} data-testid="grn-edit-invamt" /></div>
+            </div>
+            <div>
+              <Label>Received Quantities (stock recalculates automatically)</Label>
+              <Table>
+                <thead><tr><Th>Item</Th><Th className="text-right">PO Rate</Th><Th className="text-right">Received Qty</Th><Th className="text-right">Current Stock</Th></tr></thead>
+                <tbody>
+                  {editDraft.items.map((r, idx) => {
+                    const it = db.items.find(i => i.id === r.itemId);
+                    const poLine = db.purchaseOrders.find(p => p.id === editGRN.poId)?.items.find(x => x.itemId === r.itemId);
+                    const old = editGRN.receivedItems.find(x => x.itemId === r.itemId)?.qty || 0;
+                    const delta = (Number(r.qty) || 0) - old;
+                    const resulting = (it?.currentStock || 0) + delta;
+                    return (
+                      <tr key={r.itemId}>
+                        <Td className="font-medium">{it?.name || "—"} <span className="text-xs text-slate-500">({it?.unit})</span></Td>
+                        <Td className="text-right">{fmtINR(Number(poLine?.rate) || 0)}</Td>
+                        <Td className="text-right">
+                          <Input type="number" min="0" className="!w-28 ml-auto text-right" value={r.qty}
+                            onChange={(e: any) => setEditDraft({ ...editDraft, items: editDraft.items.map((x, i) => i === idx ? { ...x, qty: Number(e.target.value) } : x) })}
+                            data-testid={`grn-edit-qty-${idx}`} />
+                        </Td>
+                        <Td className={"text-right font-semibold " + (resulting < 0 ? "text-rose-600" : "text-emerald-600")}>{fmt2(resulting)} {it?.unit}{resulting < 0 && <div className="text-[9px]">would go negative!</div>}</Td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </Table>
+            </div>
+            <div className="grid sm:grid-cols-2 gap-3">
+              <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 space-y-2">
+                <label className="flex items-center gap-2 text-sm font-medium"><input type="checkbox" checked={editDraft.freightEnabled} onChange={(e: any) => setEditDraft({ ...editDraft, freightEnabled: e.target.checked })} data-testid="grn-edit-freight-en" /> Freight Charges</label>
+                {editDraft.freightEnabled && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div><Label className="text-[10px]">Amount (₹)</Label><Input type="number" value={editDraft.freight || ""} onChange={(e: any) => setEditDraft({ ...editDraft, freight: Number(e.target.value) || 0 })} data-testid="grn-edit-freight" /></div>
+                    <div><Label className="text-[10px]">GST %</Label><Input type="number" value={editDraft.freightGst || ""} onChange={(e: any) => setEditDraft({ ...editDraft, freightGst: Number(e.target.value) || 0 })} /></div>
+                  </div>
+                )}
+              </div>
+              <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 space-y-2">
+                <label className="flex items-center gap-2 text-sm font-medium"><input type="checkbox" checked={editDraft.packingEnabled} onChange={(e: any) => setEditDraft({ ...editDraft, packingEnabled: e.target.checked })} data-testid="grn-edit-packing-en" /> Packing Charges</label>
+                {editDraft.packingEnabled && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div><Label className="text-[10px]">Amount (₹)</Label><Input type="number" value={editDraft.packing || ""} onChange={(e: any) => setEditDraft({ ...editDraft, packing: Number(e.target.value) || 0 })} data-testid="grn-edit-packing" /></div>
+                    <div><Label className="text-[10px]">GST %</Label><Input type="number" value={editDraft.packingGst || ""} onChange={(e: any) => setEditDraft({ ...editDraft, packingGst: Number(e.target.value) || 0 })} /></div>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-700">
+              <Button variant="outline" onClick={() => { setEditGRN(null); setEditDraft(null); }}>Cancel</Button>
+              <Button onClick={saveEditGRN} data-testid="grn-edit-save">Save Changes</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={!!auditGRN} onClose={() => setAuditGRN(null)} title={`Audit History — ${auditGRN || ""}`} size="lg">
+        <div data-testid="grn-audit-modal">
+          <Table>
+            <thead><tr><Th>Date & Time</Th><Th>User</Th><Th>Action</Th><Th>Old → New / Details</Th></tr></thead>
+            <tbody>
+              {(db.grnAudit || []).filter(a => a.grnNumber === auditGRN).map(a => (
+                <tr key={a.id}>
+                  <Td className="text-xs font-mono">{new Date(a.at).toLocaleString("en-IN")}</Td>
+                  <Td>{a.byName}</Td>
+                  <Td><Badge color={a.action === "Created" ? "green" : a.action === "Edited" ? "yellow" : "red"}>{a.action}</Badge></Td>
+                  <Td className="text-xs text-slate-600 dark:text-slate-300">{a.changes}</Td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+          {!(db.grnAudit || []).some(a => a.grnNumber === auditGRN) && <Empty title="No audit entries yet" subtitle="Created/Edited/Deleted actions on this GRN will appear here" />}
+          <div className="flex justify-end mt-3"><Button variant="outline" onClick={() => setAuditGRN(null)}>Close</Button></div>
+        </div>
       </Modal>
     </div>
   );

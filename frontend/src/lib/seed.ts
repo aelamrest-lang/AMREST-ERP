@@ -110,6 +110,7 @@ export function seedDB(): DB {
       },
     ],
     grns: [],
+    grnAudit: [],
     materialIssues: [],
     boms: [
       {

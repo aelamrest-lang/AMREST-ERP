@@ -90,6 +90,7 @@ function migrateDB(db: DB): DB {
     ctCostings: db.ctCostings || [],
     materialIssues: db.materialIssues || [],
     productionEntries: db.productionEntries || [],
+    grnAudit: db.grnAudit || [],
     sfgBatches: db.sfgBatches || [],
     sfgConsumptions: db.sfgConsumptions || [],
     operators: db.operators || [],
