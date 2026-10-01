@@ -92,3 +92,5 @@ Cloud-based Transformer Manufacturing ERP & CRM with modules for Sales CRM, Quot
 
 - UPDATE (2026-10-01): Job Cards page — added search box (testid: jobcard-search) filtering by JC number or product. Verified: 18 → 1 row for "40/5".
 
+- UPDATE (2026-10-01): Party Master — party names clickable → PartyHistoryModal. Vendor/Supplier → Purchase History from POs+GRNs (Date|PO No.|Item|Qty|Unit|Rate|GST|Amount|GRN Status Fully/Partial(x/y)/Pending); Customer → Sales History from Sales Orders (SO/Inv No., SO status). Period filters: 3M/6M/1Y/custom range. KPIs: Total Value, Total Transactions, Pending Amount (vendor: PO balance to receive; customer: undelivered SO value), Last Transaction date. TestIDs: party-history-<id>, party-hist-3m/6m/1y/custom/from/to, party-history-modal.
+
