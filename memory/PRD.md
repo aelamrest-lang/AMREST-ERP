@@ -90,3 +90,5 @@ Cloud-based Transformer Manufacturing ERP & CRM with modules for Sales CRM, Quot
 
 - UPDATE (2026-10-01): Production Dashboard — Machine Wise Output section also removed. Dashboard now: KPIs → Job Card Search → Active Job Cards list. Verified via screenshot.
 
+- UPDATE (2026-10-01): Job Cards page — added search box (testid: jobcard-search) filtering by JC number or product. Verified: 18 → 1 row for "40/5".
+

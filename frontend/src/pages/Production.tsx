@@ -65,6 +65,7 @@ export function JobCards() {
   const canPrint = userCan(currentUser, "jobcards", "print");
   const [open, setOpen] = useState(false);
   const [edit, setEdit] = useState<JobCard | null>(null);
+  const [jcListQuery, setJcListQuery] = useState("");
   const [selectedStages, setSelectedStages] = useState<string[]>([]);
   const isAdmin = currentUser?.role === "admin";
   const stageMaster: string[] = db.settings.productionStages?.length ? db.settings.productionStages : STAGES;
@@ -385,10 +386,19 @@ export function JobCards() {
       </div>
 
       <Card>
+        <div className="p-3 border-b border-slate-100 dark:border-slate-800">
+          <div className="relative max-w-md">
+            <IconSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
+            <Input className="pl-9" placeholder="Search by Job Card No. or Product..." value={jcListQuery} onChange={(e: any) => setJcListQuery(e.target.value)} data-testid="jobcard-search" />
+          </div>
+        </div>
         <Table>
           <thead><tr><Th>#</Th><Th>Date</Th><Th>Product</Th><Th>Qty</Th><Th>Stages Done</Th><Th>Status</Th><Th></Th></tr></thead>
           <tbody>
-            {db.jobCards.map(j => {
+            {db.jobCards.filter(j => {
+              const q = jcListQuery.trim().toLowerCase();
+              return !q || j.number.toLowerCase().includes(q) || j.product.toLowerCase().includes(q);
+            }).map(j => {
               const done = j.stages.filter(s => s.status === "done").length;
               return (
                 <tr key={j.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
