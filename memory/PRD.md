@@ -84,3 +84,5 @@ Cloud-based Transformer Manufacturing ERP & CRM with modules for Sales CRM, Quot
 
 - UPDATE (2026-09-30): GRN Edit/Delete with permissions + audit. Per-row actions on GRN list: Print, Audit (history icon), Edit (grn:edit), Delete (grn:delete) — purchase role has edit but NOT delete by default; admin assigns per-action in Roles page. Edit modal: date, invoice #/amount, freight/packing charges, per-item received qty with live resulting-stock preview; save applies stock delta, recomputes PO status, blocks on negative stock. Delete: confirm + reverses stock, blocked with warning if it would go negative. New `grnAudit` collection (GrnAuditEntry: grnNumber, action Created/Edited/Deleted, old→new changes, user, timestamp) recorded on create/edit/delete, viewable per GRN via audit modal. TestIDs: grn-edit-/grn-delete-/grn-audit-<id>, grn-edit-modal, grn-edit-save, grn-edit-qty-<i>.
 
+- UPDATE (2026-10-01): Raw Material Issue — added material-name search box (testid: issue-material-search) filtering the issue table live, with "No materials match" empty state. Verified: 96 → 26 rows for "core".
+
