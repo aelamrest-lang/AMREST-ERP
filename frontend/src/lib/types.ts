@@ -429,7 +429,8 @@ export interface DeliveryChallan {
   salesOrderId: string;
   jobCardId?: string;
   customerId: string;
-  items?: { name: string; qty: number; rate: number; gst: number }[];
+  dispatchType?: "Raw Material" | "Semi-Finished Goods" | "Finished Goods"; // set for direct stock dispatch (no SO)
+  items?: { itemId?: string; name: string; qty: number; rate: number; gst: number }[];
   freight?: number;
   vehicle?: string;
   driver?: string;

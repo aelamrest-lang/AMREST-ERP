@@ -1,13 +1,13 @@
 import type { DB } from "./types";
 
 function defaultDocumentFormats(today: string) {
-  const types = ["Quotation", "Proforma Invoice", "Sales Order", "Purchase Order", "Job Card", "Delivery Challan", "Tax Invoice", "QC Test Report", "Inspection Certificate"];
+  const types = ["Quotation", "Proforma Invoice", "Sales Order", "Purchase Order", "Job Card", "Dispatch Challan", "Tax Invoice", "QC Test Report", "Inspection Certificate"];
   const terms: Record<string, string[]> = {
     Quotation: ["Prices are Ex-Works.", "GST Extra as Applicable.", "Delivery within 4 Weeks.", "Payment 100% Advance."],
     "Purchase Order": ["Material should be as per specification.", "Delivery within committed date.", "Test certificate mandatory."],
     "Proforma Invoice": ["Payment as per agreed terms.", "Material dispatch after payment confirmation."],
     "Sales Order": ["Order is subject to approved technical specifications.", "Delivery schedule to be mutually agreed."],
-    "Delivery Challan": ["Goods received in good condition.", "Customer acknowledgement required."],
+    "Dispatch Challan": ["Goods received in good condition.", "Customer acknowledgement required."],
     "Job Card": ["Production must follow approved BOM.", "Material issue only against authorized job card."],
     "Tax Invoice": ["Subject to Jaipur jurisdiction.", "Payment due as per invoice terms."],
     "QC Test Report": ["Report valid for tested serial numbers only.", "All tests performed as per applicable standards."],

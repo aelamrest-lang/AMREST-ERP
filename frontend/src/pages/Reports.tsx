@@ -19,7 +19,7 @@ export function Reports() {
   const soIdsForUser = new Set(sos.map((o: any) => o.id));
   const dcs = db.challans.filter((c: any) => isAdmin || soIdsForUser.has(c.salesOrderId));
 
-  // Sales = value of ACTUAL Delivery Challans (dispatched), not open Sales Orders.
+  // Sales = value of ACTUAL Dispatch Challans (dispatched), not open Sales Orders.
   const salesValue = dcs.reduce((s: number, c: any) => {
     const items = (c.items || []);
     return s + items.reduce((a: number, b: any) => a + (Number(b.qty) || 0) * (Number(b.rate) || 0), 0) + (Number(c.freight) || 0);

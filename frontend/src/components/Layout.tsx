@@ -34,7 +34,7 @@ const navGroups: { label: string; items: { id: Route; label: string; icon: any }
     { id: "mfgtime", label: "Manufacturing Time", icon: IconChart },
     { id: "mfgcost", label: "Manufacturing Cost", icon: IconChart },
     { id: "testing", label: "QC Testing", icon: IconClipboard },
-    { id: "challans", label: "Delivery Challan", icon: IconTruck },
+    { id: "challans", label: "Dispatch Challan", icon: IconTruck },
   ]},
   { label: "Insights", items: [
     { id: "reports", label: "Reports", icon: IconChart },

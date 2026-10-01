@@ -6,7 +6,7 @@ import { IconCheck, IconEdit, IconPlus, IconPrint, IconTrash } from "../componen
 import { printArea, professionalDocument, todayISO } from "../lib/utils";
 import { uploadFile, fileDisplayUrl } from "../lib/upload";
 
-const DOCUMENT_TYPES = ["Quotation", "Proforma Invoice", "Sales Order", "Purchase Order", "Job Card", "Delivery Challan", "Tax Invoice", "QC Test Report", "Inspection Certificate"];
+const DOCUMENT_TYPES = ["Quotation", "Proforma Invoice", "Sales Order", "Purchase Order", "Job Card", "Dispatch Challan", "Tax Invoice", "QC Test Report", "Inspection Certificate"];
 
 export function DocumentFormatSettings() {
   const { db, setDB, currentUser, log } = useStore();

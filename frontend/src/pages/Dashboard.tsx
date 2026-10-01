@@ -16,7 +16,7 @@ export function Dashboard() {
   const quotations = myFilter(db.quotations);
   const salesOrders = myFilter(db.salesOrders);
 
-  // Total Sales Value = value of actual Delivery Challans (dispatched), not open Sales Orders.
+  // Total Sales Value = value of actual Dispatch Challans (dispatched), not open Sales Orders.
   const orderTotal = db.challans.reduce((s, c) => {
     const items = (c.items || []) as Array<{ qty: number; rate: number; gst: number }>;
     return s + items.reduce((a, b) => a + (Number(b.qty) || 0) * (Number(b.rate) || 0) * (1 + (Number(b.gst) || 0) / 100), 0) + (Number(c.freight) || 0);
@@ -92,7 +92,7 @@ export function Dashboard() {
   const [shortageListOpen, setShortageListOpen] = useState(false);
   const productionInProg = db.jobCards.filter(j => j.status === "In Progress").length;
 
-  // ---- Monthly Sales from Delivery Challans (actual dispatched qty × rate, not full SO) ----
+  // ---- Monthly Sales from Dispatch Challans (actual dispatched qty × rate, not full SO) ----
   const dcValue = (c: any): number => {
     const items = (c.items || []) as Array<{ qty: number; rate: number; gst: number }>;
     const sub = items.reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.rate) || 0), 0);
@@ -107,7 +107,7 @@ export function Dashboard() {
     return { label: m.label, value: Math.round(total / 1000) }; // in ₹K
   });
 
-  // ---- Monthly Production from Delivery Challan dispatched qty (grouped by DC date) ----
+  // ---- Monthly Production from Dispatch Challan dispatched qty (grouped by DC date) ----
   const monthlyProduction = monthBuckets.map(m => {
     const dispatchedUnits = db.challans
       .filter(c => c.date && c.date.slice(0, 7) === m.key)
@@ -121,7 +121,7 @@ export function Dashboard() {
     color: ["#6366f1", "#f59e0b", "#10b981"][i],
   }));
 
-  // ---- Top Customers from Delivery Challans (actual dispatched, within FY) ----
+  // ---- Top Customers from Dispatch Challans (actual dispatched, within FY) ----
   interface CustomerAgg { customerId: string; name: string; totalQty: number; totalValue: number; orders: number }
   const customerAggMap = new Map<string, CustomerAgg>();
   db.challans.filter((c: any) => isInFy(c.date)).forEach((c: any) => {
@@ -179,7 +179,7 @@ export function Dashboard() {
         <Card>
           <div className="p-5">
             <h3 className="text-lg font-bold uppercase tracking-wide text-slate-900 dark:text-slate-100">Monthly Production</h3>
-            <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">Total Dispatched via Delivery Challans · {fyLabel(fyStartYear)} · click a month to view DCs</p>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">Total Dispatched via Dispatch Challans · {fyLabel(fyStartYear)} · click a month to view DCs</p>
             <div className="mt-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 p-5">
               <ProductionBarChart
                 data={monthlyProduction}
@@ -1107,7 +1107,7 @@ function DashboardDrillDown({
     const totalQty = rows.reduce((a: number, r: any) => a + r.qty, 0);
     const totalValue = rows.reduce((a: number, r: any) => a + r.value, 0);
     return (
-      <Modal open={true} onClose={onClose} title={`Delivery Challans · ${drill.monthLabel}`} size="xl">
+      <Modal open={true} onClose={onClose} title={`Dispatch Challans · ${drill.monthLabel}`} size="xl">
         <div className="space-y-3">
           <div className="grid grid-cols-3 gap-3 text-sm">
             <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
@@ -1153,11 +1153,11 @@ function DashboardDrillDown({
       .sort((a: any, b: any) => (b.date || "").localeCompare(a.date || ""));
     const totalQty = rows.reduce((a: number, c: any) => a + (c.items || []).reduce((s: number, i: any) => s + (Number(i.qty) || 0), 0), 0);
     return (
-      <Modal open={true} onClose={onClose} title={`Delivery Challans · ${drill.monthLabel}`} size="xl">
+      <Modal open={true} onClose={onClose} title={`Dispatch Challans · ${drill.monthLabel}`} size="xl">
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3 text-sm">
             <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
-              <div className="text-xs text-slate-500">Delivery Challans</div>
+              <div className="text-xs text-slate-500">Dispatch Challans</div>
               <div className="text-xl font-bold">{rows.length}</div>
             </div>
             <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
@@ -1170,7 +1170,7 @@ function DashboardDrillDown({
               <thead><tr><Th>DC #</Th><Th>Date</Th><Th>Customer</Th><Th>Linked SO</Th><Th>Linked JC</Th><Th className="text-right">Qty</Th></tr></thead>
               <tbody>
                 {rows.length === 0 ? (
-                  <tr><Td colSpan={6}><Empty title="No Delivery Challans in this month" /></Td></tr>
+                  <tr><Td colSpan={6}><Empty title="No Dispatch Challans in this month" /></Td></tr>
                 ) : rows.map((c: any) => {
                   const so = db.salesOrders.find((o: any) => o.id === c.salesOrderId);
                   const jc = db.jobCards.find((j: any) => j.id === c.jobCardId);

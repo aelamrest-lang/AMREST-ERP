@@ -120,7 +120,7 @@ export function ManufacturingCost() {
       return { ...d, settings: { ...d.settings, manufacturingCosts: cur } as any };
     });
     log(`Manufacturing Cost saved: ${db.items.find(i => i.id === fgId)?.name} — Sale ${fmtINR(salePrice)}`, "Manufacturing Cost");
-    alert("Saved. This sale price will now auto-fill in Delivery Challan for this Finished Good.");
+    alert("Saved. This sale price will now auto-fill in Dispatch Challan for this Finished Good.");
   };
 
   const fg = db.items.find(i => i.id === fgId);
@@ -132,7 +132,7 @@ export function ManufacturingCost() {
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold">Manufacturing Cost</h1>
-          <p className="text-sm text-slate-500">Pick a Finished Good → BOM materials auto-loaded with latest purchase rates · Fix a Sale Price that auto-fills into Delivery Challan.</p>
+          <p className="text-sm text-slate-500">Pick a Finished Good → BOM materials auto-loaded with latest purchase rates · Fix a Sale Price that auto-fills into Dispatch Challan.</p>
         </div>
       </div>
 
@@ -240,7 +240,7 @@ export function ManufacturingCost() {
                 <div>
                   <Label>Sale Price *</Label>
                   <Input type="number" value={salePrice} onChange={(e: any) => setSalePrice(Number(e.target.value) || 0)} className="text-lg font-semibold" data-testid="mfg-saleprice" />
-                  <div className="text-[11px] text-slate-500 mt-1">This price auto-fills into Delivery Challan when the same Finished Good is picked. Users can still edit the value in the challan.</div>
+                  <div className="text-[11px] text-slate-500 mt-1">This price auto-fills into Dispatch Challan when the same Finished Good is picked. Users can still edit the value in the challan.</div>
                 </div>
               </div>
               <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 p-4 space-y-2">

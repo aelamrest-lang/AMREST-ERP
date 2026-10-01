@@ -46,7 +46,7 @@ export function SalesOrders() {
     return arr.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }, [db.salesOrders, isAdmin, currentUser]);
 
-  // ---- SO Summary (auto-derived from Delivery Challans) ----
+  // ---- SO Summary (auto-derived from Dispatch Challans) ----
   const summary = useMemo(() => {
     let totalCount = 0, totalQty = 0, totalValue = 0;
     let completedCount = 0, completedQty = 0, completedValue = 0;
@@ -417,7 +417,7 @@ export function SalesOrders() {
         <Card>
           <CardHeader
             title="Monthly Sales (₹ thousands)"
-            subtitle="Value of Delivery Challans dispatched · click any bar to drill in"
+            subtitle="Value of Dispatch Challans dispatched · click any bar to drill in"
           />
           <div className="p-4">
             <BarChart
@@ -455,7 +455,7 @@ export function SalesOrders() {
                 color="#f59e0b"
                 onBarClick={(i) => setCustomerDrill(topCustomersFull[i].customerId)}
               />
-            ) : <Empty title="No Delivery Challans yet" />}
+            ) : <Empty title="No Dispatch Challans yet" />}
           </div>
         </Card>
       </div>
@@ -810,7 +810,7 @@ export function SalesOrders() {
                   <div className="space-y-1 text-xs">
                     <div><span className="text-slate-500">Proforma:</span> {proforma ? <b className="font-mono">{proforma.number}</b> : <span className="text-slate-400">—</span>}</div>
                     <div><span className="text-slate-500">Job Cards:</span> {linkedJobCards.length ? linkedJobCards.map(j => <b key={j.id} className="font-mono mr-2">{j.number}</b>) : <span className="text-slate-400">—</span>}</div>
-                    <div><span className="text-slate-500">Delivery Challans:</span> {linkedChallans.length ? linkedChallans.map(c => <b key={c.id} className="font-mono mr-2">{c.number}</b>) : <span className="text-slate-400">—</span>}</div>
+                    <div><span className="text-slate-500">Dispatch Challans:</span> {linkedChallans.length ? linkedChallans.map(c => <b key={c.id} className="font-mono mr-2">{c.number}</b>) : <span className="text-slate-400">—</span>}</div>
                   </div>
                 </div>
                 <div className="rounded-lg border p-3 bg-slate-50 dark:bg-slate-800/40 dark:border-slate-700 space-y-1">
@@ -940,7 +940,7 @@ export function SalesOrders() {
               </div>
 
               <div>
-                <div className="text-sm font-semibold mb-2">Delivery Challans ({custDCs.length})</div>
+                <div className="text-sm font-semibold mb-2">Dispatch Challans ({custDCs.length})</div>
                 <div className="rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden max-h-72 overflow-y-auto">
                   <Table>
                     <thead><tr><Th>DC #</Th><Th>Date</Th><Th>SO</Th><Th className="text-right">Qty</Th><Th className="text-right">Value</Th></tr></thead>
@@ -996,13 +996,13 @@ export function SalesOrders() {
                   <div className="text-2xl font-bold text-indigo-800 dark:text-indigo-200" data-testid="month-drill-value">{fmtINR(totalValue)}</div>
                 </div>
                 <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
-                  <div className="text-[11px] uppercase tracking-wide text-slate-500">Delivery Challans</div>
+                  <div className="text-[11px] uppercase tracking-wide text-slate-500">Dispatch Challans</div>
                   <div className="text-2xl font-bold">{monthDCs.length}</div>
                 </div>
               </div>
 
               <div>
-                <div className="text-sm font-semibold mb-2">Delivery Challans ({monthDCs.length})</div>
+                <div className="text-sm font-semibold mb-2">Dispatch Challans ({monthDCs.length})</div>
                 <div className="rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden max-h-72 overflow-y-auto">
                   <Table>
                     <thead><tr><Th>DC #</Th><Th>Date</Th><Th>Customer</Th><Th>SO</Th><Th className="text-right">Qty</Th><Th className="text-right">Value</Th></tr></thead>
@@ -1100,7 +1100,7 @@ export function SalesOrders() {
                     <Row label="Dispatched Qty">{soStats.map(({ o, dispatchedQty }) => <span key={o.id}>{dispatchedQty} Nos</span>)}</Row>
                     <Row label="Balance Qty" strong>{soStats.map(({ o, balance }) => <span key={o.id} className={balance === 0 ? "text-emerald-600" : "text-amber-700"}>{balance} Nos</span>)}</Row>
                     <Row label="Order Value" strong>{soStats.map(({ o, orderedValue }) => <span key={o.id}>{fmtINR(orderedValue)}</span>)}</Row>
-                    <Row label="Delivery Challans">{soStats.map(({ o, dcCount }) => <span key={o.id}>{dcCount} DC{dcCount === 1 ? "" : "s"}</span>)}</Row>
+                    <Row label="Dispatch Challans">{soStats.map(({ o, dcCount }) => <span key={o.id}>{dcCount} DC{dcCount === 1 ? "" : "s"}</span>)}</Row>
                     <Row label="Freight">{soStats.map(({ o }) => <span key={o.id}>{fmtINR(Number(o.freight) || 0)}</span>)}</Row>
                   </tbody>
                 </table>

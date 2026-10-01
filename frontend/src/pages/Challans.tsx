@@ -3,7 +3,7 @@ import { useStore, uid } from "../lib/store";
 import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Badge, Empty } from "../components/ui";
 import type { DeliveryChallan, SalesOrder, JobCard, ProductionEntry, ProductionStage } from "../lib/types";
 import { IconPlus, IconEdit, IconTrash, IconPrint } from "../components/icons";
-import { calcDocTotalsWithFreight, fmtINR, nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
+import { calcDocTotalsWithFreight, fmtINR, fmt2, nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
 import { userCan } from "../lib/permissions";
 
 interface DispatchRow {
@@ -120,6 +120,20 @@ export function Challans() {
   });
   const [form, setForm] = useState<DeliveryChallan>(blank());
   const [row, setRow] = useState<DispatchRow | null>(null);
+  const [mode, setMode] = useState<"jc" | "direct">("jc");
+  const [directRows, setDirectRows] = useState<{ itemId: string; qty: number; rate: number; gst: number }[]>([]);
+
+  const directCategory = form.dispatchType === "Raw Material" ? "Raw Material" : form.dispatchType === "Semi-Finished Goods" ? "Semi-Finished" : "Finished Goods";
+  const directItems = useMemo(() => {
+    if (!form.dispatchType) return [];
+    return db.items.filter(i => i.category === directCategory);
+  }, [db.items, form.dispatchType, directCategory]);
+
+  const directAvailable = (itemId: string) => {
+    const it = db.items.find(i => i.id === itemId);
+    const restored = edit?.dispatchType ? (edit.items || []).find(x => x.itemId === itemId)?.qty || 0 : 0;
+    return (it?.currentStock || 0) + restored;
+  };
 
   const currentSO = db.salesOrders.find(s => s.id === form.salesOrderId);
   const currentJC = db.jobCards.find(j => j.id === form.jobCardId);
@@ -136,15 +150,19 @@ export function Challans() {
   }, [db.jobCards, db.productionEntries, db.challans, edit?.id]);
 
   const totals = useMemo(() => {
-    const items = row ? [{ qty: row.currentQty, rate: row.rate, gst: row.gst }] : [];
+    const items = mode === "direct"
+      ? directRows.filter(r => r.itemId && r.qty > 0).map(r => ({ qty: r.qty, rate: r.rate, gst: r.gst }))
+      : (row ? [{ qty: row.currentQty, rate: row.rate, gst: row.gst }] : []);
     return calcDocTotalsWithFreight(items, Number(form.freight) || 0);
-  }, [row, form.freight]);
+  }, [row, directRows, mode, form.freight]);
   const grandTotal = totals.total;
 
   const openNew = () => {
     setEdit(null);
     setForm(blank());
     setRow(null);
+    setMode("jc");
+    setDirectRows([]);
     setOpen(true);
   };
   // Map of Finished Good name → saved manufacturing sale price (used to auto-fill DC rate)
@@ -161,10 +179,18 @@ export function Challans() {
   const openEdit = (c: DeliveryChallan) => {
     setEdit(c);
     setForm({ ...c });
-    const jc = db.jobCards.find(j => j.id === c.jobCardId);
-    const so = db.salesOrders.find(s => s.id === c.salesOrderId);
-    if (jc) setRow(buildDispatchRow(so, jc, db.productionEntries, db.challans, c.id, c.items, fgSaleMap));
-    else setRow(null);
+    if (c.dispatchType) {
+      setMode("direct");
+      setDirectRows((c.items || []).filter(x => x.itemId).map(x => ({ itemId: x.itemId!, qty: x.qty, rate: x.rate, gst: x.gst })));
+      setRow(null);
+    } else {
+      setMode("jc");
+      setDirectRows([]);
+      const jc = db.jobCards.find(j => j.id === c.jobCardId);
+      const so = db.salesOrders.find(s => s.id === c.salesOrderId);
+      if (jc) setRow(buildDispatchRow(so, jc, db.productionEntries, db.challans, c.id, c.items, fgSaleMap));
+      else setRow(null);
+    }
     setOpen(true);
   };
 
@@ -232,7 +258,7 @@ export function Challans() {
         : d.salesOrders;
       return { ...d, challans, jobCards, salesOrders };
     });
-    log(`${edit ? "Updated" : "Created"} DC ${form.number}${jcFullyDispatched ? ` · Job Card ${currentJC.number} fully dispatched` : ""}${soFullyDispatched && currentSO ? ` · Sales Order ${currentSO.number} auto-marked Delivered` : ""}`, "Delivery Challan");
+    log(`${edit ? "Updated" : "Created"} DC ${form.number}${jcFullyDispatched ? ` · Job Card ${currentJC.number} fully dispatched` : ""}${soFullyDispatched && currentSO ? ` · Sales Order ${currentSO.number} auto-marked Delivered` : ""}`, "Dispatch Challan");
 
     // After save, if SO still has balance across all items, offer to create a new JC.
     let soBalanceAfter = 0;
@@ -253,8 +279,33 @@ export function Challans() {
     }
   };
 
-  const createBalanceJobCard = () => {
-    if (!balancePrompt) return;
+  const saveDirect = () => {
+    if (!form.customerId) return alert("Please select a Party for this dispatch.");
+    if (!form.dispatchType) return alert("Please select a Dispatch Type.");
+    const rows = directRows.filter(r => r.itemId && r.qty > 0);
+    if (!rows.length) return alert("Add at least one item with Dispatch Qty greater than 0.");
+    for (const r of rows) {
+      const it = db.items.find(i => i.id === r.itemId);
+      const available = directAvailable(r.itemId);
+      if (r.qty > available) return alert(`Cannot dispatch ${fmt2(r.qty)} of "${it?.name}" — only ${fmt2(available)} ${it?.unit} available in stock.`);
+    }
+    const items = rows.map(r => ({ itemId: r.itemId, name: db.items.find(i => i.id === r.itemId)?.name || "", qty: r.qty, rate: r.rate, gst: r.gst }));
+    const payload: DeliveryChallan = { ...form, items, salesOrderId: "", jobCardId: form.jobCardId || "" };
+    setDB(d => {
+      const delta = new Map<string, number>();
+      if (edit) (edit.items || []).forEach(x => { if (x.itemId) delta.set(x.itemId, (delta.get(x.itemId) || 0) + (x.qty || 0)); }); // restore old
+      rows.forEach(r => delta.set(r.itemId, (delta.get(r.itemId) || 0) - r.qty)); // deduct new
+      const newItems = d.items.map(it => delta.has(it.id) ? { ...it, currentStock: Math.max(0, (it.currentStock || 0) + (delta.get(it.id) || 0)) } : it);
+      const challans = edit ? d.challans.map(x => x.id === edit.id ? payload : x) : [{ ...payload, id: uid() }, ...d.challans];
+      return { ...d, challans, items: newItems };
+    });
+    log(`${edit ? "Updated" : "Created"} Dispatch Challan ${form.number} · ${form.dispatchType} · direct dispatch · stock deducted`, "Dispatch Challan");
+    setOpen(false);
+  };
+
+  const saveAll = () => mode === "direct" ? saveDirect() : save();
+
+  const createBalanceJobCard = () => {    if (!balancePrompt) return;
     const { so, parentJc, balance } = balancePrompt;
     const newJc: JobCard = {
       id: uid(),
@@ -279,9 +330,17 @@ export function Challans() {
   };
 
   const remove = (c: DeliveryChallan) => {
-    if (!confirm(`Delete ${c.number}?`)) return;
-    setDB(d => ({ ...d, challans: d.challans.filter(x => x.id !== c.id) }));
-    log(`Deleted DC ${c.number}`, "Delivery Challan");
+    if (!confirm(`Delete ${c.number}?${c.dispatchType ? " Dispatched stock will be restored to Current Stock." : ""}`)) return;
+    setDB(d => {
+      let items = d.items;
+      if (c.dispatchType) {
+        const restore = new Map<string, number>();
+        (c.items || []).forEach(x => { if (x.itemId) restore.set(x.itemId, (restore.get(x.itemId) || 0) + x.qty); });
+        items = d.items.map(it => restore.has(it.id) ? { ...it, currentStock: (it.currentStock || 0) + (restore.get(it.id) || 0) } : it);
+      }
+      return { ...d, challans: d.challans.filter(x => x.id !== c.id), items };
+    });
+    log(`Deleted Dispatch Challan ${c.number}${c.dispatchType ? " (stock restored)" : ""}`, "Dispatch Challan");
   };
 
   const printDC = (c: DeliveryChallan) => {
@@ -290,11 +349,25 @@ export function Challans() {
     const cust = db.parties.find(p => p.id === c.customerId);
     const dItems = c.items || [];
     const t = calcDocTotalsWithFreight(dItems.map(i => ({ qty: i.qty, rate: i.rate, gst: i.gst })), Number(c.freight) || 0);
-    const rowsHtml = dItems.map((i, idx) => {
-      const ordered = so?.items.find(x => x.name === i.name)?.qty ?? 0;
-      const otherDispatched = sumDispatched(db.challans, c.salesOrderId, i.name, c.id);
-      const balance = Math.max(0, ordered - otherDispatched - i.qty);
-      return `<tr>
+    const isDirect = !!c.dispatchType;
+    const rowsHtml = isDirect
+      ? dItems.map((i, idx) => {
+          const it = db.items.find(x => x.id === i.itemId);
+          return `<tr>
+            <td>${idx + 1}</td>
+            <td>${i.name}</td>
+            <td class="right"><b>${i.qty}</b></td>
+            <td>${it?.unit || "-"}</td>
+            <td class="right">${fmtINR(i.rate)}</td>
+            <td class="right">${i.gst}%</td>
+            <td class="right">${fmtINR(i.qty * i.rate)}</td>
+          </tr>`;
+        }).join("")
+      : dItems.map((i, idx) => {
+          const ordered = so?.items.find(x => x.name === i.name)?.qty ?? 0;
+          const otherDispatched = sumDispatched(db.challans, c.salesOrderId, i.name, c.id);
+          const balance = Math.max(0, ordered - otherDispatched - i.qty);
+          return `<tr>
         <td>${idx + 1}</td>
         <td>${i.name}</td>
         <td class="right">${ordered}</td>
@@ -305,19 +378,21 @@ export function Challans() {
         <td class="right">${i.gst}%</td>
         <td class="right">${fmtINR(i.qty * i.rate)}</td>
       </tr>`;
-    }).join("");
+        }).join("");
     const body = `
       <div class="box"><div class="section-title">Consignee</div><b>${cust?.name || ""}</b><br/>${cust?.address || ""}${cust?.city ? `, ${cust.city}` : ""}<br/>GST: ${cust?.gst || ""}<br/>Contact: ${cust?.mobile || ""}</div>
-      <div class="box"><div class="section-title">Dispatch Details</div><b>Sales Order:</b> ${so?.number || "-"} &nbsp; | &nbsp; <b>Job Card:</b> ${jc?.number || "-"}<br/><b>Vehicle:</b> ${c.vehicle || "-"} | <b>Driver:</b> ${c.driver || "-"}<br/><b>Transport:</b> ${c.transport || "-"}<br/><b>Acknowledgement:</b> ${c.acknowledged ? "Received" : "Pending"}</div>
+      <div class="box"><div class="section-title">Dispatch Details</div>${isDirect ? `<b>Dispatch Type:</b> ${c.dispatchType} (Direct from Stock)<br/>` : `<b>Sales Order:</b> ${so?.number || "-"} &nbsp; | &nbsp; `}<b>Job Card:</b> ${jc?.number || "-"}<br/><b>Vehicle:</b> ${c.vehicle || "-"} | <b>Driver:</b> ${c.driver || "-"}<br/><b>Transport:</b> ${c.transport || "-"}<br/><b>Acknowledgement:</b> ${c.acknowledged ? "Received" : "Pending"}</div>
       <table>
         <thead><tr>
-          <th>#</th><th>Item</th>
+          ${isDirect
+            ? `<th>#</th><th>Item</th><th class="right">Qty</th><th>Unit</th><th class="right">Rate</th><th class="right">GST%</th><th class="right">Amount</th>`
+            : `<th>#</th><th>Item</th>
           <th class="right">Ordered</th>
           <th class="right">Prev Dispatched</th>
           <th class="right">This Dispatch</th>
           <th class="right">Balance</th>
           <th class="right">Rate</th>
-          <th class="right">GST%</th>
+          <th class="right">GST%</th>`}
           <th class="right">Amount</th>
         </tr></thead>
         <tbody>${rowsHtml}</tbody>
@@ -330,7 +405,7 @@ export function Challans() {
       </table>
       <div class="signs"><div class="sign-box">Receiver Signature</div><div class="sign-box">Dispatch</div><div class="sign-box">Authorized Signatory</div></div>
     `;
-    const html = professionalDocument(db.settings, { title: "Delivery Challan", number: c.number, date: c.date, body, accent: "#0f766e" });
+    const html = professionalDocument(db.settings, { title: "Dispatch Challan", number: c.number, date: c.date, body, accent: "#0f766e" });
     printArea(html, c.number);
   };
 
@@ -349,7 +424,7 @@ export function Challans() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <div><h1 className="text-2xl font-bold">Delivery Challan</h1><p className="text-sm text-slate-500">Dispatch tracking with partial dispatch, JC-gated qty and balance</p></div>
+        <div><h1 className="text-2xl font-bold">Dispatch Challan</h1><p className="text-sm text-slate-500">Dispatch tracking with partial dispatch, JC-gated qty and balance</p></div>
         {canCreate && <Button onClick={openNew} data-testid="new-challan-btn"><IconPlus size={14}/> New Challan</Button>}
       </div>
       <Card>
@@ -366,9 +441,10 @@ export function Challans() {
                       type="button"
                       className="text-indigo-600 hover:underline"
                       onClick={() => setViewDC(c)}
-                      title="View full Delivery Challan details"
+                      title="View full Dispatch Challan details"
                       data-testid={`dc-view-${c.number}`}
                     >{c.number}</button>
+                    {c.dispatchType && <div className="mt-0.5"><Badge color="blue">{c.dispatchType}</Badge></div>}
                   </Td>
                   <Td>{c.date}</Td>
                   <Td>{db.salesOrders.find(s => s.id === c.salesOrderId)?.number || "—"}</Td>
@@ -391,49 +467,116 @@ export function Challans() {
         {db.challans.length === 0 && <Empty/>}
       </Card>
 
-      <Modal open={open} onClose={() => setOpen(false)} title={edit ? `Edit ${edit.number}` : "New Delivery Challan"} size="xl">
+      <Modal open={open} onClose={() => setOpen(false)} title={edit ? `Edit ${edit.number}` : "New Dispatch Challan"} size="xl">
+        <div className="flex rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden w-fit mb-4">
+          <button type="button" onClick={() => setMode("jc")} className={"px-4 py-2 text-xs font-semibold " + (mode === "jc" ? "bg-indigo-600 text-white" : "bg-white dark:bg-slate-900 text-slate-600")} data-testid="dc-mode-jc">Against Job Card / SO</button>
+          <button type="button" onClick={() => setMode("direct")} className={"px-4 py-2 text-xs font-semibold " + (mode === "direct" ? "bg-indigo-600 text-white" : "bg-white dark:bg-slate-900 text-slate-600")} data-testid="dc-mode-direct">Direct Dispatch (from Stock)</button>
+        </div>
         <div className="grid sm:grid-cols-3 gap-3">
           <div><Label>Challan No.</Label><Input value={form.number} disabled/></div>
           <div><Label>Date</Label><Input type="date" value={form.date} onChange={(e: any) => setForm({...form, date: e.target.value})}/></div>
+          {mode === "direct" && (
+            <div>
+              <Label>Dispatch Type *</Label>
+              <Select value={form.dispatchType || ""} onChange={(e: any) => { setForm({ ...form, dispatchType: e.target.value as DeliveryChallan["dispatchType"] }); setDirectRows([]); }} data-testid="dc-dispatch-type">
+                <option value="">— Select Type —</option>
+                <option value="Raw Material">Raw Material</option>
+                <option value="Semi-Finished Goods">Semi-Finished Goods</option>
+                <option value="Finished Goods">Finished Goods</option>
+              </Select>
+            </div>
+          )}
           <div>
-            <Label>Job Card *</Label>
-            <Select value={form.jobCardId || ""} onChange={(e: any) => applyJobCard(e.target.value)} data-testid="dc-jobcard-select">
-              <option value="">— Select Job Card —</option>
-              {dispatchableJobCards.map(j => {
+            <Label>{mode === "direct" ? "Job Card (optional reference)" : "Job Card *"}</Label>
+            <Select value={form.jobCardId || ""} onChange={(e: any) => mode === "direct" ? setForm({ ...form, jobCardId: e.target.value }) : applyJobCard(e.target.value)} data-testid="dc-jobcard-select">
+              <option value="">{mode === "direct" ? "— None —" : "— Select Job Card —"}</option>
+              {(mode === "direct" ? db.jobCards : dispatchableJobCards).map(j => {
                 const so = db.salesOrders.find(s => s.id === j.salesOrderId);
                 const completed = jobCardCompletedQty(j, db.productionEntries);
                 const disp = sumDispatchedFromJC(db.challans, j.id, edit?.id);
                 const avail = Math.max(0, completed - disp);
-                return <option key={j.id} value={j.id}>{j.number} · {j.product} · Ready {completed}/{j.qty} · Available {avail}{so ? ` · ${so.number}` : ""}</option>;
+                return <option key={j.id} value={j.id}>{j.number} · {j.product}{mode === "jc" ? ` · Ready ${completed}/${j.qty} · Available ${avail}` : ""}{so ? ` · ${so.number}` : ""}</option>;
               })}
             </Select>
           </div>
-          <div>
-            <Label>Sales Order (auto)</Label>
-            <Input value={currentSO?.number || ""} disabled placeholder={currentJC ? "Not linked (JC has no SO)" : "Auto-set from Job Card"} data-testid="dc-so-display" />
-          </div>
-          <div className="sm:col-span-2">
-            <Label>Customer{currentSO ? " (auto)" : " *"}</Label>
+          {mode === "jc" && (
+            <div>
+              <Label>Sales Order (auto)</Label>
+              <Input value={currentSO?.number || ""} disabled placeholder={currentJC ? "Not linked (JC has no SO)" : "Auto-set from Job Card"} data-testid="dc-so-display" />
+            </div>
+          )}
+          <div className={mode === "jc" ? "sm:col-span-2" : ""}>
+            <Label>{mode === "direct" ? "Party *" : `Customer${currentSO ? " (auto)" : " *"}`}</Label>
             <Select
               value={form.customerId}
               onChange={(e: any) => setForm({...form, customerId: e.target.value})}
-              disabled={!!currentSO}
+              disabled={mode === "jc" && !!currentSO}
               data-testid="dc-customer-select"
             >
-              <option value="">— Select Customer —</option>
-              {db.parties.filter(p => p.type === "customer").map(p => <option key={p.id} value={p.id}>{p.name}{p.city ? ` · ${p.city}` : ""}</option>)}
+              <option value="">{mode === "direct" ? "— Select Party —" : "— Select Customer —"}</option>
+              {db.parties.filter(p => mode === "direct" ? true : p.type === "customer").map(p => <option key={p.id} value={p.id}>{p.name}{p.city ? ` · ${p.city}` : ""}{mode === "direct" ? ` (${p.type})` : ""}</option>)}
             </Select>
           </div>
         </div>
 
-        {!currentJC && (
+        {mode === "direct" && form.dispatchType && (
+          <div className="mt-4 border border-slate-200 dark:border-slate-700 rounded-lg overflow-x-auto" data-testid="dc-direct-panel">
+            <div className="flex items-center justify-between px-3 py-2 bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-700 text-xs">
+              <div className="font-semibold text-slate-700 dark:text-slate-200">Dispatch Items — picked directly from Inventory ({directCategory} stock)</div>
+              <Button size="sm" variant="outline" onClick={() => setDirectRows(r => [...r, { itemId: "", qty: 1, rate: 0, gst: 18 }])} data-testid="dc-add-item"><IconPlus size={12}/> Add Item</Button>
+            </div>
+            <Table>
+              <thead><tr>
+                <Th>Item</Th><Th className="text-right">Available Stock</Th><Th className="text-right">Dispatch Qty</Th><Th>Unit</Th><Th className="text-right">Rate</Th><Th className="text-right">GST%</Th><Th className="text-right">Amount</Th><Th></Th>
+              </tr></thead>
+              <tbody>
+                {directRows.map((r, idx) => {
+                  const it = db.items.find(i => i.id === r.itemId);
+                  const available = r.itemId ? directAvailable(r.itemId) : 0;
+                  const over = r.itemId && r.qty > available;
+                  return (
+                    <tr key={idx} className={over ? "bg-rose-50 dark:bg-rose-900/20" : ""}>
+                      <Td className="min-w-56">
+                        <Select value={r.itemId} onChange={(e: any) => {
+                          const item = db.items.find(i => i.id === e.target.value);
+                          setDirectRows(rows => rows.map((x, i) => i === idx ? { ...x, itemId: e.target.value, rate: item ? (item.saleRate || item.purchaseRate || 0) : 0, gst: item?.gstRate ?? 18 } : x));
+                        }} data-testid={`dc-item-${idx}`}>
+                          <option value="">— Select Item —</option>
+                          {directItems.map(i => <option key={i.id} value={i.id}>{i.name} · stock {fmt2(i.currentStock)} {i.unit}</option>)}
+                        </Select>
+                      </Td>
+                      <Td className="text-right font-medium" data-testid={`dc-avail-${idx}`}>{r.itemId ? `${fmt2(available)} ${it?.unit || ""}` : "—"}</Td>
+                      <Td className="text-right">
+                        <Input type="number" min={0} max={available} value={r.qty}
+                          onChange={(e: any) => setDirectRows(rows => rows.map((x, i) => i === idx ? { ...x, qty: Math.max(0, Number(e.target.value) || 0) } : x))}
+                          className={"w-24 text-right py-1 h-8 " + (over ? "border-rose-500" : "")}
+                          data-testid={`dc-qty-${idx}`} />
+                      </Td>
+                      <Td>{it?.unit || "—"}</Td>
+                      <Td className="text-right"><Input type="number" value={r.rate} onChange={(e: any) => setDirectRows(rows => rows.map((x, i) => i === idx ? { ...x, rate: Number(e.target.value) || 0 } : x))} className="w-24 text-right py-1 h-8" data-testid={`dc-rate-${idx}`} /></Td>
+                      <Td className="text-right"><Input type="number" value={r.gst} onChange={(e: any) => setDirectRows(rows => rows.map((x, i) => i === idx ? { ...x, gst: Number(e.target.value) || 0 } : x))} className="w-16 text-right py-1 h-8" /></Td>
+                      <Td className="text-right font-medium">{fmtINR(r.qty * r.rate)}</Td>
+                      <Td><Button size="sm" variant="ghost" onClick={() => setDirectRows(rows => rows.filter((_, i) => i !== idx))} data-testid={`dc-item-remove-${idx}`}><IconTrash size={14}/></Button></Td>
+                    </tr>
+                  );
+                })}
+                {directRows.length === 0 && <tr><Td {...{ colSpan: 8 }}><Empty title="No items added" subtitle="Click 'Add Item' to pick stock to dispatch" /></Td></tr>}
+              </tbody>
+            </Table>
+          </div>
+        )}
+        {mode === "direct" && !form.dispatchType && (
+          <div className="mt-4 rounded-lg border border-indigo-200 bg-indigo-50 dark:bg-indigo-900/20 dark:border-indigo-700 p-3 text-sm text-indigo-800 dark:text-indigo-200">Select a <b>Dispatch Type</b> above to pick {`items`} from Inventory.</div>
+        )}
+
+        {mode === "jc" && !currentJC && (
           <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-700 p-3 text-sm text-amber-800 dark:text-amber-200" data-testid="dc-no-jc-warning">
             <b>Job Card is required.</b> Dispatch is only allowed against a Job Card and up to its completed quantity. If no Job Card exists for this Sales Order, please create one in <b>Production</b> first.
             {dispatchableJobCards.length === 0 && <div className="mt-1 text-xs">Also: no Job Cards currently have completed (Dispatch Ready) quantity available for dispatch.</div>}
           </div>
         )}
 
-        {currentJC && (
+        {mode === "jc" && currentJC && (
           <div className="mt-4 grid gap-3 md:grid-cols-5 sm:grid-cols-2" data-testid="dc-dispatch-summary">
             <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
               <div className="text-[11px] uppercase tracking-wide text-slate-500">Sales Order Qty</div>
@@ -463,7 +606,7 @@ export function Challans() {
           </div>
         )}
 
-        {row && (
+        {mode === "jc" && row && (
           <div className="mt-4 border border-slate-200 dark:border-slate-700 rounded-lg overflow-x-auto" data-testid="dc-partial-panel">
             <div className="flex items-center justify-between px-3 py-2 bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-700 text-xs">
               <div className="font-semibold text-slate-700 dark:text-slate-200">Partial Dispatch — enter any quantity up to the Available JC qty</div>
@@ -569,11 +712,11 @@ export function Challans() {
 
         <div className="mt-5 flex justify-end gap-2">
           <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-          <Button onClick={save} disabled={!currentJC} data-testid="dc-save-btn">{edit ? "Update" : "Create"}</Button>
+          <Button onClick={saveAll} disabled={mode === "jc" ? !currentJC : false} data-testid="dc-save-btn">{edit ? "Update" : "Create"}</Button>
         </div>
       </Modal>
 
-      <Modal open={!!viewDC} onClose={() => setViewDC(null)} title={viewDC ? `Delivery Challan · ${viewDC.number}` : "Delivery Challan"} size="xl">
+      <Modal open={!!viewDC} onClose={() => setViewDC(null)} title={viewDC ? `Dispatch Challan · ${viewDC.number}` : "Dispatch Challan"} size="xl">
         {viewDC && (() => {
           const c = viewDC;
           const so = db.salesOrders.find(s => s.id === c.salesOrderId);

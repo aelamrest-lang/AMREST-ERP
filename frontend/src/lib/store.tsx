@@ -49,7 +49,9 @@ function migrateDB(db: DB): DB {
     return format;
   }) : (seeded.qcFormats || []);
   const seedFormats = seeded.settings.documentFormats || defaultDocumentFormats(new Date().toISOString());
-  const existingFormats = db.settings?.documentFormats || [];
+  const existingFormats = (db.settings?.documentFormats || []).map(f =>
+    f.documentType === "Delivery Challan" ? { ...f, documentType: "Dispatch Challan" } : f
+  );
   const mergedDocumentFormats = [
     ...existingFormats,
     ...seedFormats.filter(sf => !existingFormats.some(ef => ef.documentType === sf.documentType)),

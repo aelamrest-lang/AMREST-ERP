@@ -25,7 +25,7 @@ export const moduleLabels: Record<RouteId, string> = {
   jobcards: "Job Cards",
   production: "Production",
   testing: "QC Testing",
-  challans: "Delivery Challan",
+  challans: "Dispatch Challan",
   operators: "Operators & Ledger",
   mfgtime: "Manufacturing Time",
   mfgcost: "Manufacturing Cost",
