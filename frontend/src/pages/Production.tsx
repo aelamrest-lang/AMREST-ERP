@@ -887,10 +887,6 @@ export function ProductionDashboard() {
         </div>
       </Card>
 
-      <div className="grid lg:grid-cols-1 gap-4">
-        <Card><div className="p-4"><h3 className="font-semibold mb-3">Machine Wise Output</h3>{groupRows(db.productionEntries, "machineName")}</div></Card>
-      </div>
-
       <div className="space-y-3">
         {inProg.map(j => (
           <div key={j.id} id={`jc-${j.id}`} className="rounded-xl transition-shadow scroll-mt-4">
