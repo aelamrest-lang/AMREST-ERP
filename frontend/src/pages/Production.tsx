@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useStore, uid } from "../lib/store";
 import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Badge, Empty, KPI, Textarea } from "../components/ui";
 import type { DB, JobCard, ProductionEntry, ProductionStage, QCTestRecord, SerialRecord } from "../lib/types";
-import { IconPlus, IconEdit, IconTrash, IconFactory, IconCheck, IconPrint } from "../components/icons";
-import { fmtINR, nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
+import { IconPlus, IconEdit, IconTrash, IconFactory, IconCheck, IconPrint, IconSearch } from "../components/icons";
+import { fmtINR, fmt2, nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
 import { userCan } from "../lib/permissions";
 import { applySfgProduction, applySfgAutoConsumption } from "../lib/sfg";
 
@@ -645,8 +645,8 @@ export function ProductionDashboard() {
   const [shift, setShift] = useState<"Day" | "Night" | "General">("Day");
   const [machineName, setMachineName] = useState("");
   const [operatorDrill, setOperatorDrill] = useState<string | null>(null);
-  const [stagePricesOpen, setStagePricesOpen] = useState(false);
-  const [stagePriceDraft, setStagePriceDraft] = useState<Record<string, number>>(db.settings.stagePrices || {});
+  const [jcQuery, setJcQuery] = useState("");
+  const [jcPickId, setJcPickId] = useState("");
   const [remarks, setRemarks] = useState("");
   const [entryWarning, setEntryWarning] = useState("");
   const [dateMode, setDateMode] = useState<"today" | "yesterday" | "custom">("today");
@@ -679,6 +679,17 @@ export function ProductionDashboard() {
     const idx = (s: string) => { const i = stageMaster.indexOf(s); return i < 0 ? stageMaster.length : i; };
     return arr.slice().sort((a, b) => idx(a.stage) - idx(b.stage));
   };
+
+  const jcCustomerName = (j: JobCard) => {
+    const so = db.salesOrders.find(s => s.id === j.salesOrderId);
+    return db.parties.find(p => p.id === so?.customerId)?.name || "";
+  };
+  const jcSearchResults = useMemo(() => {
+    const q = jcQuery.trim().toLowerCase();
+    if (!q) return [];
+    return db.jobCards.filter(j => j.number.toLowerCase().includes(q) || j.product.toLowerCase().includes(q) || jcCustomerName(j).toLowerCase().includes(q));
+  }, [jcQuery, db.jobCards, db.salesOrders, db.parties]);
+  const pickedJc = db.jobCards.find(j => j.id === jcPickId);
 
   const stageCounts = stageMaster.map(s => ({
     label: s.replace(" / ", " ").split(" ")[0],
@@ -804,50 +815,81 @@ export function ProductionDashboard() {
       </div>
 
       <Card>
-        <div className="p-5">
-          <h3 className="font-semibold mb-3">Stage-wise Active Jobs</h3>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {stageCounts.map(s => (
-              <div key={s.label} className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 text-center">
-                <div className="text-2xl font-bold text-indigo-600">{s.count}</div>
-                <div className="text-xs text-slate-500 mt-1">{s.label}</div>
-              </div>
-            ))}
+        <div className="p-4 space-y-3" data-testid="jc-search-card">
+          <div className="flex items-center gap-3 flex-wrap">
+            <h3 className="font-semibold">Job Card Search</h3>
+            <div className="relative flex-1 min-w-64">
+              <IconSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
+              <Input className="pl-9" placeholder="Search by Job Card No., Product or Customer..." value={jcQuery} onChange={(e: any) => { setJcQuery(e.target.value); }} data-testid="jc-search-input" />
+            </div>
+            {jcPickId && <Button size="sm" variant="outline" onClick={() => { setJcPickId(""); setJcQuery(""); }} data-testid="jc-search-clear">Clear</Button>}
           </div>
+          {jcQuery.trim() && (
+            <div className="rounded-lg border border-slate-200 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-800 max-h-56 overflow-auto" data-testid="jc-search-results">
+              {jcSearchResults.slice(0, 8).map(j => (
+                <button key={j.id} type="button" onClick={() => { setJcPickId(j.id); setJcQuery(""); }}
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-indigo-50 dark:hover:bg-indigo-900/20 flex items-center justify-between gap-2"
+                  data-testid={`jc-search-pick-${j.id}`}>
+                  <span><b className="font-mono text-xs">{j.number}</b> · {j.product}</span>
+                  <span className="text-xs text-slate-500">{jcCustomerName(j) || ""}</span>
+                  <Badge color={j.status === "Completed" ? "green" : j.status === "In Progress" ? "yellow" : "blue"}>{j.status}</Badge>
+                </button>
+              ))}
+              {jcSearchResults.length === 0 && <div className="px-3 py-4 text-sm text-slate-500 text-center">No job card matches "{jcQuery}"</div>}
+            </div>
+          )}
+          {pickedJc && (() => {
+            const completedByStage: Record<string, number> = {};
+            db.productionEntries.filter(e => e.jobCardId === pickedJc.id).forEach(e => { completedByStage[e.stage] = (completedByStage[e.stage] || 0) + (e.todayQty || 0); });
+            const latest = db.productionEntries.filter(e => e.jobCardId === pickedJc.id).slice().sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))[0];
+            const totalTarget = (pickedJc.stageQuantities || []).reduce((s, r) => s + (r.totalQty || 0), 0);
+            const totalDone = Object.values(completedByStage).reduce((s, q) => s + q, 0);
+            return (
+              <div className="rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50/40 dark:bg-indigo-900/10 p-4 space-y-3" data-testid="jc-search-detail">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div>
+                    <div className="font-semibold">{pickedJc.number} — {pickedJc.product}</div>
+                    <div className="text-xs text-slate-500">Customer: {jcCustomerName(pickedJc) || "—"} · Qty: {pickedJc.qty} · Created: {pickedJc.date}</div>
+                  </div>
+                  <Badge color={pickedJc.status === "Completed" ? "green" : pickedJc.status === "In Progress" ? "yellow" : "blue"}>{pickedJc.status}</Badge>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 p-2 text-center"><div className="text-[10px] uppercase text-slate-500">Target Qty</div><div className="font-bold">{fmt2(totalTarget)}</div></div>
+                  <div className="rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 p-2 text-center"><div className="text-[10px] uppercase text-slate-500">Completed Qty</div><div className="font-bold text-blue-700">{fmt2(totalDone)}</div></div>
+                  <div className="rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 p-2 text-center"><div className="text-[10px] uppercase text-slate-500">Balance Qty</div><div className="font-bold text-amber-600">{fmt2(Math.max(0, totalTarget - totalDone))}</div></div>
+                </div>
+                <Table>
+                  <thead><tr><Th>Stage</Th><Th>Status</Th><Th className="text-right">Target</Th><Th className="text-right">Completed</Th><Th className="text-right">Balance</Th><Th>Operator</Th><Th>Date</Th></tr></thead>
+                  <tbody>
+                    {orderStages(pickedJc.stages).map(s => {
+                      const target = pickedJc.stageQuantities?.find(r => r.stage === s.stage)?.totalQty ?? pickedJc.qty;
+                      const done = completedByStage[s.stage] || 0;
+                      return (
+                        <tr key={s.stage}>
+                          <Td className="font-medium">{s.stage}</Td>
+                          <Td><Badge color={s.status === "done" ? "green" : s.status === "in-progress" ? "yellow" : "red"}>{s.status}</Badge></Td>
+                          <Td className="text-right">{fmt2(target)}</Td>
+                          <Td className="text-right font-semibold text-blue-700">{fmt2(done)}</Td>
+                          <Td className="text-right font-semibold text-amber-600">{fmt2(Math.max(0, target - done))}</Td>
+                          <Td className="text-xs">{s.worker || "—"}</Td>
+                          <Td className="text-xs">{s.date || "—"}</Td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </Table>
+                <div className="text-xs text-slate-600 dark:text-slate-300">
+                  <b>Latest Entry:</b> {latest ? `${latest.date} · ${latest.stage} · Qty ${fmt2(latest.todayQty)} · ${latest.operatorName || "—"}${latest.shift ? ` · ${latest.shift} shift` : ""}` : "No production entries yet"}
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </Card>
 
-      <div className="grid lg:grid-cols-2 gap-4">
-        <Card><div className="p-4"><h3 className="font-semibold mb-3">Operator Wise Output</h3>{groupRows(db.productionEntries, "operatorName", (name) => setOperatorDrill(name))}</div></Card>
+      <div className="grid lg:grid-cols-1 gap-4">
         <Card><div className="p-4"><h3 className="font-semibold mb-3">Machine Wise Output</h3>{groupRows(db.productionEntries, "machineName")}</div></Card>
       </div>
-
-      <Card>
-        <div className="p-4">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <div>
-              <h3 className="font-semibold">Stage Prices (₹ per unit)</h3>
-              <p className="text-xs text-slate-500 mt-0.5">Fix a default rate for each production stage. Auto-fills "Price Each" when creating a Production Entry.</p>
-            </div>
-            {canEditProduction && (
-              <Button size="sm" variant="outline" onClick={() => { setStagePriceDraft(db.settings.stagePrices || {}); setStagePricesOpen(true); }} data-testid="stage-prices-edit-btn">
-                <IconEdit size={14}/> Edit Stage Prices
-              </Button>
-            )}
-          </div>
-          <div className="mt-3 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2">
-            {stageMaster.map(s => {
-              const price = (db.settings.stagePrices || {})[s] || 0;
-              return (
-                <div key={s} className="rounded-lg border border-slate-200 dark:border-slate-700 p-2 bg-slate-50 dark:bg-slate-800/40" data-testid={`stage-price-tile-${s}`}>
-                  <div className="text-[10px] uppercase tracking-wide text-slate-500 truncate" title={s}>{s}</div>
-                  <div className={"text-sm font-semibold " + (price > 0 ? "text-slate-800 dark:text-slate-100" : "text-slate-400")}>{price > 0 ? `₹${price}` : "— Not set"}</div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </Card>
 
       <div className="space-y-3">
         {inProg.map(j => (
@@ -987,40 +1029,6 @@ export function ProductionDashboard() {
         {entryWarning && <div className="mt-3 rounded-lg bg-rose-50 text-rose-700 px-3 py-2 text-sm">{entryWarning}</div>}
         {productionComplete && <div className="mt-3 rounded-lg bg-emerald-50 text-emerald-700 px-3 py-2 text-sm">Production Quantity Completed</div>}
         <div className="mt-5 flex justify-end gap-2"><Button variant="outline" onClick={() => setEntryOpen(false)}>Cancel</Button><Button onClick={saveProductionEntry}>Save Production Entry</Button></div>
-      </Modal>
-
-      <Modal open={stagePricesOpen} onClose={() => setStagePricesOpen(false)} title="Edit Stage Prices" size="lg">
-        <div className="space-y-3 text-sm">
-          <p className="text-xs text-slate-500">Enter a fixed rate (₹ per unit) for each production stage. When you create a Production Entry for a stage, its price auto-fills from here.</p>
-          <div className="grid sm:grid-cols-2 gap-3">
-            {stageMaster.map(s => (
-              <div key={s}>
-                <Label>{s}</Label>
-                <Input
-                  type="number"
-                  value={stagePriceDraft[s] ?? 0}
-                  onChange={(e: any) => setStagePriceDraft(prev => ({ ...prev, [s]: Number(e.target.value) || 0 }))}
-                  placeholder="0"
-                  data-testid={`stage-price-input-${s}`}
-                />
-              </div>
-            ))}
-          </div>
-          <div className="pt-3 border-t border-slate-200 dark:border-slate-700 flex justify-between items-center">
-            <Button variant="ghost" onClick={() => setStagePriceDraft(Object.fromEntries(stageMaster.map(s => [s, 0])))} data-testid="stage-prices-reset">Reset All to 0</Button>
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={() => setStagePricesOpen(false)}>Cancel</Button>
-              <Button
-                onClick={() => {
-                  setDB(d => ({ ...d, settings: { ...d.settings, stagePrices: stagePriceDraft } }));
-                  log("Updated Stage Prices master", "Production");
-                  setStagePricesOpen(false);
-                }}
-                data-testid="stage-prices-save"
-              >Save</Button>
-            </div>
-          </div>
-        </div>
       </Modal>
 
       <Modal open={!!operatorDrill} onClose={() => setOperatorDrill(null)} title={operatorDrill ? `Operator: ${operatorDrill}` : "Operator"} size="xl">

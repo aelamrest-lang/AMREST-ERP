@@ -86,3 +86,5 @@ Cloud-based Transformer Manufacturing ERP & CRM with modules for Sales CRM, Quot
 
 - UPDATE (2026-10-01): Raw Material Issue — added material-name search box (testid: issue-material-search) filtering the issue table live, with "No materials match" empty state. Verified: 96 → 26 rows for "core".
 
+- UPDATE (2026-10-01): Production Dashboard — removed "Stage-wise Active Jobs", "Operator Wise Output", and "Stage Prices" sections (modal + state also removed; `settings.stagePrices` fallback logic in entry pricing retained for data). Added Job Card Search at top (by JC no./product/customer via SO→party); selecting a JC shows detail card: target/completed/balance KPIs, per-stage table (status, target, completed, balance, operator, date), latest production entry. Machine Wise Output and all other features unchanged. TestIDs: jc-search-input, jc-search-pick-<id>, jc-search-detail, jc-search-clear.
+
