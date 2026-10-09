@@ -98,3 +98,5 @@ Cloud-based Transformer Manufacturing ERP & CRM with modules for Sales CRM, Quot
 
 - UPDATE (2026-10-09): Job Card SO-linked flow. Selecting an SO restricts Product to that SO's items (each showing Ordered/Remaining); picking a product auto-fills Qty = remaining unallocated (ordered − allocated in other JCs, excluding self on edit), auto-selects the name-matching BOM, syncs JC number, recalculates Reserved Inventory + Stage Quantities. BOM dropdown filtered to SO-product BOMs when SO selected. Save blocks qty > remaining with explanatory alert. TestIDs: jc-so-select, jc-so-product-select, jc-qty-input, jc-bom-select.
 
+- UPDATE (2026-10-09): Job Card Customer Name. `JobCard.customerId?` added; form shows read-only "Customer Name (auto from SO)" when SO selected (customerId auto-set on SO change), manual customer Select when no SO. Customer shown in JC list (new CUSTOMER column, SO-lookup fallback for legacy JCs), printJobCard details, dashboard JC search card. JC list search now also matches customer name. TestIDs: jc-customer-auto, jc-customer-select.
+

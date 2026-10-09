@@ -409,6 +409,7 @@ export interface JobCard {
   number: string;
   date: string;
   salesOrderId?: string;
+  customerId?: string; // auto-fetched from Sales Order; manual when no SO
   bomId?: string;
   qcFormatId?: string;
   product: string;

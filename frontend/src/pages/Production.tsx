@@ -379,8 +379,9 @@ export function JobCards() {
   const printJobCard = (j: JobCard) => {
     const so = db.salesOrders.find(s => s.id === j.salesOrderId);
     const bom = db.boms.find(b => b.id === j.bomId);
+    const cust = db.parties.find(p => p.id === (j.customerId || so?.customerId));
     const body = `
-      <div class="box"><div class="section-title">Production Details</div><b>Product:</b> ${j.product}<br/><b>Quantity:</b> ${j.qty}<br/><b>Status:</b> <span class="badge">${j.status}</span><br/><b>Sales Order:</b> ${so?.number || "-"}<br/><b>BOM:</b> ${bom?.name || "-"}</div>
+      <div class="box"><div class="section-title">Production Details</div><b>Product:</b> ${j.product}<br/><b>Quantity:</b> ${j.qty}<br/><b>Status:</b> <span class="badge">${j.status}</span><br/><b>Customer:</b> ${cust?.name || "-"}<br/><b>Sales Order:</b> ${so?.number || "-"}<br/><b>BOM:</b> ${bom?.name || "-"}</div>
       <div class="section-title">Reserved Materials</div>
       <table><thead><tr><th>#</th><th>Item</th><th class="right">Qty Reserved</th><th>UOM</th></tr></thead><tbody>
       ${j.reservedItems.map((r, idx) => { const it = db.items.find(i => i.id === r.itemId); return `<tr><td>${idx+1}</td><td>${it?.name || "-"}</td><td class="right">${r.qty}</td><td>${it?.unit || ""}</td></tr>`; }).join("")}
@@ -423,15 +424,16 @@ export function JobCards() {
         <div className="p-3 border-b border-slate-100 dark:border-slate-800">
           <div className="relative max-w-md">
             <IconSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
-            <Input className="pl-9" placeholder="Search by Job Card No. or Product..." value={jcListQuery} onChange={(e: any) => setJcListQuery(e.target.value)} data-testid="jobcard-search" />
+            <Input className="pl-9" placeholder="Search by Job Card No., Product or Customer..." value={jcListQuery} onChange={(e: any) => setJcListQuery(e.target.value)} data-testid="jobcard-search" />
           </div>
         </div>
         <Table>
-          <thead><tr><Th>#</Th><Th>Date</Th><Th>Product</Th><Th>Qty</Th><Th>Stages Done</Th><Th>Status</Th><Th></Th></tr></thead>
+          <thead><tr><Th>#</Th><Th>Date</Th><Th>Product</Th><Th>Customer</Th><Th>Qty</Th><Th>Stages Done</Th><Th>Status</Th><Th></Th></tr></thead>
           <tbody>
             {db.jobCards.filter(j => {
               const q = jcListQuery.trim().toLowerCase();
-              return !q || j.number.toLowerCase().includes(q) || j.product.toLowerCase().includes(q);
+              const cust = db.parties.find(p => p.id === (j.customerId || db.salesOrders.find(s => s.id === j.salesOrderId)?.customerId))?.name || "";
+              return !q || j.number.toLowerCase().includes(q) || j.product.toLowerCase().includes(q) || cust.toLowerCase().includes(q);
             }).map(j => {
               const done = j.stages.filter(s => s.status === "done").length;
               return (
@@ -439,6 +441,7 @@ export function JobCards() {
                   <Td className="font-mono text-xs">{j.number}</Td>
                   <Td>{j.date}</Td>
                   <Td className="font-medium">{j.product}</Td>
+                  <Td className="text-xs">{db.parties.find(p => p.id === (j.customerId || db.salesOrders.find(s => s.id === j.salesOrderId)?.customerId))?.name || "—"}</Td>
                   <Td>{j.qty}</Td>
                   <Td>
                     <div className="flex items-center gap-2">
@@ -473,12 +476,23 @@ export function JobCards() {
               setForm(f => {
                 const so = db.salesOrders.find(s => s.id === soId);
                 const stillValid = !so || so.items.some(i => i.name === f.product);
-                return { ...f, salesOrderId: soId, ...(stillValid ? {} : { product: "", bomId: "", reservedItems: [], qty: 1 }) };
+                return { ...f, salesOrderId: soId, customerId: so ? so.customerId : f.customerId, ...(stillValid ? {} : { product: "", bomId: "", reservedItems: [], qty: 1 }) };
               });
             }} data-testid="jc-so-select">
               <option value="">— None —</option>
               {db.salesOrders.map(s => <option key={s.id} value={s.id}>{s.number}</option>)}
             </Select>
+          </div>
+          <div>
+            <Label>Customer Name{formSO ? " (auto from SO)" : ""}</Label>
+            {formSO ? (
+              <Input value={db.parties.find(p => p.id === formSO.customerId)?.name || ""} disabled data-testid="jc-customer-auto" />
+            ) : (
+              <Select value={form.customerId || ""} onChange={(e: any) => setForm({ ...form, customerId: e.target.value })} data-testid="jc-customer-select">
+                <option value="">— Select Customer —</option>
+                {db.parties.filter(p => p.type === "customer").map(p => <option key={p.id} value={p.id}>{p.name}{p.city ? ` · ${p.city}` : ""}</option>)}
+              </Select>
+            )}
           </div>
           <div className="sm:col-span-2">
             <Label>Product{formSO ? " (from Sales Order)" : ""}</Label>
