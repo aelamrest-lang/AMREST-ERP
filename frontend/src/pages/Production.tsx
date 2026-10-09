@@ -226,6 +226,31 @@ export function JobCards() {
   };
   const [form, setForm] = useState<JobCard>(blank());
 
+  // SO-linked helpers: allocate per SO+product, auto qty/BOM
+  const formSO = db.salesOrders.find(s => s.id === form.salesOrderId);
+  const allocatedFor = (soId: string, product: string) =>
+    db.jobCards.filter(j => j.salesOrderId === soId && j.product === product && j.id !== edit?.id).reduce((s, j) => s + (j.qty || 0), 0);
+  const remainingFor = (item: { name: string; qty: number }) => Math.max(0, item.qty - allocatedFor(form.salesOrderId, item.name));
+
+  const applySOProduct = (name: string) => {
+    const soItem = formSO?.items.find(i => i.name === name);
+    if (!soItem) return;
+    const rem = remainingFor(soItem);
+    const bom = db.boms.find(b => b.name === name);
+    setForm(f => {
+      const qty = rem > 0 ? rem : soItem.qty;
+      const baseNo = f.number.split(" - ")[0];
+      return {
+        ...f, product: name, qty,
+        bomId: bom?.id || "",
+        number: `${baseNo} - ${name}`,
+        reservedItems: bom ? bom.materials.filter(m => m.itemId).map(m => ({ itemId: m.itemId!, qty: m.qty * qty })) : f.reservedItems,
+        stageQuantities: (f.stageQuantities || []).map(s => ({ ...s, totalQty: qty * s.multiplier })),
+        stagePrices: !edit && (!f.stagePrices || Object.values(f.stagePrices).every(v => !v)) ? inheritStagePrices(name) : f.stagePrices,
+      };
+    });
+  };
+
   // Look up the most recently created Job Card with the same product name and inherit its stage prices.
   const inheritStagePrices = (product: string): Record<string, number> => {
     if (!product) return {};
@@ -280,6 +305,15 @@ export function JobCards() {
 
   const save = () => {
     if (!form.qcFormatId) return alert("QC Format selection is mandatory in Job Card.");
+    if (form.salesOrderId) {
+      const so = db.salesOrders.find(s => s.id === form.salesOrderId);
+      const soItem = so?.items.find(i => i.name === form.product);
+      if (so && soItem) {
+        const allocated = db.jobCards.filter(j => j.salesOrderId === so.id && j.product === form.product && j.id !== edit?.id).reduce((s, j) => s + (j.qty || 0), 0);
+        const remaining = soItem.qty - allocated;
+        if (form.qty > remaining) return alert(`Cannot create Job Card for ${form.qty} unit(s) of "${form.product}" — only ${remaining} remaining on ${so.number} (ordered ${soItem.qty}, already allocated ${allocated} in other Job Cards).`);
+      }
+    }
     if ((form.stageQuantities || []).length === 0) return alert("Select at least one Production Stage for this Job Card.");
     if (edit) {
       setDB(d => {
@@ -434,13 +468,29 @@ export function JobCards() {
           <div><Label>Job Card No.</Label><Input value={form.number} disabled/></div>
           <div><Label>Date</Label><Input type="date" value={form.date} onChange={(e: any) => setForm({...form, date: e.target.value})}/></div>
           <div><Label>Sales Order</Label>
-            <Select value={form.salesOrderId} onChange={(e: any) => setForm({...form, salesOrderId: e.target.value})}>
+            <Select value={form.salesOrderId} onChange={(e: any) => {
+              const soId = e.target.value;
+              setForm(f => {
+                const so = db.salesOrders.find(s => s.id === soId);
+                const stillValid = !so || so.items.some(i => i.name === f.product);
+                return { ...f, salesOrderId: soId, ...(stillValid ? {} : { product: "", bomId: "", reservedItems: [], qty: 1 }) };
+              });
+            }} data-testid="jc-so-select">
               <option value="">— None —</option>
               {db.salesOrders.map(s => <option key={s.id} value={s.id}>{s.number}</option>)}
             </Select>
           </div>
           <div className="sm:col-span-2">
-            <Label>Product</Label>
+            <Label>Product{formSO ? " (from Sales Order)" : ""}</Label>
+            {formSO ? (
+              <Select value={form.product} onChange={(e: any) => applySOProduct(e.target.value)} data-testid="jc-so-product-select">
+                <option value="">— Select SO Product —</option>
+                {formSO.items.map((i, idx) => {
+                  const rem = remainingFor(i);
+                  return <option key={idx} value={i.name} disabled={rem <= 0}>{i.name} · Ordered {i.qty} · Remaining {rem}</option>;
+                })}
+              </Select>
+            ) : (
             <Input
               value={form.product}
               onChange={(e: any) => {
@@ -463,13 +513,17 @@ export function JobCards() {
                 }
               }}
             />
+            )}
           </div>
-          <div><Label>Quantity</Label><Input type="number" value={form.qty} onChange={(e: any) => updateQty(Number(e.target.value))}/></div>
+          <div>
+            <Label>Quantity{formSO && form.product ? ` (SO remaining: ${remainingFor({ name: form.product, qty: formSO.items.find(i => i.name === form.product)?.qty || 0 })})` : ""}</Label>
+            <Input type="number" value={form.qty} onChange={(e: any) => updateQty(Number(e.target.value))} data-testid="jc-qty-input" />
+          </div>
           <div><Label>Unique No. / Serial Start</Label><Input value={form.serialStart || ""} placeholder="e.g. DTR250001" onChange={(e: any) => setForm({...form, serialStart: e.target.value})}/></div>
-          <div className="sm:col-span-2"><Label>BOM</Label>
-            <Select value={form.bomId} onChange={(e: any) => updateBOM(e.target.value)}>
+          <div className="sm:col-span-2"><Label>BOM{formSO ? " (only SO product BOMs)" : ""}</Label>
+            <Select value={form.bomId} onChange={(e: any) => updateBOM(e.target.value)} data-testid="jc-bom-select">
               <option value="">— None —</option>
-              {db.boms.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+              {(formSO ? db.boms.filter(b => formSO.items.some(i => i.name === b.name)) : db.boms).map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
             </Select>
           </div>
           <div><Label>QC Format Selection *</Label>
