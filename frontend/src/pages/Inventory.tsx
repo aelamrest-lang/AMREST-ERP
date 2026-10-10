@@ -30,7 +30,7 @@ export function Inventory() {
     if (filter === "raw") arr = arr.filter(i => i.category === "Raw Material");
     if (filter === "semi") arr = arr.filter(i => i.category === "Semi-Finished");
     if (filter === "fg") arr = arr.filter(i => i.category === "Finished Goods");
-    if (search) arr = arr.filter(i => i.name.toLowerCase().includes(search.toLowerCase()));
+    if (search) arr = arr.filter(i => i.name.toLowerCase().startsWith(search.toLowerCase().trim()));
     return arr;
   }, [db.items, filter, search]);
 
@@ -241,7 +241,7 @@ export function Inventory() {
         <div className="p-4 flex flex-wrap items-center gap-3 border-b border-slate-100 dark:border-slate-800">
           <div className="relative flex-1 min-w-48">
             <IconSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
-            <Input className="pl-9" placeholder="Search items..." value={search} onChange={(e: any) => setSearch(e.target.value)}/>
+            <Input className="pl-9" placeholder="Search items by starting letters (e.g. A, Co, Lu)..." value={search} onChange={(e: any) => setSearch(e.target.value)} data-testid="inventory-search"/>
           </div>
           <Select value={filter} onChange={(e: any) => setFilter(e.target.value)} className="w-44">
             <option value="all">All Items</option><option value="low">Low Stock</option><option value="raw">Raw Material</option><option value="semi">Semi-Finished</option><option value="fg">Finished Goods</option>

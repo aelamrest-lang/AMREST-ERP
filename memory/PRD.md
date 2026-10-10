@@ -100,3 +100,5 @@ Cloud-based Transformer Manufacturing ERP & CRM with modules for Sales CRM, Quot
 
 - UPDATE (2026-10-09): Job Card Customer Name. `JobCard.customerId?` added; form shows read-only "Customer Name (auto from SO)" when SO selected (customerId auto-set on SO change), manual customer Select when no SO. Customer shown in JC list (new CUSTOMER column, SO-lookup fallback for legacy JCs), printJobCard details, dashboard JC search card. JC list search now also matches customer name. TestIDs: jc-customer-auto, jc-customer-select.
 
+- UPDATE (2026-10-10): Inventory search now prefix-matches item names (startsWith, case-insensitive, instant) instead of substring contains. Typing "A" shows only Aluminium/Angle etc., not "Lug Aluminium". Verified: A/a → Alu.* only; "lug" → Lug Copper only. Placeholder updated. Note: Item Master search still substring (unchanged, different page).
+
