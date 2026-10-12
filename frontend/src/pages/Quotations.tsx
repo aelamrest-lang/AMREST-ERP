@@ -73,8 +73,20 @@ export function Quotations() {
   const customers = db.parties.filter(p => p.type === "customer" && (isAdmin || p.ownerId === currentUser?.id));
   const myCostings = db.costings.filter(c => isAdmin || c.ownerId === currentUser?.id);
 
+  const companies = db.settings.companies || [];
+  const companyOf = (q: Quotation) => companies.find(c => c.id === q.companyId);
+  const qMoney = (v: number, q: Quotation) => {
+    if (q.currency === "USD") {
+      const usd = (q.exchangeRate || 0) > 0 ? v / q.exchangeRate! : v;
+      return `$${usd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    }
+    return fmtINR(v);
+  };
+  const companyNumber = (companyId: string) => nextNumber("QTN", db.quotations.filter(q => (q.companyId || "") === companyId));
+
   const blank = (): Quotation => ({
-    id: "", number: nextNumber("QTN", db.quotations), date: todayISO(), customerId: customers[0]?.id || "", costingId: "",
+    id: "", number: companyNumber(""), date: todayISO(), customerId: customers[0]?.id || "", costingId: "",
+    companyId: "", currency: "INR", exchangeRate: 0,
     items: [{ name: "100 kVA Distribution Transformer", description: DEFAULT_ITEM_DESCRIPTION, qty: 1, rate: 185000, gst: 18 }],
     terms: getDefaultQuotationTerms(db.settings),
     status: "Quotation Sent", ownerId: currentUser!.id, createdAt: new Date().toISOString(),
@@ -288,19 +300,33 @@ export function Quotations() {
 
   const buildQuotationHTML = (q: Quotation) => {
     const cust = db.parties.find(p => p.id === q.customerId);
+    const comp = companyOf(q);
+    const effSettings = comp ? {
+      ...db.settings,
+      name: comp.name,
+      address: comp.address || db.settings.address,
+      gst: comp.gst || "",
+      email: comp.email || "",
+      phone: comp.phone || "",
+      logoUrl: comp.logo || "",
+      logoText: comp.name.split(/\s+/).map(w => w[0]).join("").slice(0, 3).toUpperCase(),
+    } : db.settings;
     const t = calcDocTotals(q.items);
+    const usdNote = q.currency === "USD" ? `<div class="box" style="background:#eff6ff"><b>All amounts in USD ($)</b>${(q.exchangeRate || 0) > 0 ? ` · Converted at 1 USD = ₹${q.exchangeRate}` : ""}</div>` : "";
     const body = `
       <div class="box"><div class="section-title">Bill To</div><b>${cust?.name || ""}</b><br/>${cust?.address || ""}<br/>GST: ${cust?.gst || ""}<br/>Contact: ${cust?.mobile || ""} | ${cust?.email || ""}</div>
+      ${usdNote}
       <table><thead><tr><th>#</th><th>Description</th><th class="right">Qty</th><th class="right">Rate</th><th class="right">GST%</th><th class="right">Amount</th></tr></thead>
-      <tbody>${q.items.map((i, idx) => `<tr><td>${idx+1}</td><td><b>${i.name}</b>${i.description ? `<br/><span class="muted">${i.description}</span>` : ""}</td><td class="right">${i.qty}</td><td class="right">${fmtINR(i.rate)}</td><td class="right">${i.gst}</td><td class="right">${fmtINR(i.qty*i.rate)}</td></tr>`).join("")}</tbody></table>
+      <tbody>${q.items.map((i, idx) => `<tr><td>${idx+1}</td><td><b>${i.name}</b>${i.description ? `<br/><span class="muted">${i.description}</span>` : ""}</td><td class="right">${i.qty}</td><td class="right">${qMoney(i.rate, q)}</td><td class="right">${i.gst}</td><td class="right">${qMoney(i.qty*i.rate, q)}</td></tr>`).join("")}</tbody></table>
       <div class="totals">
-        <div><span>Sub Total</span><b>${fmtINR(t.sub)}</b></div>
-        <div><span>GST</span><b>${fmtINR(t.gst)}</b></div>
-        <div class="grand"><span>Grand Total</span><b>${fmtINR(t.total)}</b></div>
+        <div><span>Sub Total</span><b>${qMoney(t.sub, q)}</b></div>
+        <div><span>${q.currency === "USD" ? "Tax (GST)" : "GST"}</span><b>${qMoney(t.gst, q)}</b></div>
+        <div class="grand"><span>Grand Total</span><b>${qMoney(t.total, q)}</b></div>
       </div>
+      ${comp?.bankDetails ? `<div class="box"><div class="section-title">Bank Details</div>${comp.bankDetails.replace(/\n/g, "<br/>")}</div>` : ""}
       <div class="box"><div class="section-title">Terms & Conditions</div><pre style="white-space:pre-wrap;font-family:inherit;font-size:12px;margin:6px 0">${q.terms}</pre></div>
     `;
-    return professionalDocument(db.settings, { title: "Quotation", number: q.number, date: q.date, body, accent: "#2563eb", skipFormatTerms: true });
+    return professionalDocument(effSettings, { title: "Quotation", number: q.number, date: q.date, body, accent: "#2563eb", skipFormatTerms: true });
   };
 
   const printQ = (q: Quotation) => {
@@ -367,6 +393,8 @@ export function Quotations() {
                         title="Click to preview the printable A4 quotation"
                         data-testid={`quot-view-${q.id}`}
                       >{q.number}</button>
+                      {companyOf(q) && <span className="text-[9px] font-semibold text-indigo-700 bg-indigo-100 dark:bg-indigo-900/40 dark:text-indigo-300 px-1.5 py-0.5 rounded" title={`Selling company: ${companyOf(q)!.name}`} data-testid={`quot-company-${q.id}`}>{companyOf(q)!.name.slice(0, 12)}</span>}
+                      {q.currency === "USD" && <span className="text-[9px] font-semibold text-emerald-700 bg-emerald-100 dark:bg-emerald-900/40 px-1.5 py-0.5 rounded">USD</span>}
                       {revCount > 0 && (
                         <button
                           onClick={() => setHistoryQ(q)}
@@ -436,6 +464,33 @@ export function Quotations() {
           </div>
         </div>
 
+        <div className="grid sm:grid-cols-3 gap-3 mt-3">
+          <div>
+            <Label>Selling Company</Label>
+            <Select value={form.companyId || ""} onChange={(e: any) => {
+              const v = e.target.value;
+              setForm(f => ({ ...f, companyId: v, ...(edit ? {} : { number: companyNumber(v) }) }));
+            }} data-testid="qtn-company-select">
+              <option value="">— Main Company ({db.settings.name}) —</option>
+              {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </Select>
+          </div>
+          <div>
+            <Label>Currency</Label>
+            <Select value={form.currency || "INR"} onChange={(e: any) => setForm({ ...form, currency: e.target.value })} data-testid="qtn-currency">
+              <option value="INR">INR (₹)</option>
+              <option value="USD">USD ($)</option>
+            </Select>
+          </div>
+          {form.currency === "USD" && (
+            <div>
+              <Label>Exchange Rate (1 USD = ₹)</Label>
+              <Input type="number" value={form.exchangeRate || ""} placeholder="e.g. 83.5" onChange={(e: any) => setForm({ ...form, exchangeRate: Number(e.target.value) || 0 })} data-testid="qtn-exchange-rate" />
+              <div className="text-[10px] text-slate-500 mt-1">Optional — converts INR rates to USD; leave blank if rates are already USD</div>
+            </div>
+          )}
+        </div>
+
         <div className="mt-3 border border-slate-200 dark:border-slate-700 rounded-lg overflow-visible">
           <Table>
             <thead><tr><Th>Item Name / Description</Th><Th>Qty</Th><Th>Rate</Th><Th>GST%</Th><Th>Amount</Th><Th></Th></tr></thead>
@@ -485,6 +540,12 @@ export function Quotations() {
             <div className="flex justify-between"><span>Sub Total</span><b>{fmtINR(totals.sub)}</b></div>
             <div className="flex justify-between"><span>GST</span><b>{fmtINR(totals.gst)}</b></div>
             <div className="flex justify-between text-base border-t pt-1 mt-1"><span>Grand Total</span><b className="text-emerald-600">{fmtINR(totals.total)}</b></div>
+            {form.currency === "USD" && (form.exchangeRate || 0) > 0 && (
+              <div className="text-[11px] text-slate-500 border-t pt-1" data-testid="qtn-usd-note">PDF shows USD: Grand Total ≈ <b>{qMoney(totals.total, form)}</b> @ 1 USD = ₹{form.exchangeRate}</div>
+            )}
+            {form.currency === "USD" && !(form.exchangeRate || 0) && (
+              <div className="text-[11px] text-slate-500 border-t pt-1" data-testid="qtn-usd-note">No exchange rate set — entered rates are treated as USD on the PDF</div>
+            )}
             <div className="mt-2"><Label>Status</Label>
               <Select value={form.status} onChange={(e: any) => setForm({...form, status: e.target.value})}>
                 {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}

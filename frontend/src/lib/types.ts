@@ -116,11 +116,25 @@ export interface QuotationRevision {
   note?: string;
 }
 
+export interface SellingCompany {
+  id: string;
+  name: string;
+  address?: string;
+  gst?: string;
+  email?: string;
+  phone?: string;
+  bankDetails?: string;
+  logo?: string;
+}
+
 export interface Quotation {
   id: string;
   number: string;
   date: string;
   customerId: string;
+  companyId?: string; // selling company (blank = main company from settings)
+  currency?: "INR" | "USD";
+  exchangeRate?: number; // 1 USD = ₹X (optional; blank = rates already in USD)
   costingId?: string;
   items: { name: string; description?: string; qty: number; rate: number; gst: number }[];
   terms: string;
@@ -531,6 +545,7 @@ export interface CompanySettings {
   sfgConsumptionMapByJc?: Record<string, Record<string, { itemId: string; qtyPerUnit: number }[]>>; // key: jobCardId → (output stage → inputs)
   productionStages?: string[]; // ordered stage master; defaults to built-in STAGES when unset
   stockModelV2?: boolean; // migration flag: holds no longer deduct stock; issues do
+  companies?: SellingCompany[]; // multiple selling companies for quotations
   stageDays?: Record<string, number>; // key: ProductionStage → working days per stage (Mfg Time Calculator, legacy)
   stageCapacity?: Record<string, number>; // key: MfgStage → daily output (Nos/day) for Mfg Time Calculator
   rawMaterialProcurementDays?: number; // editable RM procurement window (days)
