@@ -209,33 +209,35 @@ const DOC_STYLES = `
   }
 `;
 
-function docBodyHtml(settings: any, opts: { title: string; number: string; date?: string; body: string; accent?: string; skipFormatTerms?: boolean }) {
+function docBodyHtml(settings: any, opts: { title: string; number: string; date?: string; body: string; accent?: string; skipFormatTerms?: boolean; forceSettingsHeader?: boolean }) {
   const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
   const titleKey = normalize(opts.title);
   const format = (settings.documentFormats || []).find((f: any) => f.active && normalize(f.documentType) === titleKey)
     || (settings.documentFormats || []).find((f: any) => f.active && (titleKey.includes(normalize(f.documentType)) || normalize(f.documentType).includes(titleKey)))
     || null;
-  const logoSrc = fileDisplayUrl(format?.logoUrl || settings.logoUrl);
+  // When a selling company is used, its settings must win over the saved Document Format branding
+  const brand = opts.forceSettingsHeader ? null : format;
+  const logoSrc = fileDisplayUrl(brand?.logoUrl || settings.logoUrl);
   const logo = logoSrc
     ? `<img src="${logoSrc}" alt="Logo" crossorigin="anonymous"/>`
     : (settings.logoText || "AE");
-  const companyName = format?.companyName || settings.name;
-  const address = format?.address || settings.address;
-  const gst = format?.gstNo || settings.gst;
-  const contact = format?.contactDetails || `${settings.email} | ${settings.phone}`;
-  const terms = (format?.terms || []).filter((t: any) => t.active).sort((a: any, b: any) => a.order - b.order);
+  const companyName = brand?.companyName || settings.name;
+  const address = brand?.address || settings.address;
+  const gst = brand?.gstNo || settings.gst;
+  const contact = brand?.contactDetails || `${settings.email} | ${settings.phone}`;
+  const terms = (brand?.terms || []).filter((t: any) => t.active).sort((a: any, b: any) => a.order - b.order);
   const orientation = (format?.orientation || "Portrait").toLowerCase();
   const pageSize = (format?.pageSize || "A4").toLowerCase();
-  const extra = `${format?.headerContent ? `<div class="box"><b>Header Note:</b><br/>${String(format.headerContent).replace(/\n/g, "<br/>")}</div>` : ""}
+  const extra = `${brand?.headerContent ? `<div class="box"><b>Header Note:</b><br/>${String(brand.headerContent).replace(/\n/g, "<br/>")}</div>` : ""}
     ${opts.body}
     ${!opts.skipFormatTerms && terms.length ? `<div class="box"><div class="section-title">Terms &amp; Conditions</div><ol>${terms.map((t: any) => `<li>${t.text}</li>`).join("")}</ol></div>` : ""}
-    ${format?.bankDetails ? `<div class="box"><div class="section-title">Bank Details</div>${String(format.bankDetails).replace(/\n/g, "<br/>")}</div>` : ""}
-    ${format?.declaration ? `<div class="box"><div class="section-title">Declaration</div>${String(format.declaration).replace(/\n/g, "<br/>")}</div>` : ""}
-    ${format?.signatureName || format?.signatureUrl ? `<div style="margin-top:30px;display:flex;justify-content:flex-end"><div style="text-align:center;min-width:190px">${format.signatureUrl ? `<img src="${fileDisplayUrl(format.signatureUrl)}" crossorigin="anonymous" style="height:72px;max-width:150px;object-fit:contain;display:block;margin:0 auto 8px"/>` : `<div style="height:72px;display:flex;align-items:center;justify-content:center;color:#64748b;font-size:11px">Company Stamp</div>`}<div style="font-weight:700">${format.signatureName || "Authorized Signatory"}</div></div></div>` : ""}
-    ${format?.footerContent ? `<div class="muted" style="border-top:1px solid #e2e8f0;margin-top:18px;padding-top:8px;font-size:11px">${String(format.footerContent).replace(/\n/g, "<br/>")}</div>` : ""}`;
+    ${brand?.bankDetails ? `<div class="box"><div class="section-title">Bank Details</div>${String(brand.bankDetails).replace(/\n/g, "<br/>")}</div>` : ""}
+    ${brand?.declaration ? `<div class="box"><div class="section-title">Declaration</div>${String(brand.declaration).replace(/\n/g, "<br/>")}</div>` : ""}
+    ${brand?.signatureName || brand?.signatureUrl ? `<div style="margin-top:30px;display:flex;justify-content:flex-end"><div style="text-align:center;min-width:190px">${brand.signatureUrl ? `<img src="${fileDisplayUrl(brand.signatureUrl)}" crossorigin="anonymous" style="height:72px;max-width:150px;object-fit:contain;display:block;margin:0 auto 8px"/>` : `<div style="height:72px;display:flex;align-items:center;justify-content:center;color:#64748b;font-size:11px">Company Stamp</div>`}<div style="font-weight:700">${brand.signatureName || "Authorized Signatory"}</div></div></div>` : ""}
+    ${brand?.footerContent ? `<div class="muted" style="border-top:1px solid #e2e8f0;margin-top:18px;padding-top:8px;font-size:11px">${String(brand.footerContent).replace(/\n/g, "<br/>")}</div>` : ""}`;
   return `
     <div class="doc" data-fit-one-page="${format?.fitToSinglePage ? "true" : "false"}" data-page-size="${pageSize}" data-orientation="${orientation}">
-      ${format?.watermark ? `<div class="watermark">${format.watermark}</div>` : ""}
+      ${brand?.watermark ? `<div class="watermark">${brand.watermark}</div>` : ""}
       <div class="doc-head" style="background:linear-gradient(135deg,${opts.accent || "#1e3a8a"},#4f46e5)">
         <div class="brand">
           <div class="logo">${logo}</div>
@@ -251,12 +253,12 @@ function docBodyHtml(settings: any, opts: { title: string; number: string; date?
           <div style="font-size:12px"><b>Date:</b> ${opts.date || todayISO()}</div>
         </div>
       </div>
-      <div class="doc-body">${format?.qrCode ? `<div style="float:right;border:5px solid #111;height:70px;width:70px;display:flex;align-items:center;justify-content:center;font-size:9px;text-align:center;margin-left:12px">QR<br/>${opts.number}</div>` : ""}${extra}</div>
+      <div class="doc-body">${brand?.qrCode ? `<div style="float:right;border:5px solid #111;height:70px;width:70px;display:flex;align-items:center;justify-content:center;font-size:9px;text-align:center;margin-left:12px">QR<br/>${opts.number}</div>` : ""}${extra}</div>
     </div>
   `;
 }
 
-export function professionalDocument(settings: any, opts: { title: string; number: string; date?: string; body: string; accent?: string; skipFormatTerms?: boolean }) {
+export function professionalDocument(settings: any, opts: { title: string; number: string; date?: string; body: string; accent?: string; skipFormatTerms?: boolean; forceSettingsHeader?: boolean }) {
   // Self-contained HTML — usable as-is in an iframe srcDoc for WYSIWYG preview
   // AND consumed by printArea() for html2canvas → PDF export.
   return `<!doctype html><html><head><meta charset="utf-8"/><title>${opts.title}</title><style>${DOC_STYLES}</style></head><body>${docBodyHtml(settings, opts)}</body></html>`;

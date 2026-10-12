@@ -326,7 +326,7 @@ export function Quotations() {
       ${comp?.bankDetails ? `<div class="box"><div class="section-title">Bank Details</div>${comp.bankDetails.replace(/\n/g, "<br/>")}</div>` : ""}
       <div class="box"><div class="section-title">Terms & Conditions</div><pre style="white-space:pre-wrap;font-family:inherit;font-size:12px;margin:6px 0">${q.terms}</pre></div>
     `;
-    return professionalDocument(effSettings, { title: "Quotation", number: q.number, date: q.date, body, accent: "#2563eb", skipFormatTerms: true });
+    return professionalDocument(effSettings, { title: "Quotation", number: q.number, date: q.date, body, accent: "#2563eb", skipFormatTerms: true, forceSettingsHeader: !!comp });
   };
 
   const printQ = (q: Quotation) => {
