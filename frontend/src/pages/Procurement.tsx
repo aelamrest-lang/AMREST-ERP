@@ -168,17 +168,102 @@ export function PurchaseOrders() {
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState("");
   const [vendorQuery, setVendorQuery] = useState("");
+  const [poPeriod, setPoPeriod] = useState<"all" | "month" | "lastmonth" | "3m" | "6m" | "custom">("all");
+  const [poFrom, setPoFrom] = useState("");
+  const [poTo, setPoTo] = useState("");
+  const [cardFilter, setCardFilter] = useState<"all" | "pending" | "grn" | "completed">("all");
+
+  const poRange = useMemo(() => {
+    const today = todayISO();
+    if (poPeriod === "all") return { from: "0000-01-01", to: "9999-12-31" };
+    if (poPeriod === "custom") return { from: poFrom || "0000-01-01", to: poTo || "9999-12-31" };
+    const now = new Date();
+    if (poPeriod === "month") return { from: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`, to: today };
+    if (poPeriod === "lastmonth") {
+      const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const end = new Date(now.getFullYear(), now.getMonth(), 0);
+      return { from: d.toISOString().slice(0, 10), to: end.toISOString().slice(0, 10) };
+    }
+    const months = poPeriod === "3m" ? 3 : 6;
+    const d = new Date(); d.setMonth(d.getMonth() - months);
+    return { from: d.toISOString().slice(0, 10), to: today };
+  }, [poPeriod, poFrom, poTo]);
+
+  type PoDetail = { p: PurchaseOrder; amount: number; receivedAmount: number; pendingAmount: number; orderedQty: { qty: number; unit: string }[]; receivedQty: { qty: number; unit: string }[]; pendingQty: { qty: number; unit: string }[]; fullyReceived: boolean };
+  const poDetails: PoDetail[] = useMemo(() => {
+    return db.purchaseOrders
+      .filter(p => p.date >= poRange.from && p.date <= poRange.to)
+      .map(p => {
+        const rec: Record<string, number> = {};
+        db.grns.filter(g => g.poId === p.id).forEach(g => g.receivedItems.forEach(r => { rec[r.itemId] = (rec[r.itemId] || 0) + r.qty; }));
+        let amount = 0, receivedAmount = 0, pendingAmount = 0;
+        const orderedQty: { qty: number; unit: string }[] = [];
+        const receivedQty: { qty: number; unit: string }[] = [];
+        const pendingQty: { qty: number; unit: string }[] = [];
+        p.items.forEach(i => {
+          const unit = db.items.find(x => x.id === i.itemId)?.unit || "Nos";
+          const g = (Number(i.gst) || 0) / 100;
+          const r = Math.min(i.qty, rec[i.itemId] || 0);
+          const pend = Math.max(0, i.qty - (rec[i.itemId] || 0));
+          amount += i.qty * i.rate * (1 + g);
+          receivedAmount += r * i.rate * (1 + g);
+          pendingAmount += pend * i.rate * (1 + g);
+          orderedQty.push({ qty: i.qty, unit });
+          receivedQty.push({ qty: r, unit });
+          pendingQty.push({ qty: pend, unit });
+        });
+        const fullyReceived = p.items.length > 0 && p.items.every(i => (rec[i.itemId] || 0) >= i.qty);
+        return { p, amount, receivedAmount, pendingAmount, orderedQty, receivedQty, pendingQty, fullyReceived };
+      });
+  }, [db.purchaseOrders, db.grns, db.items, poRange]);
+
+  const qtyText = (pairs: { qty: number; unit: string }[]) => {
+    const m = new Map<string, number>();
+    pairs.forEach(x => { if (x.qty > 0) m.set(x.unit, (m.get(x.unit) || 0) + x.qty); });
+    return [...m.entries()].map(([u, q]) => `${fmt2(q)} ${u}`).join(" · ") || "0";
+  };
+
+  const pendingDetails = poDetails.filter(d => d.pendingQty.some(x => x.qty > 0));
+  const completedDetails = poDetails.filter(d => d.fullyReceived);
+  const grnRowsInRange = useMemo(() => {
+    return db.grns
+      .filter(g => g.date >= poRange.from && g.date <= poRange.to)
+      .map(g => {
+        const po = db.purchaseOrders.find(p => p.id === g.poId);
+        const vendor = db.parties.find(v => v.id === po?.vendorId)?.name || "—";
+        let amount = 0;
+        const itemsTxt = g.receivedItems.map(r => {
+          const line = po?.items.find(x => x.itemId === r.itemId);
+          const it = db.items.find(x => x.id === r.itemId);
+          const gst = (Number(line?.gst) || 0) / 100;
+          amount += r.qty * (line?.rate || 0) * (1 + gst);
+          return `${it?.name || "—"} × ${fmt2(r.qty)} ${it?.unit || ""}`;
+        });
+        return { g, po, vendor, amount, itemsTxt };
+      })
+      .sort((a, b) => b.g.date.localeCompare(a.g.date));
+  }, [db.grns, db.purchaseOrders, db.parties, db.items, poRange]);
+
+  const cardTotals = {
+    all: { count: poDetails.length, qty: qtyText(poDetails.flatMap(d => d.orderedQty)), amount: poDetails.reduce((s, d) => s + d.amount, 0) },
+    pending: { count: pendingDetails.length, qty: qtyText(pendingDetails.flatMap(d => d.pendingQty)), amount: pendingDetails.reduce((s, d) => s + d.pendingAmount, 0) },
+    grn: { count: grnRowsInRange.length, qty: qtyText(poDetails.flatMap(d => d.receivedQty)), amount: poDetails.reduce((s, d) => s + d.receivedAmount, 0) },
+    completed: { count: completedDetails.length, qty: qtyText(completedDetails.flatMap(d => d.orderedQty)), amount: completedDetails.reduce((s, d) => s + d.amount, 0) },
+  };
 
   const vendors = db.parties.filter(p => p.type === "vendor" || p.type === "supplier");
 
   const filteredPOs = useMemo(() => {
     const q = vendorQuery.trim().toLowerCase();
-    if (!q) return db.purchaseOrders;
-    return db.purchaseOrders.filter(p => {
+    let list = poDetails.map(d => d.p);
+    if (cardFilter === "pending") list = pendingDetails.map(d => d.p);
+    if (cardFilter === "completed") list = completedDetails.map(d => d.p);
+    if (!q) return list;
+    return list.filter(p => {
       const vendorName = db.parties.find(v => v.id === p.vendorId)?.name || "";
       return vendorName.toLowerCase().includes(q) || p.number.toLowerCase().includes(q);
     });
-  }, [db.purchaseOrders, db.parties, vendorQuery]);
+  }, [poDetails, pendingDetails, completedDetails, cardFilter, db.parties, vendorQuery]);
 
   const blank = (): PurchaseOrder => {
     const d = todayISO();
@@ -404,6 +489,43 @@ export function PurchaseOrders() {
         <div><h1 className="text-2xl font-bold">Purchase Orders</h1><p className="text-sm text-slate-500">Procurement from vendors and suppliers</p></div>
         {canCreate && <Button onClick={openNew}><IconPlus size={14}/> New PO</Button>}
       </div>
+
+      <div className="flex flex-wrap items-center gap-2" data-testid="po-period-filter">
+        {([["all", "All Time"], ["month", "This Month"], ["lastmonth", "Last Month"], ["3m", "Last 3 Months"], ["6m", "Last 6 Months"], ["custom", "Custom Date"]] as const).map(([k, lbl]) => (
+          <button key={k} type="button" onClick={() => setPoPeriod(k)}
+            className={"text-xs px-3 py-1.5 rounded-full border font-medium " + (poPeriod === k ? "bg-indigo-600 border-indigo-600 text-white" : "bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-600 hover:border-indigo-400")}
+            data-testid={`po-period-${k}`}>{lbl}</button>
+        ))}
+        {poPeriod === "custom" && (
+          <>
+            <Input type="date" className="!w-40" value={poFrom} onChange={(e: any) => setPoFrom(e.target.value)} data-testid="po-period-from" />
+            <span className="text-xs text-slate-400">to</span>
+            <Input type="date" className="!w-40" value={poTo} onChange={(e: any) => setPoTo(e.target.value)} data-testid="po-period-to" />
+          </>
+        )}
+      </div>
+
+      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {([
+          { key: "all", label: "Total Purchase Orders", d: cardTotals.all, color: "indigo", qtyLabel: "Ordered Qty" },
+          { key: "pending", label: "Pending Purchase Orders", d: cardTotals.pending, color: "amber", qtyLabel: "Pending Qty" },
+          { key: "grn", label: "Total GRN", d: cardTotals.grn, color: "emerald", qtyLabel: "Received Qty" },
+          { key: "completed", label: "Completed Purchase Orders", d: cardTotals.completed, color: "blue", qtyLabel: "Delivered Qty" },
+        ] as const).map(c => (
+          <button key={c.key} type="button" onClick={() => setCardFilter(cardFilter === c.key ? "all" : c.key)}
+            className={"text-left rounded-xl border p-4 transition-all " + (cardFilter === c.key
+              ? "border-indigo-500 ring-2 ring-indigo-200 dark:ring-indigo-900 bg-indigo-50 dark:bg-indigo-900/20"
+              : "border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-indigo-300")}
+            data-testid={`po-card-${c.key}`}>
+            <div className="text-[10px] uppercase font-semibold text-slate-500">{c.label}</div>
+            <div className="text-2xl font-bold mt-1">{c.d.count}</div>
+            <div className="text-xs mt-1 text-slate-600 dark:text-slate-300"><span className="text-slate-400">{c.qtyLabel}:</span> <b>{c.d.qty}</b></div>
+            <div className="text-xs text-slate-600 dark:text-slate-300"><span className="text-slate-400">Amount:</span> <b className="text-emerald-600">{fmtINR(c.d.amount)}</b></div>
+          </button>
+        ))}
+      </div>
+      <div className="text-[10px] text-slate-400 -mt-2" data-testid="po-cards-basis">All amounts GST-inclusive · quantities item-wise by unit · click a card to filter the table</div>
+
       <Card>
         <div className="p-3 border-b border-slate-200 dark:border-slate-800">
           <div className="relative max-w-sm">
@@ -417,6 +539,27 @@ export function PurchaseOrders() {
             />
           </div>
         </div>
+        {cardFilter === "grn" ? (
+          <>
+            <Table>
+              <thead><tr><Th>GRN No.</Th><Th>Date</Th><Th>PO No.</Th><Th>Vendor</Th><Th>Received Items (Qty × Unit)</Th><Th className="text-right">Amount</Th></tr></thead>
+              <tbody>
+                {grnRowsInRange.map(({ g, po, vendor, amount, itemsTxt }) => (
+                  <tr key={g.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50" data-testid={`po-grn-row-${g.id}`}>
+                    <Td className="font-mono text-xs text-indigo-600">{g.number}</Td>
+                    <Td>{g.date}</Td>
+                    <Td className="font-mono text-xs">{po?.number || "—"}</Td>
+                    <Td>{vendor}</Td>
+                    <Td className="text-xs">{itemsTxt.join(" · ")}</Td>
+                    <Td className="text-right font-semibold">{fmtINR(amount)}</Td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+            {grnRowsInRange.length === 0 && <div className="p-6 text-center text-sm text-slate-500">No GRNs in the selected period</div>}
+          </>
+        ) : (
+        <>
         <Table>
           <thead><tr><Th>#</Th><Th>Date</Th><Th>Vendor</Th><Th>Items</Th><Th>Expected Delivery</Th><Th>Received / Pending</Th><Th>Total</Th><Th>Status</Th><Th></Th></tr></thead>
           <tbody>
@@ -496,8 +639,10 @@ export function PurchaseOrders() {
         {db.purchaseOrders.length === 0 && <Empty/>}
         {db.purchaseOrders.length > 0 && filteredPOs.length === 0 && (
           <div className="p-6 text-center text-sm text-slate-500" data-testid="po-no-vendor-match">
-            No purchase orders match “{vendorQuery}”.
+            No purchase orders match{vendorQuery ? ` “${vendorQuery}”` : " the selected filter"}.
           </div>
+        )}
+        </>
         )}
       </Card>
 
