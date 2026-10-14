@@ -519,12 +519,11 @@ export function PurchaseOrders() {
             data-testid={`po-card-${c.key}`}>
             <div className="text-[10px] uppercase font-semibold text-slate-500">{c.label}</div>
             <div className="text-2xl font-bold mt-1">{c.d.count}</div>
-            <div className="text-xs mt-1 text-slate-600 dark:text-slate-300"><span className="text-slate-400">{c.qtyLabel}:</span> <b>{c.d.qty}</b></div>
-            <div className="text-xs text-slate-600 dark:text-slate-300"><span className="text-slate-400">Amount:</span> <b className="text-emerald-600">{fmtINR(c.d.amount)}</b></div>
+            <div className="text-xs mt-1 text-slate-600 dark:text-slate-300"><span className="text-slate-400">Amount:</span> <b className="text-emerald-600">{fmtINR(c.d.amount)}</b></div>
           </button>
         ))}
       </div>
-      <div className="text-[10px] text-slate-400 -mt-2" data-testid="po-cards-basis">All amounts GST-inclusive · quantities item-wise by unit · click a card to filter the table</div>
+      <div className="text-[10px] text-slate-400 -mt-2" data-testid="po-cards-basis">All amounts GST-inclusive · click a card to filter the table</div>
 
       <Card>
         <div className="p-3 border-b border-slate-200 dark:border-slate-800">

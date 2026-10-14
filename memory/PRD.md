@@ -106,3 +106,5 @@ Cloud-based Transformer Manufacturing ERP & CRM with modules for Sales CRM, Quot
 
 - UPDATE (2026-10-14): Purchase Orders monthly summary dashboard. 4 clickable cards (Total POs / Pending / Total GRN / Completed) with count + qty-by-unit (never mixed units) + amount (GST-inclusive, labelled); date filter pills All Time/This Month/Last Month/3M/6M/Custom. Cards filter the PO table (pending = outstanding qty, completed = fully received); GRN card swaps table to GRN history (no., date, PO, vendor, item qty×unit, received amount). Pending Qty = ordered − received; GRN amount = received × PO rates. TestIDs: po-card-all/pending/grn/completed, po-period-*, po-grn-row-<id>.
 
+- UPDATE (2026-10-14): PO summary cards simplified — removed per-unit quantity lines; cards show Title + Count + Amount only. Filters/click-through unchanged. Verified (Pending card → 113 POs).
+
