@@ -3,8 +3,8 @@ import { useStore, uid } from "../../lib/store";
 import { Button, Input, Select, Label, Modal, Table, Th, Td, Empty } from "../ui";
 import type { DeliveryChallan } from "../../lib/types";
 import { IconPlus, IconTrash } from "../icons";
-import { calcDocTotalsWithFreight, fmtINR, fmt2, nextNumber, todayISO } from "../../lib/utils";
-import { dispatchedOfLine } from "../../lib/invoice";
+import { calcDocTotalsWithFreight, fmtINR, fmt2, todayISO } from "../../lib/utils";
+import { dispatchedOfLine, matchSoItem, nextSeqNumber } from "../../lib/invoice";
 
 export interface InvoicePreset { salesOrderId: string; jobCardId: string; product: string; qty: number }
 interface Line { itemId?: string; name: string; hsn: string; qty: number; rate: number; gst: number; ordered?: number; otherInvoiced?: number }
@@ -32,13 +32,14 @@ export function InvoiceForm({ open, onClose, edit, preset }: { open: boolean; on
   const soLines = (soId: string, existing?: DeliveryChallan["items"], p?: InvoicePreset | null): Line[] => {
     const so = db.salesOrders.find(s => s.id === soId);
     if (!so) return [];
+    const pName = p ? matchSoItem(so.items, p.product)?.name : undefined;
     const extra: Line[] = (existing || []).filter(x => !so.items.some(si => si.name === x.name)).map(x => ({ itemId: x.itemId, name: x.name, hsn: x.hsn || "", qty: x.qty, rate: x.rate, gst: x.gst }));
     return [...so.items.map(si => {
       const item = db.items.find(i => i.name === si.name);
       const other = invoicedOnSO(so.id, si.name);
       const bal = Math.max(0, si.qty - other);
       const ex = existing?.find(x => x.name === si.name);
-      const qty = ex ? ex.qty : p ? (si.name === p.product ? Math.min(p.qty, bal) : 0) : bal;
+      const qty = ex ? ex.qty : existing ? 0 : p ? (si.name === pName ? Math.min(p.qty, bal) : 0) : bal;
       return { itemId: ex?.itemId || item?.id, name: si.name, hsn: ex?.hsn ?? item?.hsn ?? "", qty, rate: ex?.rate ?? (si.rate || fgSale.get(si.name) || 0), gst: ex?.gst ?? si.gst, ordered: si.qty, otherInvoiced: other };
     }), ...extra];
   };
@@ -55,7 +56,7 @@ export function InvoiceForm({ open, onClose, edit, preset }: { open: boolean; on
     const prefix = db.settings.invoicePrefix || "INV";
     const so = preset ? db.salesOrders.find(s => s.id === preset.salesOrderId) : undefined;
     setForm({
-      id: "", number: nextNumber(prefix, db.challans.filter(c => c.number.startsWith(prefix))), date: todayISO(),
+      id: "", number: nextSeqNumber(prefix, db.challans.map(c => c.number)), date: todayISO(),
       salesOrderId: so?.id || "", jobCardId: preset?.jobCardId || "", customerId: so?.customerId || "",
       items: [], freight: so?.freight || 0, acknowledged: false, dispatches: [], createdAt: new Date().toISOString(),
     });

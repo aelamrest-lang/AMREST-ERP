@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { useStore, uid } from "../../lib/store";
 import { Button, Input, Label, Modal, Table, Th, Td } from "../ui";
 import type { DeliveryChallan, DispatchRecord } from "../../lib/types";
-import { fmt2, nextNumber, todayISO } from "../../lib/utils";
-import { dispatchedOfLine, dispatchedQty } from "../../lib/invoice";
+import { fmt2, todayISO } from "../../lib/utils";
+import { dispatchedOfLine, dispatchedQty, nextSeqNumber } from "../../lib/invoice";
 
 export function DispatchModal({ invoice, onClose }: { invoice: DeliveryChallan | null; onClose: () => void }) {
   const { db, setDB, log } = useStore();
@@ -29,11 +29,11 @@ export function DispatchModal({ invoice, onClose }: { invoice: DeliveryChallan |
       const st = stockItem(i);
       if (strict && q > (st?.currentStock || 0)) return alert(`"${i.name}": only ${fmt2(st?.currentStock || 0)} ${st?.unit || ""} in stock.`);
     }
-    const all = db.challans.flatMap(c => c.dispatches || []).filter(d => d.number.startsWith("DSP"));
+    const all = db.challans.flatMap(c => c.dispatches || []);
     setDB(d => {
       const stock = new Map(d.items.map(it => [it.id, it.currentStock || 0]));
       const rec: DispatchRecord = {
-        id: uid(), number: nextNumber("DSP", all), ...info, createdAt: new Date().toISOString(),
+        id: uid(), number: nextSeqNumber("DSP", all.map(x => x.number)), ...info, createdAt: new Date().toISOString(),
         lines: lines.map(({ i, q }) => {
           const st = stockItem(i);
           const avail = st ? stock.get(st.id) || 0 : 0;

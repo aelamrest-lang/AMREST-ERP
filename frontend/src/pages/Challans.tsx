@@ -5,7 +5,7 @@ import type { DeliveryChallan, DispatchRecord } from "../lib/types";
 import { IconPlus, IconEdit, IconTrash, IconPrint, IconTruck, IconSearch } from "../components/icons";
 import { calcDocTotalsWithFreight, fmtINR, todayISO } from "../lib/utils";
 import { userCan } from "../lib/permissions";
-import { dispatchedOfLine, dispatchedQty, invoicedQty, jcDispatched, jobCardReadyQty, lineValue } from "../lib/invoice";
+import { dispatchedOfLine, dispatchedQty, invoicedQty, jcDispatched, jobCardReadyQty, lineValue, matchSoItem } from "../lib/invoice";
 import { printDispatchNote, printInvoice } from "../lib/invoicePrint";
 import { InvoiceForm, type InvoicePreset } from "../components/invoice/InvoiceForm";
 import { DispatchModal } from "../components/invoice/DispatchModal";
@@ -62,7 +62,7 @@ export function Challans() {
     };
     const ready = db.jobCards.filter(j => inRange(j.date)).map(jc => {
       const so = db.salesOrders.find(s => s.id === jc.salesOrderId);
-      const soi = so?.items.find(i => i.name === jc.product);
+      const soi = so ? matchSoItem(so.items, jc.product) : undefined;
       const readyQty = jobCardReadyQty(jc, db.productionEntries);
       const disp = jcDispatched(db.challans, jc.id);
       const remaining = Math.max(0, readyQty - disp);

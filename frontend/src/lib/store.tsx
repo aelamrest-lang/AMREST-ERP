@@ -138,6 +138,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [syncError, setSyncError] = useState("");
   const saveTimer = useRef<any>(null);
   const pendingSave = useRef<DB | null>(null);
+  const saving = useRef(false);
   const localVersion = useRef<number>(0);
 
   useEffect(() => {
@@ -195,10 +196,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!currentUser) return;
     const int = setInterval(async () => {
-      if (!getToken()) return;
+      if (!getToken() || pendingSave.current || saving.current) return;
       try {
         const v = await fetchRemoteVersion();
-        if (v > localVersion.current) {
+        if (v > localVersion.current && !pendingSave.current && !saving.current) {
           const remote = await fetchRemoteDB();
           if (remote) {
             const next = migrateDB(remote);
@@ -219,6 +220,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (!payload) return;
       pendingSave.current = null;
       setSyncStatus("syncing");
+      saving.current = true;
       try {
         await saveRemoteDB(payload);
         localVersion.current += 1;
@@ -227,6 +229,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       } catch (err: any) {
         setSyncStatus("error");
         setSyncError(err?.message || "Save failed");
+      } finally {
+        saving.current = false;
       }
     }, 400);
   }, []);

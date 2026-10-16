@@ -40,3 +40,14 @@ export function inrWords(amount: number) {
   const p = Math.round((amount - r) * 100);
   return `Rupees ${words(r) || "Zero"}${p ? ` and ${words(p)} Paise` : ""} Only`;
 }
+
+export function nextSeqNumber(prefix: string, numbers: string[]) {
+  const head = `${prefix}-${new Date().getFullYear()}-`;
+  const max = numbers.filter(n => n.startsWith(head)).reduce((m, n) => Math.max(m, Number(n.slice(head.length)) || 0), 0);
+  return `${head}${String(max + 1).padStart(3, "0")}`;
+}
+
+const norm = (s: string) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+export function matchSoItem<T extends { name: string }>(items: T[], product: string): T | undefined {
+  return items.find(i => i.name === product) || items.find(i => norm(i.name) === norm(product)) || (items.length === 1 ? items[0] : undefined);
+}
