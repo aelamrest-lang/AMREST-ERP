@@ -49,5 +49,8 @@ export function nextSeqNumber(prefix: string, numbers: string[]) {
 
 const norm = (s: string) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 export function matchSoItem<T extends { name: string }>(items: T[], product: string): T | undefined {
-  return items.find(i => i.name === product) || items.find(i => norm(i.name) === norm(product)) || (items.length === 1 ? items[0] : undefined);
+  const p = norm(product);
+  const partial = items.filter(i => norm(i.name) && (p.startsWith(norm(i.name)) || norm(i.name).startsWith(p)))
+    .sort((a, b) => norm(b.name).length - norm(a.name).length)[0];
+  return items.find(i => i.name === product) || items.find(i => norm(i.name) === p) || partial || (items.length === 1 ? items[0] : undefined);
 }

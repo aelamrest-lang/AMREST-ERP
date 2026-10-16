@@ -1,0 +1,30 @@
+{
+  "summary": "Frontend-only retest of Sales Invoice bugs 1, 2, 3, 4 and 6 from iteration_7, plus a quick regression. Logged in as admin/admin123 on the preview URL; DB state was cross-checked in Mongo erp_state. Bug 5 was skipped as instructed. BUG1 FIXED: with DSP-001 and DSP-002 present, I deleted DSP-001 and the next dispatch got DSP-2026-003, so no duplicate numbers or testids. BUG2 FIXED: with AE-001 and AE-002 present, I deleted AE-001 and the New form suggested AE-2026-003, not a duplicate of AE-002. BUG3 PARTIALLY FIXED: JC-2026-008 ('40/5A' vs SO '40/5 A') now pre-fills line 6 = 100 with Grand Total ₹32,74,500. JC-2026-007 pre-fills line 2 = 275 (₹90,04,875). Est. Value is non-zero for both. JC-2026-016 is still broken: its product is '11 kV OC CT 800-400/1-1-1A STMK' and SO-2026-007 has 2 lines, one of them '11 kV OC CT 800-400/1-1-1A'. Both qtys pre-fill as 0, Grand Total is ₹0, and the Ready Est. Value is ₹0.00. The normalized match fails because of the 'STMK' suffix, and the single-item fallback doesn't apply to a 2-line SO. BUG4 FIXED: I invoiced SO-2026-022 with line0=2 and line1=0. Edit shows qty0=2, qty1=0 and total ₹68,204, and Update kept qty 2 and the same total. BUG6 FIXED: in one session I created AE-004, then deleted AE-004, AE-003 and AE-002 about 300ms apart, waited 22s (past a poll), and reloaded/re-logged in. All were gone in the UI and in Mongo (version 608, only legacy DC-001..004 left). Earlier session data also persisted across re-logins. REGRESSION PASS: SO-mode invoices AE-001 (4) and AE-002 (3) on SO-029 auto-numbered. Cards updated correctly: Sales 374→381 qty and ₹12,39,000, Pending 7. Partial dispatch of 2 set the status to 'Partial 2/4' and Dispatched to +2 / ₹3,54,000, with Pending dropping to 5. Creating an invoice did not change stock (DTR 100 kVA stays 0, RADIATOR KEY stays 4). Deleting an invoice that had dispatches reversed them. Cleanup is complete: all AE invoices and DSP dispatches are deleted and the cards are back to baseline (374/645/374/0).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Ready for Dispatch → Invoice prefill (matchSoItem)", "issue": "JC-2026-016 '11 kV OC CT 800-400/1-1-1A STMK' does not match SO-2026-007 line '11 kV OC CT 800-400/1-1-1A' (2-line SO). The invoice pre-fills all qtys as 0 (Grand Total ₹0) and the Ready Est. Value shows ₹0.00. The other 2 ready rows now work.", "selector": "[data-testid='inv-ready-create-JC-2026-016 - 11 kV OC CT 800-400/1-1-1A STMK']", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Sales Invoice / Ready table", "issues": ["Job card 'number' values contain the product (e.g. 'JC-2026-016 - 11 kV OC CT ...'), so data-testids like inv-ready-create-<JC> contain spaces and slashes. This is a data quirk but makes the testids awkward."]}
+    ]
+  },
+  "test_report_links": ["/app/tests/inspect_inv.py"],
+  "action_items": [
+    "matchSoItem: add a containment/prefix fallback after the normalized-equality match, e.g. items.find(i => norm(product).startsWith(norm(i.name)) || norm(i.name).startsWith(norm(product))), preferring the longest match. Optionally let the user pick the SO line when there is no match. Today JC-2026-016 → SO-2026-007 still pre-fills 0 and shows Est. Value ₹0."
+  ],
+  "critical_code_review_comments": [
+    "store.tsx poll: pendingSave/saving are re-checked after fetchRemoteVersion but not after 'await fetchRemoteDB()'. If the user makes a change while the full DB is downloading, setDb(remote) overwrites the newer local state in the UI, though pendingSave still PUTs the newer payload. Re-check pendingSave/saving after fetchRemoteDB before calling setDb. localVersion is still incremented with +=1 instead of using the version from the PUT response.",
+    "DispatchModal computes the DSP number from the closure db rather than from d inside setDB. This is OK for a single user, but two concurrent users can still get the same number (whole-DB last-writer-wins).",
+    "Name-based joins (dispatchedOfLine, invoicedOnSO) remain fragile; use itemId or line index.",
+    "removeInvoice/removeDispatch still don't revert SO 'Delivered' / JC 'Completed' statuses (from iteration_7, not retested)."
+  ],
+  "updated_files": ["/app/tests/inspect_inv.py (read-only Mongo inspection helper)"],
+  "success_rate": {"backend": "N/A (frontend only)", "frontend": "~92% (bugs 1, 2, 4, 6 and the regression fully pass; bug 3 passes for 2 of 3 ready rows)"},
+  "test_credentials": "admin / admin123 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Created and then deleted AE-2026-001..004 (SO-029, SO-022) and DSP-2026-001..003. Stock unchanged: DTR 100 kVA 0, RADIATOR KEY 4. Mongo erp_state version 608 at end, with only legacy DC-2026-001..004.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Login inputs are input[name='amrest-login-username'/'amrest-login-password']; navigate with get_by_role('button', name='Sales Invoice', exact=True). Card testids: inv-card-{sales,ready,dispatched,pending}[-qty|-amount]. Use 'import asyncio' in the script for dialog auto-accept (confirm prompts on delete). Ready rows: JC-2026-016 (SO-007, 2 lines, mismatched name), JC-2026-008/007 (SO-012, 11 lines). SO-029 id 182b3643-e9bb-4b38-a239-2c40fbbfc02a; SO-022 id 30a0fc2d-dc3d-42ce-bac3-d3ad09682956. Run python /app/tests/inspect_inv.py to inspect Mongo state."
+}
