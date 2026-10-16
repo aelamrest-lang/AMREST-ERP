@@ -127,10 +127,7 @@ export function Inventory() {
       const item = db.items.find(i => i.id === r.itemId);
       return { date: j.date, ref: j.number, item, type: "Job Card Hold", qty: r.qty, direction: "Hold" };
     }));
-    const dispatchRows = db.challans.flatMap(c => {
-      const so = db.salesOrders.find(s => s.id === c.salesOrderId);
-      return (so?.items || []).map(si => ({ date: c.date, ref: c.number, item: db.items.find(i => i.name === si.name), fallbackName: si.name, type: "Dispatch / Delivery", qty: si.qty, direction: "Out" }));
-    });
+    const dispatchRows = db.challans.flatMap(c => (c.dispatches || []).flatMap(d => d.lines.map(l => ({ date: d.date, ref: d.number, item: db.items.find(i => i.id === l.itemId) || db.items.find(i => i.name === l.name), fallbackName: l.name, type: "Dispatch", qty: l.qty, direction: "Out" }))));
     return [...grnRows, ...holdRows, ...dispatchRows]
       .sort((a, b) => b.date.localeCompare(a.date))
       .slice(0, 20);

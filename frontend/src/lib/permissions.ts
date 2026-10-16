@@ -25,7 +25,7 @@ export const moduleLabels: Record<RouteId, string> = {
   jobcards: "Job Cards",
   production: "Production",
   testing: "QC Testing",
-  challans: "Dispatch Challan",
+  challans: "Sales Invoice",
   operators: "Operators & Ledger",
   mfgtime: "Manufacturing Time",
   mfgcost: "Manufacturing Cost",
@@ -63,7 +63,7 @@ export const roleDescriptions: Record<Role, string> = {
   production: "BOM, job cards, production planning and stage-wise manufacturing tracking.",
   purchase: "Vendor management, purchase orders, goods receipt notes and procurement reports.",
   testing: "Production testing workflow, job card visibility and quality-stage updates.",
-  store: "Item master, inventory, stock movements, GRN support, reservations and delivery challans.",
+  store: "Item master, inventory, stock movements, GRN support, reservations and sales invoices / dispatch.",
 };
 
 const emptyPerm = (): ModulePermission => ({ view: false, create: false, edit: false, delete: false, approve: false, print: false, export: false });

@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, useCallback, useRef, ReactNode } from "react";
+import { legacyDispatch } from "./invoice";
 import type { DB, User, ActivityLog } from "./types";
 import { defaultDocumentFormats, seedDB } from "./seed";
 import { defaultPermissionsForRole, normalizePermissions } from "./permissions";
@@ -50,7 +51,7 @@ function migrateDB(db: DB): DB {
   }) : (seeded.qcFormats || []);
   const seedFormats = seeded.settings.documentFormats || defaultDocumentFormats(new Date().toISOString());
   const existingFormats = (db.settings?.documentFormats || []).map(f =>
-    f.documentType === "Delivery Challan" ? { ...f, documentType: "Dispatch Challan" } : f
+    f.documentType === "Delivery Challan" || f.documentType === "Dispatch Challan" ? { ...f, documentType: "Sales Invoice" } : f
   );
   const mergedDocumentFormats = [
     ...existingFormats,
@@ -100,6 +101,7 @@ function migrateDB(db: DB): DB {
     qcTests: db.qcTests || [],
     qcFinalReports: db.qcFinalReports || [],
     qcFormats,
+    challans: (db.challans || []).map(c => c.dispatches ? c : { ...c, dispatches: [legacyDispatch(c)] }),
     parties, items: migratedItems, costings, quotations, boms, purchaseOrders,
     users,
     settings: { ...seeded.settings, ...migratedSettings, documentFormats: mergedDocumentFormats },

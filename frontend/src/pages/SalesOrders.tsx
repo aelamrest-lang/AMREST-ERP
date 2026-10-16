@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { dispatchedQty as invDispatchedQty } from "../lib/invoice";
 import { useStore, uid } from "../lib/store";
 import { Card, CardHeader, Button, Input, Select, Label, Modal, Table, Th, Td, Badge, Empty } from "../components/ui";
 import { BarChart } from "../components/charts";
@@ -46,7 +47,7 @@ export function SalesOrders() {
     return arr.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }, [db.salesOrders, isAdmin, currentUser]);
 
-  // ---- SO Summary (auto-derived from Dispatch Challans) ----
+  // ---- SO Summary (auto-derived from Sales Invoices) ----
   const summary = useMemo(() => {
     let totalCount = 0, totalQty = 0, totalValue = 0;
     let completedCount = 0, completedQty = 0, completedValue = 0;
@@ -56,7 +57,7 @@ export function SalesOrders() {
       const orderedValue = o.items.reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.rate) || 0) * (1 + (Number(i.gst) || 0) / 100), 0) + (Number(o.freight) || 0);
 
       const dcs = db.challans.filter(c => c.salesOrderId === o.id);
-      const dispatchedQty = dcs.reduce((s, c) => s + (c.items || []).reduce((a, i) => a + (Number(i.qty) || 0), 0), 0);
+      const dispatchedQty = dcs.reduce((s, c) => s + invDispatchedQty(c), 0);
       const balanceQty = Math.max(0, orderedQty - dispatchedQty);
       // An SO is Completed when the full ordered qty has been dispatched,
       // OR when a user manually marks its status as "Delivered".
@@ -417,7 +418,7 @@ export function SalesOrders() {
         <Card>
           <CardHeader
             title="Monthly Sales (₹ thousands)"
-            subtitle="Value of Dispatch Challans dispatched · click any bar to drill in"
+            subtitle="Value of Sales Invoices dispatched · click any bar to drill in"
           />
           <div className="p-4">
             <BarChart
@@ -455,7 +456,7 @@ export function SalesOrders() {
                 color="#f59e0b"
                 onBarClick={(i) => setCustomerDrill(topCustomersFull[i].customerId)}
               />
-            ) : <Empty title="No Dispatch Challans yet" />}
+            ) : <Empty title="No Sales Invoices yet" />}
           </div>
         </Card>
       </div>
@@ -810,7 +811,7 @@ export function SalesOrders() {
                   <div className="space-y-1 text-xs">
                     <div><span className="text-slate-500">Proforma:</span> {proforma ? <b className="font-mono">{proforma.number}</b> : <span className="text-slate-400">—</span>}</div>
                     <div><span className="text-slate-500">Job Cards:</span> {linkedJobCards.length ? linkedJobCards.map(j => <b key={j.id} className="font-mono mr-2">{j.number}</b>) : <span className="text-slate-400">—</span>}</div>
-                    <div><span className="text-slate-500">Dispatch Challans:</span> {linkedChallans.length ? linkedChallans.map(c => <b key={c.id} className="font-mono mr-2">{c.number}</b>) : <span className="text-slate-400">—</span>}</div>
+                    <div><span className="text-slate-500">Sales Invoices:</span> {linkedChallans.length ? linkedChallans.map(c => <b key={c.id} className="font-mono mr-2">{c.number}</b>) : <span className="text-slate-400">—</span>}</div>
                   </div>
                 </div>
                 <div className="rounded-lg border p-3 bg-slate-50 dark:bg-slate-800/40 dark:border-slate-700 space-y-1">
@@ -940,7 +941,7 @@ export function SalesOrders() {
               </div>
 
               <div>
-                <div className="text-sm font-semibold mb-2">Dispatch Challans ({custDCs.length})</div>
+                <div className="text-sm font-semibold mb-2">Sales Invoices ({custDCs.length})</div>
                 <div className="rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden max-h-72 overflow-y-auto">
                   <Table>
                     <thead><tr><Th>DC #</Th><Th>Date</Th><Th>SO</Th><Th className="text-right">Qty</Th><Th className="text-right">Value</Th></tr></thead>
@@ -996,13 +997,13 @@ export function SalesOrders() {
                   <div className="text-2xl font-bold text-indigo-800 dark:text-indigo-200" data-testid="month-drill-value">{fmtINR(totalValue)}</div>
                 </div>
                 <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
-                  <div className="text-[11px] uppercase tracking-wide text-slate-500">Dispatch Challans</div>
+                  <div className="text-[11px] uppercase tracking-wide text-slate-500">Sales Invoices</div>
                   <div className="text-2xl font-bold">{monthDCs.length}</div>
                 </div>
               </div>
 
               <div>
-                <div className="text-sm font-semibold mb-2">Dispatch Challans ({monthDCs.length})</div>
+                <div className="text-sm font-semibold mb-2">Sales Invoices ({monthDCs.length})</div>
                 <div className="rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden max-h-72 overflow-y-auto">
                   <Table>
                     <thead><tr><Th>DC #</Th><Th>Date</Th><Th>Customer</Th><Th>SO</Th><Th className="text-right">Qty</Th><Th className="text-right">Value</Th></tr></thead>
@@ -1072,7 +1073,7 @@ export function SalesOrders() {
             const orderedQty = o.items.reduce((s, i) => s + (Number(i.qty) || 0), 0);
             const orderedValue = o.items.reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.rate) || 0) * (1 + (Number(i.gst) || 0) / 100), 0) + (Number(o.freight) || 0);
             const dcs = db.challans.filter(c => c.salesOrderId === o.id);
-            const dispatchedQty = dcs.reduce((s, c) => s + (c.items || []).reduce((a, i) => a + (Number(i.qty) || 0), 0), 0);
+            const dispatchedQty = dcs.reduce((s, c) => s + invDispatchedQty(c), 0);
             const balance = Math.max(0, orderedQty - dispatchedQty);
             return { o, orderedQty, orderedValue, dispatchedQty, balance, dcCount: dcs.length, cust: db.parties.find(p => p.id === o.customerId) };
           });
@@ -1100,7 +1101,7 @@ export function SalesOrders() {
                     <Row label="Dispatched Qty">{soStats.map(({ o, dispatchedQty }) => <span key={o.id}>{dispatchedQty} Nos</span>)}</Row>
                     <Row label="Balance Qty" strong>{soStats.map(({ o, balance }) => <span key={o.id} className={balance === 0 ? "text-emerald-600" : "text-amber-700"}>{balance} Nos</span>)}</Row>
                     <Row label="Order Value" strong>{soStats.map(({ o, orderedValue }) => <span key={o.id}>{fmtINR(orderedValue)}</span>)}</Row>
-                    <Row label="Dispatch Challans">{soStats.map(({ o, dcCount }) => <span key={o.id}>{dcCount} DC{dcCount === 1 ? "" : "s"}</span>)}</Row>
+                    <Row label="Sales Invoices">{soStats.map(({ o, dcCount }) => <span key={o.id}>{dcCount} DC{dcCount === 1 ? "" : "s"}</span>)}</Row>
                     <Row label="Freight">{soStats.map(({ o }) => <span key={o.id}>{fmtINR(Number(o.freight) || 0)}</span>)}</Row>
                   </tbody>
                 </table>

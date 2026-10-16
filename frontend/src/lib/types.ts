@@ -445,12 +445,28 @@ export interface DeliveryChallan {
   jobCardId?: string;
   customerId: string;
   dispatchType?: "Raw Material" | "Semi-Finished Goods" | "Finished Goods"; // set for direct stock dispatch (no SO)
-  items?: { itemId?: string; name: string; qty: number; rate: number; gst: number }[];
+  items?: { itemId?: string; name: string; hsn?: string; qty: number; rate: number; gst: number }[];
   freight?: number;
   vehicle?: string;
   driver?: string;
   transport?: string;
   acknowledged: boolean;
+  dispatches?: DispatchRecord[];
+  createdAt: string;
+}
+
+export interface DispatchLine { itemId?: string; name: string; qty: number; deducted: number }
+
+export interface DispatchRecord {
+  id: string;
+  number: string;
+  date: string;
+  lines: DispatchLine[];
+  vehicle?: string;
+  driver?: string;
+  transport?: string;
+  acknowledged: boolean;
+  legacy?: boolean;
   createdAt: string;
 }
 

@@ -1,105 +1,36 @@
-import { useMemo, useState } from "react";
-import { useStore, uid } from "../lib/store";
-import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Badge, Empty } from "../components/ui";
-import type { DeliveryChallan, SalesOrder, JobCard, ProductionEntry, ProductionStage } from "../lib/types";
-import { IconPlus, IconEdit, IconTrash, IconPrint } from "../components/icons";
-import { calcDocTotalsWithFreight, fmtINR, fmt2, nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
+import { useMemo, useState, type ReactNode } from "react";
+import { useStore } from "../lib/store";
+import { Card, Button, Input, Table, Th, Td, Badge, Empty, Modal } from "../components/ui";
+import type { DeliveryChallan, DispatchRecord } from "../lib/types";
+import { IconPlus, IconEdit, IconTrash, IconPrint, IconTruck, IconSearch } from "../components/icons";
+import { calcDocTotalsWithFreight, fmtINR, todayISO } from "../lib/utils";
 import { userCan } from "../lib/permissions";
+import { dispatchedOfLine, dispatchedQty, invoicedQty, jcDispatched, jobCardReadyQty, lineValue } from "../lib/invoice";
+import { printDispatchNote, printInvoice } from "../lib/invoicePrint";
+import { InvoiceForm, type InvoicePreset } from "../components/invoice/InvoiceForm";
+import { DispatchModal } from "../components/invoice/DispatchModal";
 
-interface DispatchRow {
-  name: string;
-  ordered: number;
-  alreadyDispatched: number;   // total qty dispatched for this SO+item across all DCs
-  jcCompleted: number;         // qty already completed on the selected JC (Dispatch Ready reached)
-  jcAlreadyDispatched: number; // qty already dispatched linked to this JC
-  currentQty: number;
-  rate: number;
-  gst: number;
-}
+type Period = "all" | "month" | "lastmonth" | "3m" | "6m" | "custom";
+type CardKey = "sales" | "ready" | "dispatched" | "pending";
 
-// Sum of qty already dispatched for a given SO/item name across all existing challans,
-// excluding the challan currently being edited (if any).
-function sumDispatched(challans: DeliveryChallan[], salesOrderId: string, itemName: string, excludeChallanId?: string) {
-  return challans
-    .filter(c => c.salesOrderId === salesOrderId && c.id !== excludeChallanId)
-    .flatMap(c => c.items || [])
-    .filter(i => i.name === itemName)
-    .reduce((s, i) => s + (Number(i.qty) || 0), 0);
-}
-
-// Sum of qty already dispatched against a specific JC (across all DCs), used to enforce JC-cap.
-function sumDispatchedFromJC(challans: DeliveryChallan[], jobCardId: string, excludeChallanId?: string) {
-  return challans
-    .filter(c => c.jobCardId === jobCardId && c.id !== excludeChallanId)
-    .flatMap(c => c.items || [])
-    .reduce((s, i) => s + (Number(i.qty) || 0), 0);
-}
-
-// A JC's "completed" qty for dispatch = the qty that has reached the final Dispatch Ready stage.
-// If the JC status is already "Completed", the full qty is considered dispatch-ready.
-function jobCardCompletedQty(jc: JobCard, entries: ProductionEntry[]) {
-  if (jc.status === "Completed") return jc.qty;
-  const dispatchReady = entries
-    .filter(e => e.jobCardId === jc.id && e.stage === ("Dispatch Ready" as ProductionStage))
-    .reduce((s, e) => s + (Number(e.todayQty) || 0), 0);
-  return Math.min(jc.qty, dispatchReady);
-}
-
-// Build a dispatch row from a JC, with or without a linked SO.
-// - With SO: cap = min(SO balance for the JC's product, JC completed remaining).
-// - Without SO: cap = JC completed remaining. ordered = JC.qty; alreadyDispatched = 0 for display.
-function buildDispatchRow(
-  so: SalesOrder | undefined,
-  jc: JobCard,
-  entries: ProductionEntry[],
-  challans: DeliveryChallan[],
-  excludeChallanId?: string,
-  existing?: DeliveryChallan["items"],
-  fgSalePriceByName?: Map<string, number>,
-): DispatchRow | null {
-  const jcCompleted = jobCardCompletedQty(jc, entries);
-  const jcAlreadyDispatched = sumDispatchedFromJC(challans, jc.id, excludeChallanId);
-  const jcRemaining = Math.max(0, jcCompleted - jcAlreadyDispatched);
-
-  if (so) {
-    // A JC targets exactly one product name. Try to find the matching SO item.
-    const soi = so.items.find(i => i.name === jc.product);
-    if (soi) {
-      const already = sumDispatched(challans, so.id, soi.name, excludeChallanId);
-      const soBalance = Math.max(0, soi.qty - already);
-      const cap = Math.min(soBalance, jcRemaining);
-      const existingRow = existing?.find(x => x.name === soi.name);
-      const mfgSale = fgSalePriceByName?.get(soi.name) || 0;
-      return {
-        name: soi.name,
-        ordered: soi.qty,
-        alreadyDispatched: already,
-        jcCompleted,
-        jcAlreadyDispatched,
-        currentQty: existingRow?.qty ?? cap,
-        rate: existingRow?.rate ?? (soi.rate || mfgSale),
-        gst: existingRow?.gst ?? soi.gst,
-      };
+function usePeriodRange(p: Period, from: string, to: string) {
+  return useMemo(() => {
+    const today = todayISO();
+    if (p === "all") return { from: "0000-01-01", to: "9999-12-31" };
+    if (p === "custom") return { from: from || "0000-01-01", to: to || "9999-12-31" };
+    const now = new Date();
+    if (p === "month") return { from: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`, to: today };
+    if (p === "lastmonth") {
+      const s = new Date(now.getFullYear(), now.getMonth() - 1, 1), e = new Date(now.getFullYear(), now.getMonth(), 0);
+      const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      return { from: iso(s), to: iso(e) };
     }
-    // SO exists but product name mismatch — fall through to JC-only dispatch.
-  }
-
-  // No SO linked (or product mismatch) — dispatch directly from the JC.
-  const existingRow = existing?.find(x => x.name === jc.product);
-  const mfgSale = fgSalePriceByName?.get(jc.product) || 0;
-  return {
-    name: jc.product,
-    ordered: jc.qty,
-    alreadyDispatched: 0,
-    jcCompleted,
-    jcAlreadyDispatched,
-    currentQty: existingRow?.qty ?? jcRemaining,
-    rate: existingRow?.rate ?? mfgSale,
-    gst: existingRow?.gst ?? 18,
-  };
+    const d = new Date(); d.setMonth(d.getMonth() - (p === "3m" ? 3 : 6));
+    return { from: d.toISOString().slice(0, 10), to: today };
+  }, [p, from, to]);
 }
 
-const STAGES: ProductionStage[] = ["LV Winding", "HV Winding", "Primary Winding", "Secondary Winding 1", "Secondary Winding 2", "Secondary Winding 3", "Core Coil Assembly", "Tanking", "Finishing", "Testing Ready", "Dispatch Ready"];
+const invTotal = (c: DeliveryChallan) => calcDocTotalsWithFreight(c.items || [], Number(c.freight) || 0).total;
 
 export function Challans() {
   const { db, setDB, log, currentUser } = useStore();
@@ -107,748 +38,270 @@ export function Challans() {
   const canEdit = userCan(currentUser, "challans", "edit");
   const canDelete = userCan(currentUser, "challans", "delete");
   const canPrint = userCan(currentUser, "challans", "print");
-  const [open, setOpen] = useState(false);
+  const [period, setPeriod] = useState<Period>("all");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [card, setCard] = useState<CardKey>("sales");
+  const [q, setQ] = useState("");
+  const [formOpen, setFormOpen] = useState(false);
   const [edit, setEdit] = useState<DeliveryChallan | null>(null);
-  const [balancePrompt, setBalancePrompt] = useState<{ so: SalesOrder; parentJc: JobCard; balance: number } | null>(null);
-  const [viewDC, setViewDC] = useState<DeliveryChallan | null>(null);
+  const [preset, setPreset] = useState<InvoicePreset | null>(null);
+  const [dispatchInv, setDispatchInv] = useState<DeliveryChallan | null>(null);
+  const [view, setView] = useState<DeliveryChallan | null>(null);
+  const range = usePeriodRange(period, from, to);
+  const inRange = (d: string) => !!d && d >= range.from && d <= range.to;
+  const party = (id: string) => db.parties.find(p => p.id === id)?.name || "—";
+  const ql = q.trim().toLowerCase();
+  const match = (c: DeliveryChallan) => !ql || c.number.toLowerCase().includes(ql) || party(c.customerId).toLowerCase().includes(ql);
 
-  const blank = (): DeliveryChallan => ({
-    id: "", number: nextNumber("DC", db.challans), date: todayISO(),
-    salesOrderId: "", jobCardId: "", customerId: "",
-    items: [], freight: 0,
-    vehicle: "", driver: "", transport: "", acknowledged: false, createdAt: new Date().toISOString(),
-  });
-  const [form, setForm] = useState<DeliveryChallan>(blank());
-  const [row, setRow] = useState<DispatchRow | null>(null);
-  const [mode, setMode] = useState<"jc" | "direct">("jc");
-  const [directRows, setDirectRows] = useState<{ itemId: string; qty: number; rate: number; gst: number }[]>([]);
-
-  const directCategory = form.dispatchType === "Raw Material" ? "Raw Material" : form.dispatchType === "Semi-Finished Goods" ? "Semi-Finished" : "Finished Goods";
-  const directItems = useMemo(() => {
-    if (!form.dispatchType) return [];
-    return db.items.filter(i => i.category === directCategory);
-  }, [db.items, form.dispatchType, directCategory]);
-
-  const directAvailable = (itemId: string) => {
-    const it = db.items.find(i => i.id === itemId);
-    const restored = edit?.dispatchType ? (edit.items || []).find(x => x.itemId === itemId)?.qty || 0 : 0;
-    return (it?.currentStock || 0) + restored;
-  };
-
-  const currentSO = db.salesOrders.find(s => s.id === form.salesOrderId);
-  const currentJC = db.jobCards.find(j => j.id === form.jobCardId);
-
-  // Any JC (with or without SO link) whose completed qty is not yet fully dispatched is eligible.
-  // A JC with status "Completed" counts as fully ready (jc.qty), even without production entries.
-  const dispatchableJobCards = useMemo(() => {
-    return db.jobCards.filter(j => {
-      const completed = jobCardCompletedQty(j, db.productionEntries);
-      if (completed <= 0) return false;
-      const dispatched = sumDispatchedFromJC(db.challans, j.id, edit?.id);
-      return dispatched < completed;
-    });
-  }, [db.jobCards, db.productionEntries, db.challans, edit?.id]);
-
-  const totals = useMemo(() => {
-    const items = mode === "direct"
-      ? directRows.filter(r => r.itemId && r.qty > 0).map(r => ({ qty: r.qty, rate: r.rate, gst: r.gst }))
-      : (row ? [{ qty: row.currentQty, rate: row.rate, gst: row.gst }] : []);
-    return calcDocTotalsWithFreight(items, Number(form.freight) || 0);
-  }, [row, directRows, mode, form.freight]);
-  const grandTotal = totals.total;
-
-  const openNew = () => {
-    setEdit(null);
-    setForm(blank());
-    setRow(null);
-    setMode("jc");
-    setDirectRows([]);
-    setOpen(true);
-  };
-  // Map of Finished Good name → saved manufacturing sale price (used to auto-fill DC rate)
-  const fgSaleMap = useMemo(() => {
-    const map = new Map<string, number>();
-    const mfg = ((db.settings as any).manufacturingCosts || {}) as Record<string, { salePrice?: number }>;
-    Object.entries(mfg).forEach(([itemId, v]) => {
-      const it = db.items.find(x => x.id === itemId);
-      if (it && v.salePrice) map.set(it.name, Number(v.salePrice) || 0);
-    });
-    return map;
-  }, [db.items, db.settings]);
-
-  const openEdit = (c: DeliveryChallan) => {
-    setEdit(c);
-    setForm({ ...c });
-    if (c.dispatchType) {
-      setMode("direct");
-      setDirectRows((c.items || []).filter(x => x.itemId).map(x => ({ itemId: x.itemId!, qty: x.qty, rate: x.rate, gst: x.gst })));
-      setRow(null);
-    } else {
-      setMode("jc");
-      setDirectRows([]);
-      const jc = db.jobCards.find(j => j.id === c.jobCardId);
-      const so = db.salesOrders.find(s => s.id === c.salesOrderId);
-      if (jc) setRow(buildDispatchRow(so, jc, db.productionEntries, db.challans, c.id, c.items, fgSaleMap));
-      else setRow(null);
-    }
-    setOpen(true);
-  };
-
-  const applyJobCard = (jobCardId: string) => {
-    const jc = db.jobCards.find(j => j.id === jobCardId);
-    if (!jc) { setForm(f => ({ ...f, jobCardId: "", salesOrderId: "", customerId: "" })); setRow(null); return; }
-    const so = jc.salesOrderId ? db.salesOrders.find(s => s.id === jc.salesOrderId) : undefined;
-    setForm(f => ({
-      ...f,
-      jobCardId,
-      salesOrderId: so?.id || "",
-      customerId: so?.customerId || f.customerId || "",
-      freight: so?.freight ?? f.freight ?? 0,
-    }));
-    setRow(buildDispatchRow(so, jc, db.productionEntries, db.challans, edit?.id, undefined, fgSaleMap));
-  };
-
-  const updateRow = (patch: Partial<DispatchRow>) => {
-    setRow(prev => prev ? { ...prev, ...patch } : prev);
-  };
-
-  const save = () => {
-    if (!currentJC) return alert("Job Card is required — dispatch is only allowed against a Job Card. If none exists, please create a Job Card in Production first.");
-    if (!row) return alert("No dispatch row available. Please re-select the Job Card.");
-    if (!form.customerId) return alert("Please select a Customer for this dispatch.");
-    // Cap = min(SO balance for item, JC completed remaining). If no SO, only JC cap applies.
-    const soBalance = currentSO ? Math.max(0, row.ordered - row.alreadyDispatched) : Infinity;
-    const jcRemaining = Math.max(0, row.jcCompleted - row.jcAlreadyDispatched);
-    const cap = Math.min(soBalance, jcRemaining);
-    if (row.currentQty <= 0) return alert(`Enter a Current Dispatch quantity greater than 0.`);
-    if (row.currentQty > cap) {
-      const reason = jcRemaining < soBalance
-        ? `only ${jcRemaining} unit(s) are completed on Job Card ${currentJC.number}`
-        : `only ${soBalance} unit(s) remain on Sales Order ${currentSO?.number || ""}`;
-      return alert(`Cannot dispatch ${row.currentQty} unit(s) of "${row.name}" — ${reason}. Please reduce the qty.`);
-    }
-    const dispatchItems = [{ name: row.name, qty: row.currentQty, rate: row.rate, gst: row.gst }];
-    const payload: DeliveryChallan = { ...form, items: dispatchItems };
-
-    // Total dispatched against this JC after this save
-    const jcTotalDispatched = row.jcAlreadyDispatched + row.currentQty;
-    const jcFullyDispatched = jcTotalDispatched >= currentJC.qty;
-
-    // Check if the SO becomes fully dispatched → auto-mark "Delivered"
-    let soFullyDispatched = false;
-    if (currentSO) {
-      const newDispatchedForItemPreview = row.alreadyDispatched + row.currentQty;
-      const totalSoOrderedPreview = currentSO.items.reduce((s, i) => s + i.qty, 0);
-      const totalSoDispatchedPreview = currentSO.items.reduce((s, i) => {
-        if (i.name === row.name) return s + newDispatchedForItemPreview;
-        return s + sumDispatched(db.challans, currentSO.id, i.name, edit?.id);
-      }, 0);
-      soFullyDispatched = totalSoOrderedPreview > 0 && totalSoDispatchedPreview >= totalSoOrderedPreview;
-    }
-
-    setDB(d => {
-      const challans = edit
-        ? d.challans.map(x => x.id === edit.id ? payload : x)
-        : [{ ...payload, id: uid() }, ...d.challans];
-      const jobCards = jcFullyDispatched
-        ? d.jobCards.map(j => j.id === currentJC.id ? { ...j, status: "Completed" as const } : j)
-        : d.jobCards;
-      const salesOrders = (soFullyDispatched && currentSO)
-        ? d.salesOrders.map(o => o.id === currentSO.id ? { ...o, status: "Delivered" as const } : o)
-        : d.salesOrders;
-      return { ...d, challans, jobCards, salesOrders };
-    });
-    log(`${edit ? "Updated" : "Created"} DC ${form.number}${jcFullyDispatched ? ` · Job Card ${currentJC.number} fully dispatched` : ""}${soFullyDispatched && currentSO ? ` · Sales Order ${currentSO.number} auto-marked Delivered` : ""}`, "Dispatch Challan");
-
-    // After save, if SO still has balance across all items, offer to create a new JC.
-    let soBalanceAfter = 0;
-    if (currentSO) {
-      const newDispatchedForItem = row.alreadyDispatched + row.currentQty;
-      const totalSoOrdered = currentSO.items.reduce((s, i) => s + i.qty, 0);
-      const totalSoDispatched = currentSO.items.reduce((s, i) => {
-        if (i.name === row.name) return s + newDispatchedForItem;
-        return s + sumDispatched(db.challans, currentSO.id, i.name, edit?.id);
-      }, 0);
-      soBalanceAfter = Math.max(0, totalSoOrdered - totalSoDispatched);
-    }
-
-    setOpen(false);
-
-    if (currentSO && jcFullyDispatched && soBalanceAfter > 0) {
-      setBalancePrompt({ so: currentSO, parentJc: currentJC, balance: soBalanceAfter });
-    }
-  };
-
-  const saveDirect = () => {
-    if (!form.customerId) return alert("Please select a Party for this dispatch.");
-    if (!form.dispatchType) return alert("Please select a Dispatch Type.");
-    const rows = directRows.filter(r => r.itemId && r.qty > 0);
-    if (!rows.length) return alert("Add at least one item with Dispatch Qty greater than 0.");
-    for (const r of rows) {
-      const it = db.items.find(i => i.id === r.itemId);
-      const available = directAvailable(r.itemId);
-      if (r.qty > available) return alert(`Cannot dispatch ${fmt2(r.qty)} of "${it?.name}" — only ${fmt2(available)} ${it?.unit} available in stock.`);
-    }
-    const items = rows.map(r => ({ itemId: r.itemId, name: db.items.find(i => i.id === r.itemId)?.name || "", qty: r.qty, rate: r.rate, gst: r.gst }));
-    const payload: DeliveryChallan = { ...form, items, salesOrderId: "", jobCardId: form.jobCardId || "" };
-    setDB(d => {
-      const delta = new Map<string, number>();
-      if (edit) (edit.items || []).forEach(x => { if (x.itemId) delta.set(x.itemId, (delta.get(x.itemId) || 0) + (x.qty || 0)); }); // restore old
-      rows.forEach(r => delta.set(r.itemId, (delta.get(r.itemId) || 0) - r.qty)); // deduct new
-      const newItems = d.items.map(it => delta.has(it.id) ? { ...it, currentStock: Math.max(0, (it.currentStock || 0) + (delta.get(it.id) || 0)) } : it);
-      const challans = edit ? d.challans.map(x => x.id === edit.id ? payload : x) : [{ ...payload, id: uid() }, ...d.challans];
-      return { ...d, challans, items: newItems };
-    });
-    log(`${edit ? "Updated" : "Created"} Dispatch Challan ${form.number} · ${form.dispatchType} · direct dispatch · stock deducted`, "Dispatch Challan");
-    setOpen(false);
-  };
-
-  const saveAll = () => mode === "direct" ? saveDirect() : save();
-
-  const createBalanceJobCard = () => {    if (!balancePrompt) return;
-    const { so, parentJc, balance } = balancePrompt;
-    const newJc: JobCard = {
-      id: uid(),
-      number: nextNumber("JC", db.jobCards),
-      date: todayISO(),
-      salesOrderId: so.id,
-      bomId: parentJc.bomId,
-      qcFormatId: parentJc.qcFormatId,
-      product: parentJc.product,
-      qty: balance,
-      serialStart: "",
-      reservedItems: [],
-      stageQuantities: STAGES.map(s => ({ stage: s, multiplier: 1, totalQty: balance })),
-      stages: STAGES.map(s => ({ stage: s, status: "pending" as const })),
-      status: "Open",
-      createdAt: new Date().toISOString(),
+  const data = useMemo(() => {
+    const invoices = db.challans.filter(c => inRange(c.date));
+    const fgSale = (name: string) => {
+      const it = db.items.find(i => i.name === name);
+      return Number(((db.settings as any).manufacturingCosts || {})[it?.id || ""]?.salePrice) || it?.saleRate || 0;
     };
-    setDB(d => ({ ...d, jobCards: [newJc, ...d.jobCards] }));
-    log(`Auto-created Job Card ${newJc.number} for SO ${so.number} balance (${balance} nos)`, "Job Card");
-    setBalancePrompt(null);
-    alert(`Job Card ${newJc.number} created for the remaining ${balance} nos of "${parentJc.product}". Continue production in the Production module.`);
+    const ready = db.jobCards.filter(j => inRange(j.date)).map(jc => {
+      const so = db.salesOrders.find(s => s.id === jc.salesOrderId);
+      const soi = so?.items.find(i => i.name === jc.product);
+      const readyQty = jobCardReadyQty(jc, db.productionEntries);
+      const disp = jcDispatched(db.challans, jc.id);
+      const remaining = Math.max(0, readyQty - disp);
+      const rate = soi?.rate || fgSale(jc.product);
+      return { jc, so, readyQty, disp, remaining, rate, value: lineValue(remaining, rate, soi?.gst ?? 18) };
+    }).filter(r => r.remaining > 0);
+    const dispatches = db.challans.flatMap(c => (c.dispatches || []).filter(d => inRange(d.date)).map(d => {
+      const qty = d.lines.reduce((s, l) => s + l.qty, 0);
+      const amount = d.lines.reduce((s, l) => { const it = (c.items || []).find(i => i.name === l.name); return s + lineValue(l.qty, it?.rate || 0, it?.gst || 0); }, 0);
+      return { c, d, qty, amount };
+    })).sort((a, b) => b.d.date.localeCompare(a.d.date));
+    const pending = invoices.map(c => {
+      const bal = (c.items || []).map(i => ({ i, bal: Math.max(0, i.qty - dispatchedOfLine(c, i.name)) }));
+      return { c, qty: bal.reduce((s, x) => s + x.bal, 0), amount: bal.reduce((s, x) => s + lineValue(x.bal, x.i.rate, x.i.gst), 0) };
+    }).filter(r => r.qty > 0);
+    return {
+      invoices, ready, dispatches, pending,
+      cards: {
+        sales: { qty: invoices.reduce((s, c) => s + invoicedQty(c), 0), amount: invoices.reduce((s, c) => s + invTotal(c), 0), count: invoices.length },
+        ready: { qty: ready.reduce((s, r) => s + r.remaining, 0), amount: ready.reduce((s, r) => s + r.value, 0), count: ready.length },
+        dispatched: { qty: dispatches.reduce((s, r) => s + r.qty, 0), amount: dispatches.reduce((s, r) => s + r.amount, 0), count: dispatches.length },
+        pending: { qty: pending.reduce((s, r) => s + r.qty, 0), amount: pending.reduce((s, r) => s + r.amount, 0), count: pending.length },
+      },
+    };
+  }, [db.challans, db.jobCards, db.salesOrders, db.productionEntries, db.items, db.settings, range]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const openNew = (p?: InvoicePreset) => { setEdit(null); setPreset(p || null); setFormOpen(true); };
+  const openEdit = (c: DeliveryChallan) => { setEdit(c); setPreset(null); setFormOpen(true); };
+
+  const restoreStock = (items: DB_Items, lines: DispatchRecord["lines"]) => {
+    const add = new Map<string, number>();
+    lines.forEach(l => { if (l.itemId && l.deducted) add.set(l.itemId, (add.get(l.itemId) || 0) + l.deducted); });
+    return items.map(it => add.has(it.id) ? { ...it, currentStock: (it.currentStock || 0) + (add.get(it.id) || 0) } : it);
   };
 
-  const remove = (c: DeliveryChallan) => {
-    if (!confirm(`Delete ${c.number}?${c.dispatchType ? " Dispatched stock will be restored to Current Stock." : ""}`)) return;
-    setDB(d => {
-      let items = d.items;
-      if (c.dispatchType) {
-        const restore = new Map<string, number>();
-        (c.items || []).forEach(x => { if (x.itemId) restore.set(x.itemId, (restore.get(x.itemId) || 0) + x.qty); });
-        items = d.items.map(it => restore.has(it.id) ? { ...it, currentStock: (it.currentStock || 0) + (restore.get(it.id) || 0) } : it);
-      }
-      return { ...d, challans: d.challans.filter(x => x.id !== c.id), items };
-    });
-    log(`Deleted Dispatch Challan ${c.number}${c.dispatchType ? " (stock restored)" : ""}`, "Dispatch Challan");
+  const removeInvoice = (c: DeliveryChallan) => {
+    const disp = dispatchedQty(c);
+    if (!confirm(`Delete Sales Invoice ${c.number}?${disp ? ` ${disp} dispatched unit(s) will be reversed and stock restored.` : ""}`)) return;
+    setDB(d => ({ ...d, challans: d.challans.filter(x => x.id !== c.id), items: restoreStock(d.items, (c.dispatches || []).flatMap(x => x.lines)) }));
+    log(`Deleted Sales Invoice ${c.number}${disp ? " (dispatch reversed, stock restored)" : ""}`, "Sales Invoice");
   };
 
-  const printDC = (c: DeliveryChallan) => {
-    const so = db.salesOrders.find(s => s.id === c.salesOrderId);
-    const jc = db.jobCards.find(j => j.id === c.jobCardId);
-    const cust = db.parties.find(p => p.id === c.customerId);
-    const dItems = c.items || [];
-    const t = calcDocTotalsWithFreight(dItems.map(i => ({ qty: i.qty, rate: i.rate, gst: i.gst })), Number(c.freight) || 0);
-    const isDirect = !!c.dispatchType;
-    const rowsHtml = isDirect
-      ? dItems.map((i, idx) => {
-          const it = db.items.find(x => x.id === i.itemId);
-          return `<tr>
-            <td>${idx + 1}</td>
-            <td>${i.name}</td>
-            <td class="right"><b>${i.qty}</b></td>
-            <td>${it?.unit || "-"}</td>
-            <td class="right">${fmtINR(i.rate)}</td>
-            <td class="right">${i.gst}%</td>
-            <td class="right">${fmtINR(i.qty * i.rate)}</td>
-          </tr>`;
-        }).join("")
-      : dItems.map((i, idx) => {
-          const ordered = so?.items.find(x => x.name === i.name)?.qty ?? 0;
-          const otherDispatched = sumDispatched(db.challans, c.salesOrderId, i.name, c.id);
-          const balance = Math.max(0, ordered - otherDispatched - i.qty);
-          return `<tr>
-        <td>${idx + 1}</td>
-        <td>${i.name}</td>
-        <td class="right">${ordered}</td>
-        <td class="right">${otherDispatched}</td>
-        <td class="right"><b>${i.qty}</b></td>
-        <td class="right">${balance}</td>
-        <td class="right">${fmtINR(i.rate)}</td>
-        <td class="right">${i.gst}%</td>
-        <td class="right">${fmtINR(i.qty * i.rate)}</td>
-      </tr>`;
-        }).join("");
-    const body = `
-      <div class="box"><div class="section-title">Consignee</div><b>${cust?.name || ""}</b><br/>${cust?.address || ""}${cust?.city ? `, ${cust.city}` : ""}<br/>GST: ${cust?.gst || ""}<br/>Contact: ${cust?.mobile || ""}</div>
-      <div class="box"><div class="section-title">Dispatch Details</div>${isDirect ? `<b>Dispatch Type:</b> ${c.dispatchType} (Direct from Stock)<br/>` : `<b>Sales Order:</b> ${so?.number || "-"} &nbsp; | &nbsp; `}<b>Job Card:</b> ${jc?.number || "-"}<br/><b>Vehicle:</b> ${c.vehicle || "-"} | <b>Driver:</b> ${c.driver || "-"}<br/><b>Transport:</b> ${c.transport || "-"}<br/><b>Acknowledgement:</b> ${c.acknowledged ? "Received" : "Pending"}</div>
-      <table>
-        <thead><tr>
-          ${isDirect
-            ? `<th>#</th><th>Item</th><th class="right">Qty</th><th>Unit</th><th class="right">Rate</th><th class="right">GST%</th><th class="right">Amount</th>`
-            : `<th>#</th><th>Item</th>
-          <th class="right">Ordered</th>
-          <th class="right">Prev Dispatched</th>
-          <th class="right">This Dispatch</th>
-          <th class="right">Balance</th>
-          <th class="right">Rate</th>
-          <th class="right">GST%</th>`}
-          <th class="right">Amount</th>
-        </tr></thead>
-        <tbody>${rowsHtml}</tbody>
-      </table>
-      <table style="margin-top:8px;max-width:340px;margin-left:auto">
-        <tr><td>Sub Total</td><td class="right">${fmtINR(t.sub)}</td></tr>
-        <tr><td>Freight</td><td class="right">${fmtINR(t.freight)}</td></tr>
-        <tr><td>GST</td><td class="right">${fmtINR(t.gst)}</td></tr>
-        <tr><td><b>Total</b></td><td class="right"><b>${fmtINR(t.total)}</b></td></tr>
-      </table>
-      <div class="signs"><div class="sign-box">Receiver Signature</div><div class="sign-box">Dispatch</div><div class="sign-box">Authorized Signatory</div></div>
-    `;
-    const html = professionalDocument(db.settings, { title: "Dispatch Challan", number: c.number, date: c.date, body, accent: "#0f766e" });
-    printArea(html, c.number);
+  const removeDispatch = (c: DeliveryChallan, rec: DispatchRecord) => {
+    if (!confirm(`Delete dispatch ${rec.number}? Deducted stock will be restored; the invoice stays.`)) return;
+    setDB(d => ({ ...d, challans: d.challans.map(x => x.id === c.id ? { ...x, dispatches: (x.dispatches || []).filter(r => r.id !== rec.id) } : x), items: restoreStock(d.items, rec.lines) }));
+    log(`Deleted dispatch ${rec.number} of Sales Invoice ${c.number} (stock restored)`, "Sales Invoice");
   };
 
-  // Live JC-cap indicators for the form banner
-  const jcCompletedNow = currentJC ? jobCardCompletedQty(currentJC, db.productionEntries) : 0;
-  const jcAlreadyDispatchedNow = currentJC ? sumDispatchedFromJC(db.challans, currentJC.id, edit?.id) : 0;
-  const jcAvailable = Math.max(0, jcCompletedNow - jcAlreadyDispatchedNow);
+  const status = (c: DeliveryChallan) => {
+    const inv = invoicedQty(c), disp = dispatchedQty(c);
+    if (disp >= inv && inv > 0) return <Badge color="green">Dispatched</Badge>;
+    if (disp > 0) return <Badge color="blue">Partial {disp}/{inv}</Badge>;
+    return <Badge color="yellow">Not Dispatched</Badge>;
+  };
 
-  // SO-level totals (across ALL items and ALL JCs) — used in the summary tiles.
-  const soTotalQty = currentSO ? currentSO.items.reduce((s, i) => s + (Number(i.qty) || 0), 0) : 0;
-  const soTotalDispatched = currentSO
-    ? currentSO.items.reduce((s, i) => s + sumDispatched(db.challans, currentSO.id, i.name, edit?.id), 0)
-    : 0;
-  const soTotalBalance = Math.max(0, soTotalQty - soTotalDispatched);
+  const actions = (c: DeliveryChallan) => (
+    <div className="flex gap-1">
+      {(canCreate || canEdit) && dispatchedQty(c) < invoicedQty(c) && <Button size="sm" variant="outline" onClick={() => setDispatchInv(c)} data-testid={`inv-dispatch-${c.number}`}><IconTruck size={14}/> Dispatch</Button>}
+      {canEdit && <Button size="sm" variant="ghost" onClick={() => openEdit(c)} data-testid={`inv-edit-${c.number}`}><IconEdit size={14}/></Button>}
+      {canPrint && <Button size="sm" variant="ghost" onClick={() => printInvoice(db, c)} data-testid={`inv-print-${c.number}`}><IconPrint size={14}/></Button>}
+      {canDelete && <Button size="sm" variant="ghost" onClick={() => removeInvoice(c)} data-testid={`inv-delete-${c.number}`}><IconTrash size={14}/></Button>}
+    </div>
+  );
+  const invLink = (c: DeliveryChallan) => <button type="button" className="font-mono text-xs text-indigo-600 hover:underline" onClick={() => setView(c)} data-testid={`inv-view-${c.number}`}>{c.number}</button>;
+
+  const CARDS: { key: CardKey; label: string; color: string }[] = [
+    { key: "sales", label: "Total Sales", color: "text-indigo-600" },
+    { key: "ready", label: "Ready for Dispatch", color: "text-teal-600" },
+    { key: "dispatched", label: "Total Dispatched", color: "text-emerald-600" },
+    { key: "pending", label: "Pending Dispatch", color: "text-amber-600" },
+  ];
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <div><h1 className="text-2xl font-bold">Dispatch Challan</h1><p className="text-sm text-slate-500">Dispatch tracking with partial dispatch, JC-gated qty and balance</p></div>
-        {canCreate && <Button onClick={openNew} data-testid="new-challan-btn"><IconPlus size={14}/> New Challan</Button>}
+        <div><h1 className="text-2xl font-bold" data-testid="sales-invoice-title">Sales Invoice</h1><p className="text-sm text-slate-500">Invoice against Sales Orders or direct stock · physical dispatch tracked separately · stock moves only on dispatch</p></div>
+        {canCreate && <Button onClick={() => openNew()} data-testid="new-invoice-btn"><IconPlus size={14}/> New Sales Invoice</Button>}
       </div>
+
+      <div className="flex flex-wrap items-center gap-2" data-testid="inv-period-filter">
+        {([["all", "All Time"], ["month", "This Month"], ["lastmonth", "Last Month"], ["3m", "Last 3 Months"], ["6m", "Last 6 Months"], ["custom", "Custom Date"]] as const).map(([k, lbl]) => (
+          <button key={k} type="button" onClick={() => setPeriod(k)}
+            className={"text-xs px-3 py-1.5 rounded-full border font-medium " + (period === k ? "bg-indigo-600 border-indigo-600 text-white" : "bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-600 hover:border-indigo-400")}
+            data-testid={`inv-period-${k}`}>{lbl}</button>
+        ))}
+        {period === "custom" && <>
+          <Input type="date" className="!w-40" value={from} onChange={(e: any) => setFrom(e.target.value)} data-testid="inv-period-from"/>
+          <span className="text-xs text-slate-400">to</span>
+          <Input type="date" className="!w-40" value={to} onChange={(e: any) => setTo(e.target.value)} data-testid="inv-period-to"/>
+        </>}
+      </div>
+
+      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {CARDS.map(c => {
+          const d = data.cards[c.key];
+          return (
+            <button key={c.key} type="button" onClick={() => setCard(c.key)}
+              className={"text-left rounded-xl border p-4 transition-colors " + (card === c.key ? "border-indigo-500 ring-2 ring-indigo-200 dark:ring-indigo-900 bg-indigo-50 dark:bg-indigo-900/20" : "border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-indigo-300")}
+              data-testid={`inv-card-${c.key}`}>
+              <div className="text-[10px] uppercase font-semibold text-slate-500">{c.label}</div>
+              <div className="text-2xl font-bold mt-1" data-testid={`inv-card-${c.key}-qty`}>{d.qty} <span className="text-xs font-medium text-slate-400">qty</span></div>
+              <div className="text-xs mt-1"><span className="text-slate-400">Amount:</span> <b className={c.color} data-testid={`inv-card-${c.key}-amount`}>{fmtINR(d.amount)}</b></div>
+              <div className="text-[10px] text-slate-400 mt-0.5">{d.count} {c.key === "ready" ? "job card(s)" : c.key === "dispatched" ? "dispatch(es)" : "invoice(s)"}</div>
+            </button>
+          );
+        })}
+      </div>
+      <div className="text-[10px] text-slate-400 -mt-2">Amounts GST-inclusive · Ready for Dispatch = finished qty (Dispatch Ready) not yet dispatched, valued at SO / sale price · click a card for its list</div>
+
       <Card>
-        <Table>
-          <thead><tr><Th>#</Th><Th>Date</Th><Th>SO</Th><Th>Job Card</Th><Th>Customer</Th><Th>Items</Th><Th>Total</Th><Th>Vehicle</Th><Th>Ack</Th><Th></Th></tr></thead>
-          <tbody>
-            {db.challans.map(c => {
-              const totalsC = calcDocTotalsWithFreight((c.items || []).map(i => ({ qty: i.qty, rate: i.rate, gst: i.gst })), Number(c.freight) || 0);
-              const totalUnits = (c.items || []).reduce((s, i) => s + i.qty, 0);
-              return (
-                <tr key={c.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                  <Td className="font-mono text-xs">
-                    <button
-                      type="button"
-                      className="text-indigo-600 hover:underline"
-                      onClick={() => setViewDC(c)}
-                      title="View full Dispatch Challan details"
-                      data-testid={`dc-view-${c.number}`}
-                    >{c.number}</button>
-                    {c.dispatchType && <div className="mt-0.5"><Badge color="blue">{c.dispatchType}</Badge></div>}
-                  </Td>
-                  <Td>{c.date}</Td>
-                  <Td>{db.salesOrders.find(s => s.id === c.salesOrderId)?.number || "—"}</Td>
-                  <Td>{db.jobCards.find(j => j.id === c.jobCardId)?.number || "—"}</Td>
-                  <Td>{db.parties.find(p => p.id === c.customerId)?.name}</Td>
-                  <Td className="text-xs">{(c.items || []).length ? `${(c.items || []).length} line · Qty ${totalUnits}` : "—"}</Td>
-                  <Td className="font-semibold">{fmtINR(totalsC.total)}</Td>
-                  <Td>{c.vehicle}</Td>
-                  <Td><Badge color={c.acknowledged ? "green" : "yellow"}>{c.acknowledged ? "Yes" : "Pending"}</Badge></Td>
-                  <Td><div className="flex gap-1">
-                    {canEdit && <Button size="sm" variant="ghost" onClick={() => openEdit(c)}><IconEdit size={14}/></Button>}
-                    {canPrint && <Button size="sm" variant="ghost" onClick={() => printDC(c)}><IconPrint size={14}/></Button>}
-                    {canDelete && <Button size="sm" variant="ghost" onClick={() => remove(c)}><IconTrash size={14}/></Button>}
-                  </div></Td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </Table>
-        {db.challans.length === 0 && <Empty/>}
+        <div className="p-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 flex-wrap">
+          <div className="font-semibold text-sm" data-testid="inv-list-title">{CARDS.find(c => c.key === card)!.label}</div>
+          {card !== "ready" && <div className="relative max-w-sm w-full">
+            <IconSearch size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"/>
+            <Input value={q} onChange={(e: any) => setQ(e.target.value)} placeholder="Search invoice no. or customer..." className="pl-9" data-testid="inv-search"/>
+          </div>}
+        </div>
+
+        {card === "sales" && <Table>
+          <thead><tr><Th>Invoice</Th><Th>Date</Th><Th>SO</Th><Th>Job Card</Th><Th>Customer</Th><Th className="text-right">Qty</Th><Th>Dispatch</Th><Th className="text-right">Total</Th><Th></Th></tr></thead>
+          <tbody>{data.invoices.filter(match).map(c => (
+            <tr key={c.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50" data-testid={`inv-row-${c.number}`}>
+              <Td>{invLink(c)}{c.dispatchType && <div className="mt-0.5"><Badge color="blue">{c.dispatchType}</Badge></div>}</Td>
+              <Td>{c.date}</Td>
+              <Td>{db.salesOrders.find(s => s.id === c.salesOrderId)?.number || "—"}</Td>
+              <Td>{db.jobCards.find(j => j.id === c.jobCardId)?.number || "—"}</Td>
+              <Td>{party(c.customerId)}</Td>
+              <Td className="text-right">{invoicedQty(c)}</Td>
+              <Td>{status(c)}</Td>
+              <Td className="text-right font-semibold">{fmtINR(invTotal(c))}</Td>
+              <Td>{actions(c)}</Td>
+            </tr>
+          ))}</tbody>
+        </Table>}
+
+        {card === "ready" && <Table>
+          <thead><tr><Th>Job Card</Th><Th>Product</Th><Th>SO</Th><Th>Customer</Th><Th className="text-right">JC Qty</Th><Th className="text-right">Ready</Th><Th className="text-right">Dispatched</Th><Th className="text-right">Ready Balance</Th><Th className="text-right">Est. Value</Th><Th></Th></tr></thead>
+          <tbody>{data.ready.map(r => (
+            <tr key={r.jc.id} data-testid={`inv-ready-${r.jc.number}`}>
+              <Td className="font-mono text-xs">{r.jc.number}</Td>
+              <Td>{r.jc.product}</Td>
+              <Td>{r.so?.number || "—"}</Td>
+              <Td>{party(r.so?.customerId || r.jc.customerId || "")}</Td>
+              <Td className="text-right">{r.jc.qty}</Td>
+              <Td className="text-right">{r.readyQty}</Td>
+              <Td className="text-right">{r.disp}</Td>
+              <Td className="text-right font-semibold text-teal-700">{r.remaining}</Td>
+              <Td className="text-right">{fmtINR(r.value)}</Td>
+              <Td>{canCreate && r.so && <Button size="sm" variant="outline" onClick={() => openNew({ salesOrderId: r.so!.id, jobCardId: r.jc.id, product: r.jc.product, qty: r.remaining })} data-testid={`inv-ready-create-${r.jc.number}`}><IconPlus size={12}/> Invoice</Button>}</Td>
+            </tr>
+          ))}</tbody>
+        </Table>}
+
+        {card === "dispatched" && <Table>
+          <thead><tr><Th>Dispatch No.</Th><Th>Date</Th><Th>Invoice</Th><Th>Customer</Th><Th>Items</Th><Th className="text-right">Qty</Th><Th className="text-right">Amount</Th><Th>Vehicle</Th><Th>Ack</Th><Th></Th></tr></thead>
+          <tbody>{data.dispatches.filter(r => match(r.c)).map(({ c, d, qty, amount }) => (
+            <tr key={d.id} data-testid={`inv-dispatch-row-${d.number}`}>
+              <Td className="font-mono text-xs">{d.number}{d.legacy && <div className="text-[10px] text-slate-400">legacy challan</div>}</Td>
+              <Td>{d.date}</Td>
+              <Td>{invLink(c)}</Td>
+              <Td>{party(c.customerId)}</Td>
+              <Td className="text-xs">{d.lines.map(l => l.name).join(", ")}</Td>
+              <Td className="text-right">{qty}</Td>
+              <Td className="text-right font-semibold">{fmtINR(amount)}</Td>
+              <Td>{d.vehicle || "—"}</Td>
+              <Td><Badge color={d.acknowledged ? "green" : "yellow"}>{d.acknowledged ? "Yes" : "Pending"}</Badge></Td>
+              <Td><div className="flex gap-1">
+                {canPrint && <Button size="sm" variant="ghost" onClick={() => printDispatchNote(db, c, d)} data-testid={`dsp-print-${d.number}`}><IconPrint size={14}/></Button>}
+                {canDelete && <Button size="sm" variant="ghost" onClick={() => removeDispatch(c, d)} data-testid={`dsp-delete-${d.number}`}><IconTrash size={14}/></Button>}
+              </div></Td>
+            </tr>
+          ))}</tbody>
+        </Table>}
+
+        {card === "pending" && <Table>
+          <thead><tr><Th>Invoice</Th><Th>Date</Th><Th>Customer</Th><Th>Items</Th><Th className="text-right">Invoiced</Th><Th className="text-right">Dispatched</Th><Th className="text-right">Balance</Th><Th className="text-right">Balance Amt</Th><Th></Th></tr></thead>
+          <tbody>{data.pending.filter(r => match(r.c)).map(({ c, qty, amount }) => (
+            <tr key={c.id} data-testid={`inv-pending-${c.number}`}>
+              <Td>{invLink(c)}</Td>
+              <Td>{c.date}</Td>
+              <Td>{party(c.customerId)}</Td>
+              <Td className="text-xs">{(c.items || []).map(i => i.name).join(", ")}</Td>
+              <Td className="text-right">{invoicedQty(c)}</Td>
+              <Td className="text-right">{dispatchedQty(c)}</Td>
+              <Td className="text-right font-semibold text-amber-600">{qty}</Td>
+              <Td className="text-right">{fmtINR(amount)}</Td>
+              <Td>{(canCreate || canEdit) && <Button size="sm" variant="outline" onClick={() => setDispatchInv(c)} data-testid={`inv-pending-dispatch-${c.number}`}><IconTruck size={14}/> Dispatch</Button>}</Td>
+            </tr>
+          ))}</tbody>
+        </Table>}
+
+        {((card === "sales" && !data.invoices.length) || (card === "ready" && !data.ready.length) || (card === "dispatched" && !data.dispatches.length) || (card === "pending" && !data.pending.length)) && <Empty/>}
       </Card>
 
-      <Modal open={open} onClose={() => setOpen(false)} title={edit ? `Edit ${edit.number}` : "New Dispatch Challan"} size="xl">
-        <div className="flex rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden w-fit mb-4">
-          <button type="button" onClick={() => setMode("jc")} className={"px-4 py-2 text-xs font-semibold " + (mode === "jc" ? "bg-indigo-600 text-white" : "bg-white dark:bg-slate-900 text-slate-600")} data-testid="dc-mode-jc">Against Job Card / SO</button>
-          <button type="button" onClick={() => setMode("direct")} className={"px-4 py-2 text-xs font-semibold " + (mode === "direct" ? "bg-indigo-600 text-white" : "bg-white dark:bg-slate-900 text-slate-600")} data-testid="dc-mode-direct">Direct Dispatch (from Stock)</button>
-        </div>
-        <div className="grid sm:grid-cols-3 gap-3">
-          <div><Label>Challan No.</Label><Input value={form.number} disabled/></div>
-          <div><Label>Date</Label><Input type="date" value={form.date} onChange={(e: any) => setForm({...form, date: e.target.value})}/></div>
-          {mode === "direct" && (
-            <div>
-              <Label>Dispatch Type *</Label>
-              <Select value={form.dispatchType || ""} onChange={(e: any) => { setForm({ ...form, dispatchType: e.target.value as DeliveryChallan["dispatchType"] }); setDirectRows([]); }} data-testid="dc-dispatch-type">
-                <option value="">— Select Type —</option>
-                <option value="Raw Material">Raw Material</option>
-                <option value="Semi-Finished Goods">Semi-Finished Goods</option>
-                <option value="Finished Goods">Finished Goods</option>
-              </Select>
-            </div>
-          )}
-          <div>
-            <Label>{mode === "direct" ? "Job Card (optional reference)" : "Job Card *"}</Label>
-            <Select value={form.jobCardId || ""} onChange={(e: any) => mode === "direct" ? setForm({ ...form, jobCardId: e.target.value }) : applyJobCard(e.target.value)} data-testid="dc-jobcard-select">
-              <option value="">{mode === "direct" ? "— None —" : "— Select Job Card —"}</option>
-              {(mode === "direct" ? db.jobCards : dispatchableJobCards).map(j => {
-                const so = db.salesOrders.find(s => s.id === j.salesOrderId);
-                const completed = jobCardCompletedQty(j, db.productionEntries);
-                const disp = sumDispatchedFromJC(db.challans, j.id, edit?.id);
-                const avail = Math.max(0, completed - disp);
-                return <option key={j.id} value={j.id}>{j.number} · {j.product}{mode === "jc" ? ` · Ready ${completed}/${j.qty} · Available ${avail}` : ""}{so ? ` · ${so.number}` : ""}</option>;
-              })}
-            </Select>
-          </div>
-          {mode === "jc" && (
-            <div>
-              <Label>Sales Order (auto)</Label>
-              <Input value={currentSO?.number || ""} disabled placeholder={currentJC ? "Not linked (JC has no SO)" : "Auto-set from Job Card"} data-testid="dc-so-display" />
-            </div>
-          )}
-          <div className={mode === "jc" ? "sm:col-span-2" : ""}>
-            <Label>{mode === "direct" ? "Party *" : `Customer${currentSO ? " (auto)" : " *"}`}</Label>
-            <Select
-              value={form.customerId}
-              onChange={(e: any) => setForm({...form, customerId: e.target.value})}
-              disabled={mode === "jc" && !!currentSO}
-              data-testid="dc-customer-select"
-            >
-              <option value="">{mode === "direct" ? "— Select Party —" : "— Select Customer —"}</option>
-              {db.parties.filter(p => mode === "direct" ? true : p.type === "customer").map(p => <option key={p.id} value={p.id}>{p.name}{p.city ? ` · ${p.city}` : ""}{mode === "direct" ? ` (${p.type})` : ""}</option>)}
-            </Select>
-          </div>
-        </div>
-
-        {mode === "direct" && form.dispatchType && (
-          <div className="mt-4 border border-slate-200 dark:border-slate-700 rounded-lg overflow-x-auto" data-testid="dc-direct-panel">
-            <div className="flex items-center justify-between px-3 py-2 bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-700 text-xs">
-              <div className="font-semibold text-slate-700 dark:text-slate-200">Dispatch Items — picked directly from Inventory ({directCategory} stock)</div>
-              <Button size="sm" variant="outline" onClick={() => setDirectRows(r => [...r, { itemId: "", qty: 1, rate: 0, gst: 18 }])} data-testid="dc-add-item"><IconPlus size={12}/> Add Item</Button>
-            </div>
-            <Table>
-              <thead><tr>
-                <Th>Item</Th><Th className="text-right">Available Stock</Th><Th className="text-right">Dispatch Qty</Th><Th>Unit</Th><Th className="text-right">Rate</Th><Th className="text-right">GST%</Th><Th className="text-right">Amount</Th><Th></Th>
-              </tr></thead>
-              <tbody>
-                {directRows.map((r, idx) => {
-                  const it = db.items.find(i => i.id === r.itemId);
-                  const available = r.itemId ? directAvailable(r.itemId) : 0;
-                  const over = r.itemId && r.qty > available;
-                  return (
-                    <tr key={idx} className={over ? "bg-rose-50 dark:bg-rose-900/20" : ""}>
-                      <Td className="min-w-56">
-                        <Select value={r.itemId} onChange={(e: any) => {
-                          const item = db.items.find(i => i.id === e.target.value);
-                          setDirectRows(rows => rows.map((x, i) => i === idx ? { ...x, itemId: e.target.value, rate: item ? (item.saleRate || item.purchaseRate || 0) : 0, gst: item?.gstRate ?? 18 } : x));
-                        }} data-testid={`dc-item-${idx}`}>
-                          <option value="">— Select Item —</option>
-                          {directItems.map(i => <option key={i.id} value={i.id}>{i.name} · stock {fmt2(i.currentStock)} {i.unit}</option>)}
-                        </Select>
-                      </Td>
-                      <Td className="text-right font-medium" data-testid={`dc-avail-${idx}`}>{r.itemId ? `${fmt2(available)} ${it?.unit || ""}` : "—"}</Td>
-                      <Td className="text-right">
-                        <Input type="number" min={0} max={available} value={r.qty}
-                          onChange={(e: any) => setDirectRows(rows => rows.map((x, i) => i === idx ? { ...x, qty: Math.max(0, Number(e.target.value) || 0) } : x))}
-                          className={"w-24 text-right py-1 h-8 " + (over ? "border-rose-500" : "")}
-                          data-testid={`dc-qty-${idx}`} />
-                      </Td>
-                      <Td>{it?.unit || "—"}</Td>
-                      <Td className="text-right"><Input type="number" value={r.rate} onChange={(e: any) => setDirectRows(rows => rows.map((x, i) => i === idx ? { ...x, rate: Number(e.target.value) || 0 } : x))} className="w-24 text-right py-1 h-8" data-testid={`dc-rate-${idx}`} /></Td>
-                      <Td className="text-right"><Input type="number" value={r.gst} onChange={(e: any) => setDirectRows(rows => rows.map((x, i) => i === idx ? { ...x, gst: Number(e.target.value) || 0 } : x))} className="w-16 text-right py-1 h-8" /></Td>
-                      <Td className="text-right font-medium">{fmtINR(r.qty * r.rate)}</Td>
-                      <Td><Button size="sm" variant="ghost" onClick={() => setDirectRows(rows => rows.filter((_, i) => i !== idx))} data-testid={`dc-item-remove-${idx}`}><IconTrash size={14}/></Button></Td>
-                    </tr>
-                  );
-                })}
-                {directRows.length === 0 && <tr><Td {...{ colSpan: 8 }}><Empty title="No items added" subtitle="Click 'Add Item' to pick stock to dispatch" /></Td></tr>}
-              </tbody>
-            </Table>
-          </div>
-        )}
-        {mode === "direct" && !form.dispatchType && (
-          <div className="mt-4 rounded-lg border border-indigo-200 bg-indigo-50 dark:bg-indigo-900/20 dark:border-indigo-700 p-3 text-sm text-indigo-800 dark:text-indigo-200">Select a <b>Dispatch Type</b> above to pick {`items`} from Inventory.</div>
-        )}
-
-        {mode === "jc" && !currentJC && (
-          <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-700 p-3 text-sm text-amber-800 dark:text-amber-200" data-testid="dc-no-jc-warning">
-            <b>Job Card is required.</b> Dispatch is only allowed against a Job Card and up to its completed quantity. If no Job Card exists for this Sales Order, please create one in <b>Production</b> first.
-            {dispatchableJobCards.length === 0 && <div className="mt-1 text-xs">Also: no Job Cards currently have completed (Dispatch Ready) quantity available for dispatch.</div>}
-          </div>
-        )}
-
-        {mode === "jc" && currentJC && (
-          <div className="mt-4 grid gap-3 md:grid-cols-5 sm:grid-cols-2" data-testid="dc-dispatch-summary">
-            <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
-              <div className="text-[11px] uppercase tracking-wide text-slate-500">Sales Order Qty</div>
-              <div className="text-xl font-bold" data-testid="dc-sum-so-qty">{currentSO ? soTotalQty : (row?.ordered ?? 0)}</div>
-              <div className="text-[11px] text-slate-500 mt-0.5">{currentSO ? `${currentSO.number} · ${currentSO.items.length} item${currentSO.items.length > 1 ? "s" : ""}` : "No SO linked"}</div>
-            </div>
-            <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
-              <div className="text-[11px] uppercase tracking-wide text-slate-500">Already Dispatched</div>
-              <div className="text-xl font-bold" data-testid="dc-sum-already-dispatched">{currentSO ? soTotalDispatched : (row?.alreadyDispatched ?? 0)}</div>
-              <div className="text-[11px] text-slate-500 mt-0.5">{currentSO ? "All items, all JCs combined" : "This item, all JCs"}</div>
-            </div>
-            <div className="rounded-lg border border-emerald-200 dark:border-emerald-800 p-3 bg-emerald-50 dark:bg-emerald-900/20">
-              <div className="text-[11px] uppercase tracking-wide text-emerald-700 dark:text-emerald-300">Sales Order Balance</div>
-              <div className="text-xl font-bold text-emerald-700 dark:text-emerald-300" data-testid="dc-sum-so-balance">{currentSO ? soTotalBalance : Math.max(0, (row?.ordered ?? 0) - (row?.alreadyDispatched ?? 0))}</div>
-              <div className="text-[11px] text-slate-500 mt-0.5">SO Qty − Already Dispatched</div>
-            </div>
-            <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
-              <div className="text-[11px] uppercase tracking-wide text-slate-500">Selected Job Card Qty</div>
-              <div className="text-xl font-bold" data-testid="dc-sum-jc-qty">{currentJC.qty}</div>
-              <div className="text-[11px] text-slate-500 mt-0.5 font-mono">{currentJC.number}</div>
-            </div>
-            <div className="rounded-lg border border-teal-300 dark:border-teal-700 p-3 bg-teal-50 dark:bg-teal-900/20">
-              <div className="text-[11px] uppercase tracking-wide text-teal-700 dark:text-teal-300">Available on this JC</div>
-              <div className="text-xl font-bold text-teal-700 dark:text-teal-300" data-testid="dc-sum-jc-available">{jcAvailable}</div>
-              <div className="text-[11px] text-slate-500 mt-0.5">Ready {jcCompletedNow} − Dispatched {jcAlreadyDispatchedNow}</div>
-            </div>
-          </div>
-        )}
-
-        {mode === "jc" && row && (
-          <div className="mt-4 border border-slate-200 dark:border-slate-700 rounded-lg overflow-x-auto" data-testid="dc-partial-panel">
-            <div className="flex items-center justify-between px-3 py-2 bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-700 text-xs">
-              <div className="font-semibold text-slate-700 dark:text-slate-200">Partial Dispatch — enter any quantity up to the Available JC qty</div>
-              {(() => {
-                const jcRemaining = Math.max(0, row.jcCompleted - row.jcAlreadyDispatched);
-                const soBalance = currentSO ? Math.max(0, row.ordered - row.alreadyDispatched) : Infinity;
-                const cap = Math.min(soBalance, jcRemaining);
-                return (
-                  <div className="flex gap-2">
-                    <Button size="sm" variant="outline" onClick={() => updateRow({ currentQty: Math.floor(cap / 2) })} data-testid="dc-fill-half">Half ({Math.floor(cap / 2)})</Button>
-                    <Button size="sm" variant="outline" onClick={() => updateRow({ currentQty: cap })} data-testid="dc-fill-full">Full ({cap})</Button>
-                  </div>
-                );
-              })()}
-            </div>
-            <Table>
-              <thead>
-                <tr>
-                  <Th>Item</Th>
-                  <Th className="text-right">SO Qty</Th>
-                  <Th className="text-right">Already Dispatched</Th>
-                  <Th className="text-right">SO Balance</Th>
-                  <Th className="text-right">JC Available</Th>
-                  <Th className="text-right">This Dispatch</Th>
-                  <Th className="text-right">Balance After</Th>
-                  <Th className="text-right">Rate</Th>
-                  <Th className="text-right">GST%</Th>
-                  <Th className="text-right">Amount</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {(() => {
-                  const soBalance = currentSO ? Math.max(0, row.ordered - row.alreadyDispatched) : row.jcCompleted;
-                  const jcRemaining = Math.max(0, row.jcCompleted - row.jcAlreadyDispatched);
-                  const cap = Math.min(soBalance, jcRemaining);
-                  const over = row.currentQty > cap;
-                  const soBalanceAfter = Math.max(0, soBalance - row.currentQty);
-                  const jcBalanceAfter = Math.max(0, jcRemaining - row.currentQty);
-                  return (
-                    <tr className={over ? "bg-rose-50 dark:bg-rose-900/20" : ""}>
-                      <Td className="font-medium">{row.name}</Td>
-                      <Td className="text-right">{row.ordered}</Td>
-                      <Td className="text-right">{row.alreadyDispatched}</Td>
-                      <Td className="text-right font-medium">{soBalance === Infinity ? "—" : soBalance}</Td>
-                      <Td className="text-right font-medium text-teal-700">{jcRemaining}</Td>
-                      <Td className="text-right">
-                        <Input
-                          type="number"
-                          value={row.currentQty}
-                          min={0}
-                          max={cap}
-                          onChange={(e: any) => {
-                            const v = Number(e.target.value) || 0;
-                            updateRow({ currentQty: Math.max(0, v) });
-                          }}
-                          className={"w-24 text-right py-1 h-8 " + (over ? "border-rose-500" : "")}
-                          data-testid="dc-current-qty"
-                        />
-                      </Td>
-                      <Td className={"text-right font-semibold " + (over ? "text-rose-600" : "text-emerald-600")} data-testid="dc-balance-after">
-                        <div>SO: {currentSO ? soBalanceAfter : "—"}</div>
-                        <div className="text-teal-700 text-[11px]">JC: {jcBalanceAfter}{jcBalanceAfter === 0 && row.currentQty > 0 ? " · will Complete" : ""}</div>
-                      </Td>
-                      <Td className="text-right">
-                        <Input type="number" value={row.rate} onChange={(e: any) => updateRow({ rate: Number(e.target.value) || 0 })} className="w-24 text-right py-1 h-8"/>
-                      </Td>
-                      <Td className="text-right">
-                        <Input type="number" value={row.gst} onChange={(e: any) => updateRow({ gst: Number(e.target.value) || 0 })} className="w-16 text-right py-1 h-8"/>
-                      </Td>
-                      <Td className="text-right font-medium">{fmtINR(row.currentQty * row.rate)}</Td>
-                    </tr>
-                  );
-                })()}
-              </tbody>
-            </Table>
-          </div>
-        )}
-
-        <div className="grid sm:grid-cols-2 gap-3 mt-4">
-          <div className="space-y-3">
-            <div><Label>Vehicle Number</Label><Input value={form.vehicle || ""} onChange={(e: any) => setForm({...form, vehicle: e.target.value})}/></div>
-            <div><Label>Driver Name</Label><Input value={form.driver || ""} onChange={(e: any) => setForm({...form, driver: e.target.value})}/></div>
-            <div><Label>Transport / LR</Label><Input value={form.transport || ""} onChange={(e: any) => setForm({...form, transport: e.target.value})}/></div>
-            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.acknowledged} onChange={e => setForm({...form, acknowledged: e.target.checked})}/> Customer acknowledgement received</label>
-          </div>
-
-          <div className="rounded-lg border p-3 bg-slate-50 dark:bg-slate-800/40 dark:border-slate-700 text-sm space-y-1 max-w-sm ml-auto self-start">
-            <div className="flex justify-between"><span>Sub Total</span><b>{fmtINR(totals.sub)}</b></div>
-            <div className="flex justify-between items-center gap-2">
-              <span>Freight</span>
-              <Input
-                type="number"
-                value={form.freight ?? 0}
-                onChange={(e: any) => setForm({...form, freight: Number(e.target.value) || 0})}
-                className="w-32 text-right py-1 h-8"
-                data-testid="dc-freight-input"
-              />
-            </div>
-            <div className="flex justify-between"><span>GST</span><b>{fmtINR(totals.gst)}</b></div>
-            <div className="flex justify-between text-base border-t pt-1 mt-1"><span>Total</span><b className="text-emerald-600">{fmtINR(grandTotal)}</b></div>
-          </div>
-        </div>
-
-        <div className="mt-5 flex justify-end gap-2">
-          <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-          <Button onClick={saveAll} disabled={mode === "jc" ? !currentJC : false} data-testid="dc-save-btn">{edit ? "Update" : "Create"}</Button>
-        </div>
-      </Modal>
-
-      <Modal open={!!viewDC} onClose={() => setViewDC(null)} title={viewDC ? `Dispatch Challan · ${viewDC.number}` : "Dispatch Challan"} size="xl">
-        {viewDC && (() => {
-          const c = viewDC;
-          const so = db.salesOrders.find(s => s.id === c.salesOrderId);
-          const jc = db.jobCards.find(j => j.id === c.jobCardId);
-          const cust = db.parties.find(p => p.id === c.customerId);
-          const t = calcDocTotalsWithFreight((c.items || []).map(i => ({ qty: i.qty, rate: i.rate, gst: i.gst })), Number(c.freight) || 0);
-          const totalUnits = (c.items || []).reduce((s, i) => s + i.qty, 0);
-          return (
-            <div className="space-y-4 text-sm">
-              <div className="grid sm:grid-cols-3 gap-3">
-                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-slate-50 dark:bg-slate-800/40">
-                  <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Challan</div>
-                  <div><span className="text-slate-500">No.:</span> <b className="font-mono">{c.number}</b></div>
-                  <div><span className="text-slate-500">Date:</span> <b>{c.date}</b></div>
-                  <div><span className="text-slate-500">Ack:</span> <Badge color={c.acknowledged ? "green" : "yellow"}>{c.acknowledged ? "Received" : "Pending"}</Badge></div>
-                </div>
-                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-slate-50 dark:bg-slate-800/40 sm:col-span-2">
-                  <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Consignee</div>
-                  <div className="font-semibold text-slate-800 dark:text-slate-100">{cust?.name || "—"}</div>
-                  {cust?.address && <div className="text-xs text-slate-500">{cust.address}{cust?.city ? `, ${cust.city}` : ""}</div>}
-                  <div className="text-xs text-slate-500 mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
-                    {cust?.gst && <span>GST: <b>{cust.gst}</b></span>}
-                    {cust?.mobile && <span>Mobile: <b>{cust.mobile}</b></span>}
-                    {cust?.contactPerson && <span>Contact: <b>{cust.contactPerson}</b></span>}
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid sm:grid-cols-4 gap-3">
-                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
-                  <div className="text-[11px] text-slate-500">Sales Order</div>
-                  <div className="text-base font-semibold font-mono">{so?.number || "—"}</div>
-                </div>
-                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
-                  <div className="text-[11px] text-slate-500">Job Card</div>
-                  <div className="text-base font-semibold font-mono">{jc?.number || "—"}</div>
-                  {jc && <div className="text-[10px] text-slate-500 mt-0.5">{jc.product}</div>}
-                </div>
-                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
-                  <div className="text-[11px] text-slate-500">Dispatched Qty</div>
-                  <div className="text-base font-semibold">{totalUnits}</div>
-                </div>
-                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-900">
-                  <div className="text-[11px] text-slate-500">Grand Total</div>
-                  <div className="text-base font-semibold text-emerald-600">{fmtINR(t.total)}</div>
-                </div>
-              </div>
-
-              <div>
-                <div className="text-sm font-semibold mb-2">Items Dispatched</div>
-                <div className="rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
-                  <Table>
-                    <thead>
-                      <tr>
-                        <Th>#</Th>
-                        <Th>Item</Th>
-                        <Th className="text-right">SO Qty</Th>
-                        <Th className="text-right">Prev Dispatched</Th>
-                        <Th className="text-right">This Dispatch</Th>
-                        <Th className="text-right">SO Balance After</Th>
-                        <Th className="text-right">Rate</Th>
-                        <Th className="text-right">GST%</Th>
-                        <Th className="text-right">Amount</Th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(c.items || []).map((i, idx) => {
-                        const ordered = so?.items.find(x => x.name === i.name)?.qty ?? 0;
-                        const otherDispatched = sumDispatched(db.challans, c.salesOrderId, i.name, c.id);
-                        const balanceAfter = Math.max(0, ordered - otherDispatched - i.qty);
-                        return (
-                          <tr key={idx}>
-                            <Td>{idx + 1}</Td>
-                            <Td className="font-medium">{i.name}</Td>
-                            <Td className="text-right">{ordered || "—"}</Td>
-                            <Td className="text-right">{otherDispatched}</Td>
-                            <Td className="text-right font-medium">{i.qty}</Td>
-                            <Td className="text-right">{ordered ? balanceAfter : "—"}</Td>
-                            <Td className="text-right">{fmtINR(i.rate)}</Td>
-                            <Td className="text-right">{i.gst}%</Td>
-                            <Td className="text-right font-medium">{fmtINR(i.qty * i.rate)}</Td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </Table>
-                </div>
-              </div>
-
-              <div className="grid sm:grid-cols-2 gap-3">
-                <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-slate-50 dark:bg-slate-800/40">
-                  <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-2">Dispatch Details</div>
-                  <div className="space-y-1 text-xs">
-                    <div><span className="text-slate-500">Vehicle:</span> <b>{c.vehicle || "—"}</b></div>
-                    <div><span className="text-slate-500">Driver:</span> <b>{c.driver || "—"}</b></div>
-                    <div><span className="text-slate-500">Transport / LR:</span> <b>{c.transport || "—"}</b></div>
-                    <div><span className="text-slate-500">Acknowledgement:</span> <b>{c.acknowledged ? "Received" : "Pending"}</b></div>
-                  </div>
-                </div>
-                <div className="rounded-lg border p-3 bg-slate-50 dark:bg-slate-800/40 dark:border-slate-700 space-y-1">
-                  <div className="flex justify-between"><span>Sub Total</span><b>{fmtINR(t.sub)}</b></div>
-                  <div className="flex justify-between"><span>Freight</span><b>{fmtINR(t.freight)}</b></div>
-                  <div className="flex justify-between"><span>GST</span><b>{fmtINR(t.gst)}</b></div>
-                  <div className="flex justify-between text-base border-t pt-1 mt-1"><span>Total</span><b className="text-emerald-600">{fmtINR(t.total)}</b></div>
-                </div>
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-700">
-                <Button variant="outline" onClick={() => setViewDC(null)}>Close</Button>
-                {canPrint && <Button variant="outline" onClick={() => printDC(c)} data-testid="dc-view-print"><IconPrint size={14}/> Print</Button>}
-                {canEdit && <Button onClick={() => { setViewDC(null); openEdit(c); }} data-testid="dc-view-edit"><IconEdit size={14}/> Edit</Button>}
-              </div>
-            </div>
-          );
-        })()}
-      </Modal>
-
-      <Modal open={!!balancePrompt} onClose={() => setBalancePrompt(null)} title="Sales Order still has balance" size="md">
-        {balancePrompt && (
-          <div className="space-y-3 text-sm">
-            <div className="rounded-lg border border-emerald-300 bg-emerald-50 dark:bg-emerald-900/20 dark:border-emerald-700 p-3">
-              <b>Job Card {balancePrompt.parentJc.number} is now fully dispatched and marked Completed.</b>
-              <div className="mt-1">Sales Order <span className="font-mono">{balancePrompt.so.number}</span> still has <b>{balancePrompt.balance}</b> nos of <b>{balancePrompt.parentJc.product}</b> pending.</div>
-            </div>
-            <p className="text-slate-600 dark:text-slate-300">Do you want to create a new Job Card for the remaining quantity so production can continue?</p>
-            <div className="flex justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-700">
-              <Button variant="outline" onClick={() => setBalancePrompt(null)} data-testid="dc-balance-later">Later</Button>
-              <Button onClick={createBalanceJobCard} data-testid="dc-balance-create-jc"><IconPlus size={14}/> Create Job Card for {balancePrompt.balance} nos</Button>
-            </div>
-          </div>
-        )}
-      </Modal>
+      <InvoiceForm open={formOpen} onClose={() => setFormOpen(false)} edit={edit} preset={preset}/>
+      <DispatchModal invoice={dispatchInv} onClose={() => setDispatchInv(null)}/>
+      <InvoiceView c={view && db.challans.find(x => x.id === view.id) || null} onClose={() => setView(null)} actions={actions}/>
     </div>
+  );
+}
+
+type DB_Items = ReturnType<typeof useStore>["db"]["items"];
+
+function InvoiceView({ c, onClose, actions }: { c: DeliveryChallan | null; onClose: () => void; actions: (c: DeliveryChallan) => ReactNode }) {
+  const { db } = useStore();
+  if (!c) return null;
+  const t = calcDocTotalsWithFreight(c.items || [], Number(c.freight) || 0);
+  const cust = db.parties.find(p => p.id === c.customerId);
+  return (
+    <Modal open={!!c} onClose={onClose} title={`Sales Invoice · ${c.number}`} size="xl">
+      <div className="space-y-4 text-sm" data-testid="inv-view-modal">
+        <div className="grid sm:grid-cols-3 gap-3">
+          <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3"><div className="text-[11px] uppercase text-slate-500">Invoice</div><b className="font-mono">{c.number}</b><div>{c.date}</div></div>
+          <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 sm:col-span-2"><div className="text-[11px] uppercase text-slate-500">Customer</div><b>{cust?.name || "—"}</b><div className="text-xs text-slate-500">{cust?.address}{cust?.city ? `, ${cust.city}` : ""} · GSTIN {cust?.gst || "-"}</div></div>
+        </div>
+        <Table>
+          <thead><tr><Th>Item</Th><Th>HSN</Th><Th className="text-right">Qty</Th><Th className="text-right">Dispatched</Th><Th className="text-right">Rate</Th><Th className="text-right">GST%</Th><Th className="text-right">Amount</Th></tr></thead>
+          <tbody>{(c.items || []).map((i, idx) => (
+            <tr key={idx}><Td className="font-medium">{i.name}</Td><Td>{i.hsn || db.items.find(x => x.name === i.name)?.hsn || "—"}</Td><Td className="text-right">{i.qty}</Td><Td className="text-right">{dispatchedOfLine(c, i.name)}</Td><Td className="text-right">{fmtINR(i.rate)}</Td><Td className="text-right">{i.gst}%</Td><Td className="text-right">{fmtINR(i.qty * i.rate)}</Td></tr>
+          ))}</tbody>
+        </Table>
+        <div className="flex justify-end"><div className="w-72 space-y-1 rounded-lg border p-3 dark:border-slate-700">
+          <div className="flex justify-between"><span>Taxable</span><b>{fmtINR(t.sub)}</b></div>
+          <div className="flex justify-between"><span>Freight</span><b>{fmtINR(t.freight)}</b></div>
+          <div className="flex justify-between"><span>GST</span><b>{fmtINR(t.gst)}</b></div>
+          <div className="flex justify-between border-t pt-1"><span>Total</span><b className="text-emerald-600">{fmtINR(t.total)}</b></div>
+        </div></div>
+        <div>
+          <div className="font-semibold mb-2">Dispatch History ({(c.dispatches || []).length})</div>
+          {(c.dispatches || []).length ? <Table>
+            <thead><tr><Th>Dispatch No.</Th><Th>Date</Th><Th>Items</Th><Th>Vehicle</Th><Th>Driver</Th><Th>LR</Th><Th></Th></tr></thead>
+            <tbody>{(c.dispatches || []).map(d => (
+              <tr key={d.id}><Td className="font-mono text-xs">{d.number}</Td><Td>{d.date}</Td><Td className="text-xs">{d.lines.map(l => `${l.name} × ${l.qty}`).join(", ")}</Td><Td>{d.vehicle || "—"}</Td><Td>{d.driver || "—"}</Td><Td>{d.transport || "—"}</Td>
+                <Td><Button size="sm" variant="ghost" onClick={() => printDispatchNote(db, c, d)}><IconPrint size={14}/></Button></Td></tr>
+            ))}</tbody>
+          </Table> : <div className="text-xs text-slate-500">Not dispatched yet.</div>}
+        </div>
+        <div className="flex justify-end border-t pt-3 dark:border-slate-700">{actions(c)}</div>
+      </div>
+    </Modal>
   );
 }
