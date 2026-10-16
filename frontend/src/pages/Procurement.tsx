@@ -1,9 +1,10 @@
+import { nextSeqNumber } from "../lib/invoice";
 import { useMemo, useRef, useState } from "react";
 import { useStore, uid } from "../lib/store";
 import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Badge, Empty, Textarea } from "../components/ui";
 import type { PurchaseOrder, GRN, GrnAuditEntry, Party, POApprovalEvent } from "../lib/types";
 import { IconPlus, IconEdit, IconTrash, IconPrint, IconSearch, IconCheck, IconHistory } from "../components/icons";
-import { fmtINR, fmt2, nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
+import { fmtINR, fmt2, printArea, professionalDocument, todayISO } from "../lib/utils";
 import { userCan } from "../lib/permissions";
 
 const DEFAULT_PO_TERMS = `1. Material should be as per specification.
@@ -125,6 +126,42 @@ function addDaysISO(iso: string, days: number): string {
 }
 const DEFAULT_LEAD_TIME_DAYS = 10;
 
+type Period = "all" | "month" | "lastmonth" | "3m" | "6m" | "custom";
+const localISO = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+function periodRange(p: Period, from: string, to: string) {
+  const today = todayISO();
+  if (p === "all") return { from: "0000-01-01", to: "9999-12-31" };
+  if (p === "custom") return { from: from || "0000-01-01", to: to || "9999-12-31" };
+  const now = new Date();
+  if (p === "month") return { from: localISO(new Date(now.getFullYear(), now.getMonth(), 1)), to: today };
+  if (p === "lastmonth") return { from: localISO(new Date(now.getFullYear(), now.getMonth() - 1, 1)), to: localISO(new Date(now.getFullYear(), now.getMonth(), 0)) };
+  const d = new Date(); d.setMonth(d.getMonth() - (p === "3m" ? 3 : 6));
+  return { from: localISO(d), to: today };
+}
+
+function grnGrand(g: GRN, p?: PurchaseOrder) {
+  const itemsTotal = g.receivedItems.reduce((s, ri) => {
+    const line = p?.items.find(x => x.itemId === ri.itemId);
+    return s + ri.qty * (Number(line?.rate) || 0) * (1 + (Number(line?.gst) || 0) / 100);
+  }, 0);
+  const fr = Number(g.freight) || 0, pk = Number(g.packing) || 0;
+  return itemsTotal + (g.freightEnabled ? fr * (1 + (Number(g.freightGst) || 0) / 100) : 0) + (g.packingEnabled ? pk * (1 + (Number(g.packingGst) || 0) / 100) : 0);
+}
+
+function poReceipt(p: PurchaseOrder, grns: GRN[]) {
+  const rec: Record<string, number> = {};
+  grns.filter(g => g.poId === p.id).forEach(g => g.receivedItems.forEach(r => { rec[r.itemId] = (rec[r.itemId] || 0) + (r.qty || 0); }));
+  let amount = 0, pendingAmount = 0, ordered = 0, pendingQty = 0;
+  p.items.forEach(i => {
+    const f = (Number(i.rate) || 0) * (1 + (Number(i.gst) || 0) / 100);
+    const pend = Math.max(0, i.qty - (rec[i.itemId] || 0));
+    amount += i.qty * f; pendingAmount += pend * f; ordered += i.qty; pendingQty += pend;
+  });
+  const fullyReceived = p.items.length > 0 && p.items.every(i => (rec[i.itemId] || 0) >= i.qty);
+  const anyReceived = p.items.some(i => (rec[i.itemId] || 0) > 0);
+  return { amount, pendingAmount, ordered, pendingQty, receivedQty: ordered - pendingQty, fullyReceived, anyReceived };
+}
+
 function poReceivedTotals(po: PurchaseOrder, grns: GRN[]): { received: number; ordered: number; pending: number; fullyReceived: boolean } {
   const ordered = po.items.reduce((s, i) => s + (Number(i.qty) || 0), 0);
   const already: Record<string, number> = {};
@@ -173,21 +210,7 @@ export function PurchaseOrders() {
   const [poTo, setPoTo] = useState("");
   const [cardFilter, setCardFilter] = useState<"all" | "pending" | "grn" | "completed">("all");
 
-  const poRange = useMemo(() => {
-    const today = todayISO();
-    if (poPeriod === "all") return { from: "0000-01-01", to: "9999-12-31" };
-    if (poPeriod === "custom") return { from: poFrom || "0000-01-01", to: poTo || "9999-12-31" };
-    const now = new Date();
-    if (poPeriod === "month") return { from: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`, to: today };
-    if (poPeriod === "lastmonth") {
-      const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const end = new Date(now.getFullYear(), now.getMonth(), 0);
-      return { from: d.toISOString().slice(0, 10), to: end.toISOString().slice(0, 10) };
-    }
-    const months = poPeriod === "3m" ? 3 : 6;
-    const d = new Date(); d.setMonth(d.getMonth() - months);
-    return { from: d.toISOString().slice(0, 10), to: today };
-  }, [poPeriod, poFrom, poTo]);
+  const poRange = useMemo(() => periodRange(poPeriod, poFrom, poTo), [poPeriod, poFrom, poTo]);
 
   type PoDetail = { p: PurchaseOrder; amount: number; receivedAmount: number; pendingAmount: number; orderedQty: { qty: number; unit: string }[]; receivedQty: { qty: number; unit: string }[]; pendingQty: { qty: number; unit: string }[]; fullyReceived: boolean };
   const poDetails: PoDetail[] = useMemo(() => {
@@ -223,7 +246,7 @@ export function PurchaseOrders() {
     return [...m.entries()].map(([u, q]) => `${fmt2(q)} ${u}`).join(" · ") || "0";
   };
 
-  const pendingDetails = poDetails.filter(d => d.pendingQty.some(x => x.qty > 0));
+  const pendingDetails = poDetails.filter(d => d.p.status !== "Cancelled" && d.pendingQty.some(x => x.qty > 0));
   const completedDetails = poDetails.filter(d => d.fullyReceived);
   const grnRowsInRange = useMemo(() => {
     return db.grns
@@ -269,7 +292,7 @@ export function PurchaseOrders() {
     const d = todayISO();
     const now = new Date().toISOString();
     return {
-      id: "", number: nextNumber("PO", db.purchaseOrders), date: d, vendorId: vendors[0]?.id || "",
+      id: "", number: nextSeqNumber("PO", db.purchaseOrders.map(p => p.number)), date: d, vendorId: vendors[0]?.id || "",
       items: [], terms: getDefaultPurchaseTerms(db.settings),
       expectedDeliveryDate: addDaysISO(d, DEFAULT_LEAD_TIME_DAYS),
       status: "Draft",
@@ -1085,6 +1108,28 @@ export function GRNPage() {
   const [packingGst, setPackingGst] = useState<number>(18);
   const [vendorInvoiceNo, setVendorInvoiceNo] = useState<string>("");
   const [vendorInvoiceAmount, setVendorInvoiceAmount] = useState<number>(0);
+  const [grnPeriod, setGrnPeriod] = useState<Period>("all");
+  const [grnFrom, setGrnFrom] = useState("");
+  const [grnTo, setGrnTo] = useState("");
+  const [grnCard, setGrnCard] = useState<"total" | "completed" | "pending" | "partial">("total");
+  const grnStats = useMemo(() => {
+    const r = periodRange(grnPeriod, grnFrom, grnTo);
+    const inR = (d: string) => !!d && d >= r.from && d <= r.to;
+    const poMap = new Map(db.purchaseOrders.map(p => [p.id, p]));
+    const receipt = new Map(db.purchaseOrders.map(p => [p.id, poReceipt(p, db.grns)]));
+    const total = db.grns.filter(g => inR(g.date));
+    const completed = total.filter(g => receipt.get(g.poId)?.fullyReceived);
+    const openPOs = db.purchaseOrders.filter(p => p.status !== "Cancelled" && p.status !== "Draft" && inR(p.date));
+    const pending = openPOs.filter(p => !receipt.get(p.id)!.anyReceived && !receipt.get(p.id)!.fullyReceived);
+    const partial = openPOs.filter(p => receipt.get(p.id)!.anyReceived && !receipt.get(p.id)!.fullyReceived);
+    const grnSum = (l: GRN[]) => l.reduce((s, g) => s + grnGrand(g, poMap.get(g.poId)), 0);
+    const poSum = (l: PurchaseOrder[]) => l.reduce((s, p) => s + receipt.get(p.id)!.pendingAmount, 0);
+    return {
+      receipt, lists: { total, completed, pending, partial },
+      cards: { total: { count: total.length, amount: grnSum(total) }, completed: { count: completed.length, amount: grnSum(completed) }, pending: { count: pending.length, amount: poSum(pending) }, partial: { count: partial.length, amount: poSum(partial) } },
+    };
+  }, [db.grns, db.purchaseOrders, grnPeriod, grnFrom, grnTo]);
+  const grnCardList = (grnCard === "completed" ? grnStats.lists.completed : grnStats.lists.total).slice().sort((a, b) => b.date.localeCompare(a.date) || b.number.localeCompare(a.number));
 
   const isFullyReceived = (p: PurchaseOrder): boolean => {
     if (p.status === "Completed" || p.status === "Received" || p.status === "Cancelled") return true;
@@ -1156,7 +1201,7 @@ export function GRNPage() {
     if (cleaned.length === 0) return alert("Enter at least one non-zero Receive Now quantity.");
 
     const grn: GRN = {
-      id: uid(), number: nextNumber("GRN", db.grns), date: todayISO(),
+      id: uid(), number: nextSeqNumber("GRN", db.grns.map(g => g.number)), date: todayISO(),
       poId, receivedItems: cleaned, qcPassed,
       freightEnabled, freight: freightEnabled ? Number(freight) || 0 : 0,
       freightGst: freightEnabled ? Number(freightGst) || 0 : 0,
@@ -1315,11 +1360,63 @@ export function GRNPage() {
           {canCreate && <Button onClick={openNew}><IconPlus size={14}/> New GRN</Button>}
         </div>
       </div>
-      <Card>
+      <div className="flex flex-wrap items-center gap-2" data-testid="grn-period-filter">
+        {([["all", "All Time"], ["month", "This Month"], ["lastmonth", "Last Month"], ["3m", "Last 3 Months"], ["6m", "Last 6 Months"], ["custom", "Custom Date"]] as const).map(([k, lbl]) => (
+          <button key={k} type="button" onClick={() => setGrnPeriod(k)}
+            className={"text-xs px-3 py-1.5 rounded-full border font-medium " + (grnPeriod === k ? "bg-indigo-600 border-indigo-600 text-white" : "bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-600 hover:border-indigo-400")}
+            data-testid={`grn-period-${k}`}>{lbl}</button>
+        ))}
+        {grnPeriod === "custom" && <>
+          <Input type="date" className="!w-40" value={grnFrom} onChange={(e: any) => setGrnFrom(e.target.value)} data-testid="grn-period-from"/>
+          <span className="text-xs text-slate-400">to</span>
+          <Input type="date" className="!w-40" value={grnTo} onChange={(e: any) => setGrnTo(e.target.value)} data-testid="grn-period-to"/>
+        </>}
+      </div>
+      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {([["total", "Total GRN", "GRN(s)", "Received value", "text-indigo-600"], ["completed", "Completed GRN", "GRN(s) · fully received POs", "Received value", "text-emerald-600"], ["pending", "Pending GRN", "PO(s) awaiting receipt", "Outstanding", "text-amber-600"], ["partial", "Partially Received", "PO(s) partially received", "Remaining", "text-sky-600"]] as const).map(([k, lbl, sub, amtLbl, color]) => (
+          <button key={k} type="button" onClick={() => setGrnCard(k)}
+            className={"text-left rounded-xl border p-4 transition-colors " + (grnCard === k ? "border-indigo-500 ring-2 ring-indigo-200 dark:ring-indigo-900 bg-indigo-50 dark:bg-indigo-900/20" : "border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-indigo-300")}
+            data-testid={`grn-card-${k}`}>
+            <div className="text-[10px] uppercase font-semibold text-slate-500">{lbl}</div>
+            <div className="text-2xl font-bold mt-1" data-testid={`grn-card-${k}-count`}>{grnStats.cards[k].count}</div>
+            <div className="text-[10px] text-slate-400">{sub}</div>
+            <div className="text-xs mt-1"><span className="text-slate-400">{amtLbl}:</span> <b className={color} data-testid={`grn-card-${k}-amount`}>{fmtINR(grnStats.cards[k].amount)}</b></div>
+          </button>
+        ))}
+      </div>
+      <div className="text-[10px] text-slate-400 -mt-2">Total / Completed filtered by GRN date · Pending / Partial by PO date (Draft &amp; Cancelled POs excluded) · status from PO qty vs received qty · amounts GST-inclusive</div>
+      {(grnCard === "pending" || grnCard === "partial") && <Card>
+        <Table>
+          <thead><tr><Th>PO</Th><Th>Date</Th><Th>Vendor</Th><Th>Expected</Th><Th className="text-right">Ordered Qty</Th><Th className="text-right">Received Qty</Th><Th className="text-right">Balance Qty</Th><Th className="text-right">PO Value</Th><Th className="text-right">{grnCard === "pending" ? "Outstanding" : "Remaining"}</Th></tr></thead>
+          <tbody>
+            {grnStats.lists[grnCard].filter(p => {
+              const q = grnSearch.trim().toLowerCase();
+              return !q || p.number.toLowerCase().includes(q) || (db.parties.find(v => v.id === p.vendorId)?.name || "").toLowerCase().includes(q);
+            }).sort((a, b) => b.date.localeCompare(a.date)).map(p => {
+              const r = grnStats.receipt.get(p.id)!;
+              return (
+                <tr key={p.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50" data-testid={`grn-po-row-${p.number}`}>
+                  <Td className="font-mono text-xs">{p.number}</Td>
+                  <Td>{p.date}</Td>
+                  <Td>{db.parties.find(v => v.id === p.vendorId)?.name || "—"}</Td>
+                  <Td>{p.expectedDeliveryDate || "—"}</Td>
+                  <Td className="text-right">{fmt2(r.ordered)}</Td>
+                  <Td className="text-right">{fmt2(r.receivedQty)}</Td>
+                  <Td className="text-right font-semibold text-amber-600">{fmt2(r.pendingQty)}</Td>
+                  <Td className="text-right">{fmtINR(r.amount)}</Td>
+                  <Td className="text-right font-semibold">{fmtINR(r.pendingAmount)}</Td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </Table>
+        {grnStats.lists[grnCard].length === 0 && <Empty title="No purchase orders" subtitle="Nothing in this status for the selected period"/>}
+      </Card>}
+      {(grnCard === "total" || grnCard === "completed") && <Card>
         <Table>
           <thead><tr><Th>#</Th><Th>Date</Th><Th>PO / Vendor</Th><Th>Items</Th><Th>Invoice #</Th><Th className="text-right">Total</Th><Th>QC</Th><Th></Th></tr></thead>
           <tbody>
-            {db.grns.filter(g => {
+            {grnCardList.filter(g => {
               const q = grnSearch.trim().toLowerCase();
               if (!q) return true;
               const p = db.purchaseOrders.find(x => x.id === g.poId);
@@ -1330,17 +1427,7 @@ export function GRNPage() {
                 || (g.vendorInvoiceNo || "").toLowerCase().includes(q);
             }).map(g => {
               const p = db.purchaseOrders.find(x => x.id === g.poId);
-              const itemsTotal = g.receivedItems.reduce((s, ri) => {
-                const line = p?.items.find(x => x.itemId === ri.itemId);
-                const rate = Number(line?.rate) || 0;
-                const gst = Number(line?.gst) || 0;
-                return s + ri.qty * rate * (1 + gst / 100);
-              }, 0);
-              const fr = Number(g.freight) || 0;
-              const frGst = fr * ((Number(g.freightGst) || 0) / 100);
-              const pk = Number(g.packing) || 0;
-              const pkGst = pk * ((Number(g.packingGst) || 0) / 100);
-              const grand = itemsTotal + (g.freightEnabled ? fr + frGst : 0) + (g.packingEnabled ? pk + pkGst : 0);
+              const grand = grnGrand(g, p);
               const invAmt = Number(g.vendorInvoiceAmount) || 0;
               const mismatch = invAmt > 0 && Math.abs(invAmt - grand) > 0.5;
               return (
@@ -1378,8 +1465,8 @@ export function GRNPage() {
             })}
           </tbody>
         </Table>
-        {db.grns.length === 0 && <Empty title="No GRN yet" subtitle="Create a GRN against an Approved PO"/>}
-      </Card>
+        {grnCardList.length === 0 && <Empty title="No GRN" subtitle="No GRNs for the selected period / status"/>}
+      </Card>}
 
       <Modal open={open} onClose={() => setOpen(false)} title="New Goods Receipt Note" size="lg">
         <div className="space-y-3">
