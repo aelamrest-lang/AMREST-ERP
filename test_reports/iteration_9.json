@@ -1,0 +1,38 @@
+{
+  "summary": "Frontend-only test of the GRN status dashboard on the preview URL, logged in as admin/admin123. The browser/system date was 2026-10-16. I cross-checked every card against an independent recompute from Mongo erp_state (/app/tests/grn_stats_check.py). PASS: all 4 cards (count and amount) match the oracle exactly for All, This Month, Last Month, 3M and 6M. Last Month = 2026-09-01..09-30, identical to Custom 09-01..09-30. This Month list dates fall within 10-01..10-16. Clicking a card switches the list: Total/Completed show the GRN table, Pending/Partial show PO rows grn-po-row-<PO> with Ordered/Received/Balance qty, PO value and Outstanding/Remaining. E2E on PO-2026-256 (8 x ₹115 @18% = ₹1,085.60): (1) Created GRN with qty 3. It got GRN-2026-187 (max+1). Pending went 43→42, Partial 18→19, Total 186→187 (+₹407.10), and the partial row showed 8/3/5 with ₹678.50 remaining. (2) Edited the qty to 8. Partial went back to 18, Completed 154→155 (+₹1,085.60), the PO status became Completed in the DB, and Total amount rose by ₹678.50. (3) Deleted the GRN. All cards returned exactly to baseline and the PO went back to Approved in Mongo, so cleanup is complete. Search filters the GRN table by GRN/PO number and the PO tables by PO number and vendor. Audit modal shows Created and Edited entries; view/print button present. The New PO form suggests PO-2026-264 (max+1). The PO page cards render and Pending/Completed filtering works. PO Pending excludes Cancelled in code, but there are no Cancelled POs in the data, so this was verified by code only.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "periodRange / todayISO (lib/utils.ts)", "issue": "Timezone bug. todayISO() uses UTC (toISOString), while periodRange 'from' uses local dates. In IST between 00:00 and 05:30: (a) on the 1st of a month 'This Month' gives from=YYYY-MM-01 and to=the previous day, so the range is empty; (b) 'to' for 3M/6M is yesterday, so GRNs and POs dated today are excluded; (c) new GRN/PO dates are stamped as yesterday. Fix: use localISO(new Date()) for 'to' (and ideally in todayISO).", "selector": "[data-testid=grn-period-month]", "priority": "MEDIUM"},
+      {"component": "GRN dashboard tables", "issue": "When the search matches nothing, the table shows only headers with no message. The Empty state checks the unfiltered list length, not the filtered one (same in the GRN table: grnCardList.length).", "selector": "[data-testid=grn-search]", "priority": "LOW"},
+      {"component": "periodRange 3m/6m", "issue": "d.setMonth(m-3) overflows on month-end days (e.g. May 31 → 'Feb 31' = Mar 3), so the range start shifts by a few days.", "selector": "[data-testid=grn-period-3m]", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "PO dashboard vs GRN dashboard sync", "issue": "The two dashboards define their cards differently. (1) PO 'Pending Purchase Orders' (112) includes Draft POs and partially received POs, while GRN Pending (43) and Partial (18) exclude Draft. (2) The PO page 'Total GRN' card count is by GRN date (187), but its amount is PO-date-based receivedAmount capped at PO qty (₹3,37,26,801), while GRN page Total = ₹3,44,84,386. The same label shows different amounts on the two pages.", "affected_selectors": ["[data-testid=po-card-pending]", "[data-testid=po-card-grn]", "[data-testid=grn-card-total-amount]"]},
+      {"flow": "Status source mismatch", "issue": "5 POs with status Completed/Received but no GRNs (e.g. PO-2026-102, 101, 055, 054, 050) appear under GRN 'Pending' because status comes from qty. The New GRN modal's isFullyReceived treats those statuses as done and hides them. Also 3 POs with status Completed/Received/Approved show as Partial. This follows the spec (qty-based), but worth a note or data cleanup.", "affected_selectors": ["[data-testid=grn-card-pending]"]}
+    ],
+    "design_issues": [
+      {"screen": "GRN page", "issues": ["The basis note under the cards is text-[10px] text-slate-400 on light grey, so contrast is low.", "Card sub-labels are text-[10px] text-slate-400, so contrast is low."]}
+    ]
+  },
+  "test_report_links": ["/app/tests/grn_stats_check.py"],
+  "action_items": [
+    "Fix the timezone mismatch: periodRange 'to' should use localISO(new Date()), and todayISO should return the local date",
+    "Show an empty state when search filters all rows out (GRN table and PO tables on the GRN page)",
+    "Decide whether the PO page 'Pending' and 'Total GRN' cards should use the same basis as the GRN page (exclude Draft; same GRN amount) for true sync",
+    "Optional: clamp the 3m/6m month-end overflow"
+  ],
+  "critical_code_review_comments": [
+    "Procurement.tsx is 1842 lines. Split the PurchaseOrders and GRNPage components and their helpers into separate modules.",
+    "poReceipt, poReceivedTotals, the poDetails map, alreadyReceivedByItem and poStatusFor all recompute received-per-item. This is DRY duplication; consolidate into one helper.",
+    "8 orphan GRNs (PO deleted, e.g. GRN-2026-100/044/032) count in Total GRN with ₹0 value. Duplicate GRN numbers (GRN-2026-184/171/135) and 22 duplicate PO numbers exist in legacy data, so grn-po-row-<number> testids can be non-unique.",
+    "The card amount spans lack data-testid on the PO page cards (only po-card-<key> wrapper)."
+  ],
+  "updated_files": ["/app/tests/grn_stats_check.py"],
+  "success_rate": {"backend": "N/A (skipped)", "frontend": "95%"},
+  "test_credentials": "admin / admin123 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Created GRN-2026-187 on PO-2026-256, edited it, then deleted it. Data is back to baseline (186 GRNs, PO-2026-256 Approved).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Login: input[name='amrest-login-username'/'amrest-login-password']. Navigate with get_by_role('button', name='Goods Receipt (GRN)', exact=True). Run python /app/tests/grn_stats_check.py [PO-number] to recompute the cards from Mongo (date ranges are hardcoded for 2026-10-16, so update them if the date changes). Baseline All Time: total 186/₹3,44,83,301.18, completed 154/₹2,42,16,117.01, pending 43/₹3,03,35,926.49, partial 18/₹10,34,666.95. PO-2026-256 (1 item 06e90eca..., qty 8) is a good test PO. New GRN modal: grn-po-combobox → grn-po-option-<PO>, grn-receive-<itemId>, button 'Receive & Update Stock'. Edit: grn-edit-qty-<idx>, grn-edit-save. Delete uses confirm()."
+}
