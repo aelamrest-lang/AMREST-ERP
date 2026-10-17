@@ -4,6 +4,8 @@ import { useStore, uid } from "../lib/store";
 import { Card, Button, Input, Label, Table, Th, Td, Empty, Modal } from "../components/ui";
 import { fmtINR, downloadCSV } from "../lib/utils";
 import { BarChart } from "../components/charts";
+import { computeAutoPnl, grnNetValue, invoiceTaxable, type MonthAuto } from "../lib/pnlAuto";
+import { ExpenseRecordsModal, ExpenseUploadPreview, downloadExpenseTemplate, expenseRecords, parseExpenseFile, type ExpKind } from "../components/pnl/ExpenseRecords";
 
 type StockType = "opening" | "purchase" | "closing";
 type ExpType = "indirect" | "direct";
@@ -99,9 +101,6 @@ export function MonthlyPnL() {
     ((db.settings as any).monthlyPnlLines || {});
   const expStore: Record<string, { indirect?: ELine[]; direct?: ELine[] }> =
     ((db.settings as any).monthlyPnlExpenses || {});
-  // Monthly P&S Report rows are the source-of-truth for Sales when data exists
-  const psRows: Array<{ id: string; month: string; product: string; qty: number; price: number; amount: number }> =
-    ((db.settings as any).monthlyPSRows || []);
 
   const getLines = (month: string, type: StockType): PLine[] => (linesStore[month]?.[type]) || [];
   const sumLines = (month: string, type: StockType): number => getLines(month, type).reduce((s, l) => s + (Number(l.amount) || 0), 0);
@@ -111,9 +110,6 @@ export function MonthlyPnL() {
   const sumExpLines = (month: string, type: ExpType): number => getExpLines(month, type).reduce((s, l) => s + (Number(l.amount) || 0), 0);
   const hasExpLines = (month: string, type: ExpType): boolean => getExpLines(month, type).length > 0;
 
-  const psRowsFor = (month: string) => psRows.filter(r => r.month === month);
-  const psTotalFor = (month: string) => psRowsFor(month).reduce((s, r) => s + (r.amount || 0), 0);
-  const hasPS = (month: string) => psRowsFor(month).length > 0;
 
   // Excel upload state / modal state
   const fileRef = useRef<HTMLInputElement>(null);
@@ -122,50 +118,74 @@ export function MonthlyPnL() {
   const [viewLines, setViewLines] = useState<{ month: string; type: StockType } | null>(null);
   const [viewExpLines, setViewExpLines] = useState<{ month: string; type: ExpType } | null>(null);
   const [viewPSMonth, setViewPSMonth] = useState<string | null>(null);
+  const [viewGrnMonth, setViewGrnMonth] = useState<string | null>(null);
+  const [expPreview, setExpPreview] = useState<{ type: ExpKind; rows: Awaited<ReturnType<typeof parseExpenseFile>> } | null>(null);
+  const [expRecView, setExpRecView] = useState<{ type: ExpKind; month?: string } | null>(null);
+  const directFileRef = useRef<HTMLInputElement>(null);
+  const indirectFileRef = useRef<HTMLInputElement>(null);
+  const onExpFile = async (type: ExpKind, file?: File) => {
+    if (!file) return;
+    try {
+      const rows = await parseExpenseFile(file, type);
+      if (!rows.length) setUploadMsg("Error: no rows found. Columns required — Date | Expense Category | Description | Amount.");
+      else setExpPreview({ type, rows });
+    } catch (e: any) { setUploadMsg(`Error: ${e?.message || "Failed to read file."}`); }
+    finally { if (directFileRef.current) directFileRef.current.value = ""; if (indirectFileRef.current) indirectFileRef.current.value = ""; }
+  };
 
-  const persistedRows: PnlRow[] = months.map(m => {
-    const p = persisted[m.key] || {};
-    const openingLines = hasLines(m.key, "opening");
-    const purchaseLines = hasLines(m.key, "purchase");
-    const closingLines = hasLines(m.key, "closing");
-    const indirectExp = hasExpLines(m.key, "indirect");
-    const directExp = hasExpLines(m.key, "direct");
-    const hasPSForMonth = hasPS(m.key);
+  const manualRow = (key: string): PnlRow => {
+    const p = persisted[key] || {};
     return {
-      key: m.key,
-      opening: openingLines
-        ? sumLines(m.key, "opening")
-        : ((p.opening === undefined || p.opening === null) ? null : Number(p.opening)),
-      purchase: purchaseLines ? sumLines(m.key, "purchase") : (Number(p.purchase) || 0),
-      closing: closingLines ? sumLines(m.key, "closing") : (Number(p.closing) || 0),
-      // Sales auto-pulls from Monthly P&S Report when rows exist for the month
-      sales: hasPSForMonth ? psTotalFor(m.key) : (Number(p.sales) || 0),
-      indirect: indirectExp ? sumExpLines(m.key, "indirect") : (Number(p.indirect) || 0),
-      direct: directExp ? sumExpLines(m.key, "direct") : (Number(p.direct) || 0),
+      key, opening: (p.opening === undefined || p.opening === null) ? null : Number(p.opening),
+      purchase: Number(p.purchase) || 0, closing: Number(p.closing) || 0, sales: Number(p.sales) || 0,
+      indirect: Number(p.indirect) || 0, direct: Number(p.direct) || 0,
     };
-  });
+  };
 
   const [draft, setDraft] = useState<Record<string, PnlRow>>({});
-  const rawRow = (key: string): PnlRow => draft[key] || persistedRows.find(r => r.key === key)!;
+  const rawRow = (key: string): PnlRow => draft[key] || manualRow(key);
 
-  // Resolve opening: if null (auto), inherit from previous month's closing.
-  const resolved = useMemo(() => {
-    const list: (PnlRow & { resolvedOpening: number; isOpeningAuto: boolean })[] = [];
+  const records = expenseRecords(db.settings);
+  const recSum = (month: string, type: ExpType) => records.filter(r => r.type === type && r.date.startsWith(month)).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+  const recCount = (month: string, type: ExpType) => records.filter(r => r.type === type && r.date.startsWith(month)).length;
+
+  const autoCache = useMemo(() => new Map<number, Record<string, MonthAuto>>(),
+    [db.items, db.grns, db.purchaseOrders, db.materialIssues, db.sfgBatches, db.sfgConsumptions, db.challans]); // eslint-disable-line react-hooks/exhaustive-deps
+  const autoFor = (fyStart: number) => {
+    if (!autoCache.has(fyStart)) autoCache.set(fyStart, computeAutoPnl(db, fyKeys(fyStart).map(m => m.key)));
+    return autoCache.get(fyStart)!;
+  };
+
+  type Src = "lines" | "manual" | "auto" | "records";
+  type EffRow = PnlRow & { opening: number; resolvedOpening: number; isOpeningAuto: boolean; src: Record<"opening" | "purchase" | "closing" | "sales" | "indirect" | "direct", Src> };
+  // Entered values (uploaded lines / manual) win; otherwise auto from Inventory, GRN and Sales Invoice.
+  const effectiveRows = (fyStart: number): EffRow[] => {
+    const auto = autoFor(fyStart);
     let prevClosing = 0;
-    for (const m of months) {
+    return fyKeys(fyStart).map((m, i) => {
       const r = rawRow(m.key);
-      const isAuto = r.opening === null;
-      const resolvedOpening = isAuto ? prevClosing : (r.opening as number);
-      list.push({ ...r, resolvedOpening, isOpeningAuto: isAuto });
-      prevClosing = r.closing;
-    }
-    return list;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [months, draft, persistedRows]);
+      const a = auto[m.key];
+      const pick = (type: StockType, manual: number, autoVal: number): [number, Src] =>
+        hasLines(m.key, type) ? [sumLines(m.key, type), "lines"] : manual > 0 ? [manual, "manual"] : [autoVal, "auto"];
+      const [opening, so] = hasLines(m.key, "opening") ? [sumLines(m.key, "opening"), "lines" as Src]
+        : r.opening !== null ? [r.opening as number, "manual" as Src] : [a.future ? 0 : i === 0 ? a.opening : prevClosing, "auto" as Src];
+      const [purchase, sp] = pick("purchase", r.purchase, a.purchase);
+      const [closing, sc] = pick("closing", r.closing, a.closing);
+      const [sales, ss]: [number, Src] = r.sales > 0 ? [r.sales, "manual"] : [a.sales, "auto"];
+      const exp = (type: ExpType, manual: number): [number, Src] =>
+        (hasExpLines(m.key, type) || recCount(m.key, type)) ? [sumExpLines(m.key, type) + recSum(m.key, type), "records"] : [manual, "manual"];
+      const [indirect, si] = exp("indirect", r.indirect);
+      const [direct, sd] = exp("direct", r.direct);
+      prevClosing = closing;
+      return { key: m.key, opening, resolvedOpening: opening, isOpeningAuto: so === "auto", purchase, closing, sales, indirect, direct,
+        src: { opening: so, purchase: sp, closing: sc, sales: ss, indirect: si, direct: sd } };
+    });
+  };
+  const resolved = effectiveRows(fy);
 
   const updateCell = (key: string, field: keyof PnlRow, value: number | null) => {
     setDraft(prev => {
-      const base = prev[key] || persistedRows.find(r => r.key === key)!;
+      const base = prev[key] || manualRow(key);
       const nextVal = field === "opening"
         ? (value === null ? null : Math.max(0, Number(value) || 0))
         : Math.max(0, Number(value) || 0);
@@ -176,9 +196,10 @@ export function MonthlyPnL() {
   const derive = (openingVal: number, r: PnlRow) => {
     const consumed = openingVal + r.purchase - r.closing;
     const totalExp = consumed + r.indirect + r.direct;
-    const profit = r.sales - totalExp;
+    const gross = r.sales - consumed - r.direct;
+    const profit = gross - r.indirect;
     const profitPct = r.sales > 0 ? (profit / r.sales) * 100 : 0;
-    return { consumed, totalExp, profit, profitPct };
+    return { consumed, totalExp, gross, profit, profitPct };
   };
 
   const saveAll = () => {
@@ -450,30 +471,11 @@ export function MonthlyPnL() {
       indirect: t.indirect + r.indirect,
       direct: t.direct + r.direct,
       totalExp: t.totalExp + d.totalExp,
+      gross: t.gross + d.gross,
       profit: t.profit + d.profit,
     };
-  }, { opening: 0, purchase: 0, closing: 0, consumed: 0, sales: 0, indirect: 0, direct: 0, totalExp: 0, profit: 0 });
+  }, { opening: 0, purchase: 0, closing: 0, consumed: 0, sales: 0, indirect: 0, direct: 0, totalExp: 0, gross: 0, profit: 0 });
   const totalProfitPct = totals.sales > 0 ? (totals.profit / totals.sales) * 100 : 0;
-
-  // ----- Comparison Sheet: helpers -----
-  const rawFor = (key: string): PnlRow => {
-    if (draft[key]) return draft[key];
-    const p = persisted[key];
-    const openL = hasLines(key, "opening");
-    const purL = hasLines(key, "purchase");
-    const cloL = hasLines(key, "closing");
-    const indE = hasExpLines(key, "indirect");
-    const dirE = hasExpLines(key, "direct");
-    return {
-      key,
-      opening: openL ? sumLines(key, "opening") : ((!p || p.opening === undefined || p.opening === null) ? null : Number(p.opening)),
-      purchase: purL ? sumLines(key, "purchase") : (p ? Number(p.purchase) || 0 : 0),
-      closing: cloL ? sumLines(key, "closing") : (p ? Number(p.closing) || 0 : 0),
-      sales: hasPS(key) ? psTotalFor(key) : (p ? Number(p.sales) || 0 : 0),
-      indirect: indE ? sumExpLines(key, "indirect") : (p ? Number(p.indirect) || 0 : 0),
-      direct: dirE ? sumExpLines(key, "direct") : (p ? Number(p.direct) || 0 : 0),
-    };
-  };
 
   const fyOf = (monthKey: string): number => {
     const [y, m] = monthKey.split("-").map(Number);
@@ -488,49 +490,29 @@ export function MonthlyPnL() {
   const fyLabel = (fyStart: number) => `FY ${fyStart}-${String(fyStart + 1).slice(-2)}`;
 
   const computeMonth = (key: string) => {
-    const fyStart = fyOf(key);
-    const monthList = fyKeys(fyStart);
-    let prevClosing = 0;
-    for (const mk of monthList) {
-      const r = rawFor(mk.key);
-      const opening = r.opening === null ? prevClosing : (r.opening as number);
-      if (mk.key === key) {
-        const d = derive(opening, r);
-        return { opening, purchase: r.purchase, closing: r.closing, sales: r.sales, indirect: r.indirect, direct: r.direct, ...d };
-      }
-      prevClosing = r.closing;
-    }
-    return { opening: 0, purchase: 0, closing: 0, sales: 0, indirect: 0, direct: 0, consumed: 0, totalExp: 0, profit: 0, profitPct: 0 };
+    const r = effectiveRows(fyOf(key)).find(x => x.key === key)!;
+    return { ...r, ...derive(r.opening, r) };
   };
 
   const computeYear = (fyStart: number) => {
-    const monthList = fyKeys(fyStart);
-    let prevClosing = 0;
-    const agg = { opening: 0, purchase: 0, closing: 0, consumed: 0, sales: 0, indirect: 0, direct: 0, totalExp: 0, profit: 0, profitPct: 0 };
-    for (const mk of monthList) {
-      const r = rawFor(mk.key);
-      const opening = r.opening === null ? prevClosing : (r.opening as number);
-      const d = derive(opening, r);
-      agg.opening += opening;
-      agg.purchase += r.purchase;
-      agg.closing += r.closing;
-      agg.consumed += d.consumed;
-      agg.sales += r.sales;
-      agg.indirect += r.indirect;
-      agg.direct += r.direct;
-      agg.totalExp += d.totalExp;
-      agg.profit += d.profit;
-      prevClosing = r.closing;
-    }
+    const agg = { opening: 0, purchase: 0, closing: 0, consumed: 0, sales: 0, indirect: 0, direct: 0, totalExp: 0, gross: 0, profit: 0, profitPct: 0 };
+    effectiveRows(fyStart).forEach(r => {
+      const d = derive(r.opening, r);
+      agg.opening += r.opening; agg.purchase += r.purchase; agg.closing += r.closing; agg.consumed += d.consumed;
+      agg.sales += r.sales; agg.indirect += r.indirect; agg.direct += r.direct; agg.totalExp += d.totalExp; agg.gross += d.gross; agg.profit += d.profit;
+    });
     agg.profitPct = agg.sales > 0 ? (agg.profit / agg.sales) * 100 : 0;
     return agg;
   };
 
-  const allKeys = useMemo(() => Array.from(new Set([...Object.keys(persisted), ...Object.keys(draft)])), [persisted, draft]);
+  const allKeys = useMemo(() => Array.from(new Set([
+    ...Object.keys(persisted), ...Object.keys(draft),
+    ...db.grns.map(g => (g.date || "").slice(0, 7)), ...db.challans.map(c => (c.date || "").slice(0, 7)), ...records.map(r => r.date.slice(0, 7)),
+  ].filter(k => /^\d{4}-\d{2}$/.test(k)))), [persisted, draft, db.grns, db.challans, records]);
   const availableMonths = useMemo(() => allKeys.filter(k => {
-    const r = rawFor(k);
-    return r.purchase || r.closing || r.sales || r.indirect || r.direct || (r.opening !== null && (r.opening as number) > 0);
-  }).sort(), [allKeys, draft, persisted]);
+    const r = computeMonth(k);
+    return r.purchase || r.closing || r.sales || r.indirect || r.direct || r.opening > 0;
+  }).sort(), [allKeys, draft, persisted, autoCache]); // eslint-disable-line react-hooks/exhaustive-deps
   const availableYears = useMemo(() => {
     const s = new Set<number>();
     allKeys.forEach(k => s.add(fyOf(k)));
@@ -558,6 +540,7 @@ export function MonthlyPnL() {
     { label: "Indirect Expenses", get: d => d.indirect, kind: "money" },
     { label: "Direct Expenses", get: d => d.direct, kind: "money" },
     { label: "Total Expenses", get: d => d.totalExp, kind: "money" },
+    { label: "Gross Profit", get: d => d.gross, kind: "profit" },
     { label: "Profit / Loss", get: d => d.profit, kind: "profit" },
     { label: "Profit %", get: d => d.profitPct, kind: "pct" },
   ];
@@ -584,7 +567,7 @@ export function MonthlyPnL() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold">Monthly Profit &amp; Loss</h1>
-          <p className="text-sm text-slate-500">Manual month-wise entry · Closing Stock auto-flows to next month&apos;s Opening Stock · <strong>Sales</strong> auto-pulls from Monthly P&amp;S Report when uploaded · Upload Excel for stock &amp; expense line items</p>
+          <p className="text-sm text-slate-500"><strong>AUTO</strong>: stock rebuilt month-end from Inventory transactions (valued at that month&apos;s purchase rates), Purchases from GRN (excl. GST), Sales from Sales Invoices (taxable, excl. GST) · entered / uploaded values always take priority · Closing Stock flows to next month&apos;s Opening</p>
         </div>
         <div className="flex items-end gap-2 flex-wrap">
           <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={e => handleUpload(e.target.files?.[0])} data-testid="pnl-upload-input" />
@@ -593,6 +576,8 @@ export function MonthlyPnL() {
           <input ref={expFileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={e => handleExpUpload(e.target.files?.[0])} data-testid="pnl-exp-upload-input" />
           <Button variant="outline" onClick={() => expFileRef.current?.click()} data-testid="pnl-exp-upload-btn">Upload Expenses Excel</Button>
           <Button variant="ghost" onClick={downloadExpTemplate} data-testid="pnl-exp-template-btn">Expenses Template</Button>
+          <input ref={directFileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={e => onExpFile("direct", e.target.files?.[0])} data-testid="pnl-direct-upload-input" />
+          <input ref={indirectFileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={e => onExpFile("indirect", e.target.files?.[0])} data-testid="pnl-indirect-upload-input" />
           <div>
             <Label className="text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">Financial Year</Label>
             <Input type="number" value={fy} onChange={(e: any) => setFy(Number(e.target.value) || fyDefault)} className="w-28 h-8 py-1" data-testid="pnl-fy" />
@@ -603,6 +588,16 @@ export function MonthlyPnL() {
             data-testid="pnl-save"
           >{Object.keys(draft).length > 0 ? `Save (${Object.keys(draft).length})` : "Saved"}</Button>
         </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-2" data-testid="pnl-expense-toolbar">
+        <span className="text-xs font-semibold text-slate-600 dark:text-slate-300 mr-1">Expense Excel (Date | Expense Category | Description | Amount):</span>
+        <Button size="sm" variant="outline" onClick={() => directFileRef.current?.click()} data-testid="pnl-direct-upload-btn">Upload Direct Expenses</Button>
+        <Button size="sm" variant="ghost" onClick={() => downloadExpenseTemplate("direct")} data-testid="pnl-direct-template-btn">Direct Template</Button>
+        <Button size="sm" variant="ghost" onClick={() => setExpRecView({ type: "direct" })} data-testid="pnl-direct-records-btn">Direct Records</Button>
+        <span className="w-px h-5 bg-slate-200 dark:bg-slate-700 mx-1"/>
+        <Button size="sm" variant="outline" onClick={() => indirectFileRef.current?.click()} data-testid="pnl-indirect-upload-btn">Upload Indirect Expenses</Button>
+        <Button size="sm" variant="ghost" onClick={() => downloadExpenseTemplate("indirect")} data-testid="pnl-indirect-template-btn">Indirect Template</Button>
+        <Button size="sm" variant="ghost" onClick={() => setExpRecView({ type: "indirect" })} data-testid="pnl-indirect-records-btn">Indirect Records</Button>
       </div>
       {uploadMsg && (
         <div className={"text-xs px-3 py-2 rounded-md " + (uploadMsg.startsWith("Error") ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700")} data-testid="pnl-upload-msg">{uploadMsg}</div>
@@ -675,14 +670,14 @@ export function MonthlyPnL() {
                         ) : (
                           <Input
                             type="number"
-                            value={r.resolvedOpening}
+                            value={Math.round(r.resolvedOpening * 100) / 100}
                             onChange={(e: any) => updateCell(m.key, "opening", Number(e.target.value) || 0)}
                             className="text-right py-1 h-8 min-w-32 ml-auto"
                             data-testid={`pnl-open-${m.key}`}
                             title={r.isOpeningAuto && i > 0 ? "Auto: inherited from previous month's closing stock. Edit to override." : ""}
                           />
                         )}
-                        {!hasLines(m.key, "opening") && r.isOpeningAuto && i > 0 && r.resolvedOpening > 0 && (
+                        {!hasLines(m.key, "opening") && r.isOpeningAuto && r.resolvedOpening > 0 && (
                           <span className="text-[9px] font-semibold text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 px-1 rounded" title="Auto-carried from previous month's Closing Stock">AUTO</span>
                         )}
                         {!hasLines(m.key, "opening") && !r.isOpeningAuto && (
@@ -708,7 +703,11 @@ export function MonthlyPnL() {
                           <span className="text-[9px] font-semibold text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 px-1 rounded">{getLines(m.key, "purchase").length} items</span>
                         </button>
                       ) : (
-                        <Input type="number" value={r.purchase} onChange={(e: any) => updateCell(m.key, "purchase", Number(e.target.value) || 0)} className="text-right py-1 h-8 min-w-32 ml-auto" data-testid={`pnl-purchase-${m.key}`} />
+                        <div className="flex items-center justify-end gap-1">
+                          <Input type="number" value={Math.round(r.purchase * 100) / 100} onChange={(e: any) => updateCell(m.key, "purchase", Number(e.target.value) || 0)} className="text-right py-1 h-8 min-w-32 ml-auto" data-testid={`pnl-purchase-${m.key}`} />
+                          {r.src.purchase === "auto" && r.purchase > 0 && <button type="button" onClick={() => setViewGrnMonth(m.key)} title="From GRN — click to view" className="text-[9px] font-semibold text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 px-1 rounded hover:underline" data-testid={`pnl-purchase-auto-${m.key}`}>AUTO</button>}
+                          {r.src.purchase === "manual" && <button type="button" onClick={() => updateCell(m.key, "purchase", 0)} className="text-[9px] text-slate-500 hover:text-indigo-600 underline" title="Reset to auto" data-testid={`pnl-purchase-reset-${m.key}`}>reset</button>}
+                        </div>
                       )}
                     </Td>
                     <Td>
@@ -723,10 +722,17 @@ export function MonthlyPnL() {
                           <span className="text-[9px] font-semibold text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 px-1 rounded">{getLines(m.key, "closing").length} items</span>
                         </button>
                       ) : (
-                        <Input type="number" value={r.closing} onChange={(e: any) => updateCell(m.key, "closing", Number(e.target.value) || 0)} className="text-right py-1 h-8 min-w-32 ml-auto" data-testid={`pnl-close-${m.key}`} />
+                        <div className="flex items-center justify-end gap-1">
+                          <Input type="number" value={Math.round(r.closing * 100) / 100} onChange={(e: any) => updateCell(m.key, "closing", Number(e.target.value) || 0)} className="text-right py-1 h-8 min-w-32 ml-auto" data-testid={`pnl-close-${m.key}`} />
+                          {r.src.closing === "auto" && r.closing > 0 && <button type="button" title="Month-end inventory valuation rebuilt from stock transactions" className="text-[9px] font-semibold text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 px-1 rounded hover:underline" data-testid={`pnl-closing-auto-${m.key}`}>AUTO</button>}
+                          {r.src.closing === "manual" && <button type="button" onClick={() => updateCell(m.key, "closing", 0)} className="text-[9px] text-slate-500 hover:text-indigo-600 underline" title="Reset to auto" data-testid={`pnl-closing-reset-${m.key}`}>reset</button>}
+                        </div>
                       )}
                     </Td>
-                    <Td className="text-right font-semibold text-indigo-600">{fmtINR(d.consumed)}</Td>
+                    <Td className={"text-right font-semibold " + (d.consumed < 0 ? "text-rose-600" : "text-indigo-600")} data-testid={`pnl-consumed-${m.key}`}>
+                      {fmtINR(d.consumed)}
+                      {d.consumed < 0 && <div className="text-[9px] font-normal" title="Closing stock is higher than Opening + Purchases. Usually an entered Opening/Closing does not match the inventory-based AUTO value.">negative — check Opening/Closing</div>}
+                    </Td>
                   </tr>
                 );
               })}
@@ -744,7 +750,7 @@ export function MonthlyPnL() {
 
       {/* Profit & Loss */}
       <Card>
-        <div className="p-3 border-b border-slate-200 dark:border-slate-800 font-semibold">2. Profit &amp; Loss</div>
+        <div className="p-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between flex-wrap gap-2"><span className="font-semibold">2. Profit &amp; Loss</span><span className="text-[11px] text-slate-500">Gross Profit = Net Sales − Consumed Stock − Direct Expenses · Net Profit = Gross Profit − Indirect Expenses</span></div>
         <div className="overflow-x-auto">
           <Table>
             <thead>
@@ -755,7 +761,8 @@ export function MonthlyPnL() {
                 <Th className="text-right">Indirect Expenses</Th>
                 <Th className="text-right">Direct Expenses</Th>
                 <Th className="text-right">Total Expenses</Th>
-                <Th className="text-right">Profit / Loss</Th>
+                <Th className="text-right">Gross Profit</Th>
+                <Th className="text-right">Net Profit / Loss</Th>
                 <Th className="text-right">Profit %</Th>
               </tr>
             </thead>
@@ -767,52 +774,45 @@ export function MonthlyPnL() {
                   <tr key={m.key} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                     <Td className="font-medium">{m.label}</Td>
                     <Td>
-                      {hasPS(m.key) ? (
-                        <button
-                          type="button"
-                          onClick={() => setViewPSMonth(m.key)}
-                          className="text-indigo-700 font-semibold hover:underline text-right min-w-32 ml-auto flex items-center justify-end gap-1"
-                          title={`${psRowsFor(m.key).length} rows from Monthly P&S Report — click to view`}
-                          data-testid={`pnl-sales-view-${m.key}`}
-                        >{fmtINR(r.sales)}
-                          <span className="text-[9px] font-semibold text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 px-1 rounded">P&amp;S</span>
-                        </button>
-                      ) : (
-                        <Input type="number" value={r.sales} onChange={(e: any) => updateCell(m.key, "sales", Number(e.target.value) || 0)} className="text-right py-1 h-8 min-w-32 ml-auto" data-testid={`pnl-sales-${m.key}`} />
-                      )}
+                      <div className="flex items-center justify-end gap-1">
+                        <Input type="number" value={Math.round(r.sales * 100) / 100} onChange={(e: any) => updateCell(m.key, "sales", Number(e.target.value) || 0)} className="text-right py-1 h-8 min-w-32 ml-auto" data-testid={`pnl-sales-${m.key}`} />
+                        {r.src.sales === "auto" && r.sales > 0 && <button type="button" onClick={() => setViewPSMonth(m.key)} title="From Sales Invoices — click to view" className="text-[9px] font-semibold text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 px-1 rounded hover:underline" data-testid={`pnl-sales-auto-${m.key}`}>AUTO</button>}
+                          {r.src.sales === "manual" && <button type="button" onClick={() => updateCell(m.key, "sales", 0)} className="text-[9px] text-slate-500 hover:text-indigo-600 underline" title="Reset to auto" data-testid={`pnl-sales-reset-${m.key}`}>reset</button>}
+                      </div>
                     </Td>
                     <Td className="text-right">{fmtINR(d.consumed)}</Td>
                     <Td>
-                      {hasExpLines(m.key, "indirect") ? (
+                      {r.src.indirect === "records" ? (
                         <button
                           type="button"
-                          onClick={() => setViewExpLines({ month: m.key, type: "indirect" })}
+                          onClick={() => recCount(m.key, "indirect") ? setExpRecView({ type: "indirect", month: m.key }) : setViewExpLines({ month: m.key, type: "indirect" })}
                           className="text-indigo-700 font-semibold hover:underline text-right min-w-32 ml-auto flex items-center justify-end gap-1"
                           title={`${getExpLines(m.key, "indirect").length} items — click to view details`}
                           data-testid={`pnl-indirect-view-${m.key}`}
                         >{fmtINR(r.indirect)}
-                          <span className="text-[9px] font-semibold text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 px-1 rounded">{getExpLines(m.key, "indirect").length} items</span>
+                          <span className="text-[9px] font-semibold text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 px-1 rounded">{getExpLines(m.key, "indirect").length + recCount(m.key, "indirect")} items</span>
                         </button>
                       ) : (
                         <Input type="number" value={r.indirect} onChange={(e: any) => updateCell(m.key, "indirect", Number(e.target.value) || 0)} className="text-right py-1 h-8 min-w-32 ml-auto" data-testid={`pnl-indirect-${m.key}`} />
                       )}
                     </Td>
                     <Td>
-                      {hasExpLines(m.key, "direct") ? (
+                      {r.src.direct === "records" ? (
                         <button
                           type="button"
-                          onClick={() => setViewExpLines({ month: m.key, type: "direct" })}
+                          onClick={() => recCount(m.key, "direct") ? setExpRecView({ type: "direct", month: m.key }) : setViewExpLines({ month: m.key, type: "direct" })}
                           className="text-indigo-700 font-semibold hover:underline text-right min-w-32 ml-auto flex items-center justify-end gap-1"
                           title={`${getExpLines(m.key, "direct").length} items — click to view details`}
                           data-testid={`pnl-direct-view-${m.key}`}
                         >{fmtINR(r.direct)}
-                          <span className="text-[9px] font-semibold text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 px-1 rounded">{getExpLines(m.key, "direct").length} items</span>
+                          <span className="text-[9px] font-semibold text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 px-1 rounded">{getExpLines(m.key, "direct").length + recCount(m.key, "direct")} items</span>
                         </button>
                       ) : (
                         <Input type="number" value={r.direct} onChange={(e: any) => updateCell(m.key, "direct", Number(e.target.value) || 0)} className="text-right py-1 h-8 min-w-32 ml-auto" data-testid={`pnl-direct-${m.key}`} />
                       )}
                     </Td>
                     <Td className="text-right font-semibold">{fmtINR(d.totalExp)}</Td>
+                    <Td className={"text-right font-semibold " + (d.gross >= 0 ? "text-emerald-600" : "text-rose-600")} data-testid={`pnl-gross-${m.key}`}>{d.gross < 0 ? `Loss ${fmtINR(Math.abs(d.gross))}` : fmtINR(d.gross)}</Td>
                     <Td className={"text-right font-semibold " + (d.profit >= 0 ? "text-emerald-600" : "text-rose-600")}>
                       {d.profit < 0 ? `Loss ${fmtINR(Math.abs(d.profit))}` : fmtINR(d.profit)}
                     </Td>
@@ -827,6 +827,7 @@ export function MonthlyPnL() {
                 <Td className="text-right">{fmtINR(totals.indirect)}</Td>
                 <Td className="text-right">{fmtINR(totals.direct)}</Td>
                 <Td className="text-right">{fmtINR(totals.totalExp)}</Td>
+                <Td className={"text-right " + (totals.gross >= 0 ? "text-emerald-700" : "text-rose-600")}>{totals.gross < 0 ? `Loss ${fmtINR(Math.abs(totals.gross))}` : fmtINR(totals.gross)}</Td>
                 <Td className={"text-right " + (totals.profit >= 0 ? "text-emerald-700" : "text-rose-600")}>
                   {totals.profit < 0 ? `Loss ${fmtINR(Math.abs(totals.profit))}` : fmtINR(totals.profit)}
                 </Td>
@@ -1119,67 +1120,49 @@ export function MonthlyPnL() {
         })()}
       </Modal>
 
-      {/* P&S Report Drill-down Modal (Sales source) */}
-      <Modal
-        open={!!viewPSMonth}
-        onClose={() => setViewPSMonth(null)}
-        title={viewPSMonth ? `Sales from P&S Report — ${months.find(m => m.key === viewPSMonth)?.label || viewPSMonth}` : ""}
-        size="lg"
-      >
+      <Modal open={!!viewPSMonth} onClose={() => setViewPSMonth(null)} title={viewPSMonth ? `Sales Invoices — ${monthLabelFor(viewPSMonth)}` : ""} size="lg">
         {viewPSMonth && (() => {
-          const rows = psRowsFor(viewPSMonth).sort((a, b) => b.amount - a.amount);
-          const qtySum = rows.reduce((s, r) => s + r.qty, 0);
-          const amtSum = rows.reduce((s, r) => s + r.amount, 0);
+          const list = db.challans.filter(c => (c.date || "").startsWith(viewPSMonth)).sort((a, b) => a.date.localeCompare(b.date));
           return (
             <div className="space-y-3" data-testid="pnl-ps-modal">
-              <div className="grid grid-cols-3 gap-3">
-                <div className="rounded-lg bg-slate-50 dark:bg-slate-800 p-3 text-center">
-                  <div className="text-[10px] uppercase tracking-wide text-slate-500">Rows</div>
-                  <div className="text-lg font-bold">{rows.length}</div>
-                </div>
-                <div className="rounded-lg bg-blue-50 dark:bg-blue-900/20 p-3 text-center">
-                  <div className="text-[10px] uppercase tracking-wide text-blue-700">Total Qty</div>
-                  <div className="text-lg font-bold text-blue-700">{qtySum.toLocaleString("en-IN")}</div>
-                </div>
-                <div className="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 p-3 text-center">
-                  <div className="text-[10px] uppercase tracking-wide text-emerald-700">Total Sales</div>
-                  <div className="text-lg font-bold text-emerald-700">{fmtINR(amtSum)}</div>
-                </div>
-              </div>
-              <div className="text-[11px] px-3 py-2 rounded-md bg-indigo-50 dark:bg-indigo-900/20 text-indigo-800 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/40">
-                Source: Monthly P&amp;S Report. Add or edit these rows there to change the P&amp;L Sales for this month.
-              </div>
+              <div className="text-sm">{list.length} invoice(s) · taxable value (excl. GST, incl. freight) <b className="text-emerald-600">{fmtINR(list.reduce((s, c) => s + invoiceTaxable(c), 0))}</b></div>
               <div className="max-h-[420px] overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700">
                 <Table>
-                  <thead className="sticky top-0 bg-white dark:bg-slate-900">
-                    <tr>
-                      <Th>Product</Th>
-                      <Th className="text-right">Qty</Th>
-                      <Th className="text-right">Sale Price</Th>
-                      <Th className="text-right">Amount</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.length === 0 ? (
-                      <tr><Td colSpan={4}><Empty title="No rows" /></Td></tr>
-                    ) : rows.map(r => (
-                      <tr key={r.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                        <Td className="font-medium">{r.product}</Td>
-                        <Td className="text-right">{r.qty.toLocaleString("en-IN")}</Td>
-                        <Td className="text-right">{fmtINR(r.price)}</Td>
-                        <Td className="text-right font-semibold">{fmtINR(r.amount)}</Td>
-                      </tr>
-                    ))}
-                  </tbody>
+                  <thead className="sticky top-0 bg-white dark:bg-slate-900"><tr><Th>Invoice</Th><Th>Date</Th><Th>Customer</Th><Th className="text-right">Taxable</Th></tr></thead>
+                  <tbody>{list.map(c => (
+                    <tr key={c.id}><Td className="font-mono text-xs">{c.number}</Td><Td>{c.date}</Td><Td>{db.parties.find(p => p.id === c.customerId)?.name || "—"}</Td><Td className="text-right font-semibold">{fmtINR(invoiceTaxable(c))}</Td></tr>
+                  ))}</tbody>
                 </Table>
+                {!list.length && <Empty title="No invoices"/>}
               </div>
-              <div className="flex items-center justify-end pt-1">
-                <Button variant="ghost" onClick={() => setViewPSMonth(null)} data-testid="pnl-ps-close">Close</Button>
-              </div>
+              <div className="flex justify-end"><Button variant="ghost" onClick={() => setViewPSMonth(null)} data-testid="pnl-ps-close">Close</Button></div>
             </div>
           );
         })()}
       </Modal>
+
+      <Modal open={!!viewGrnMonth} onClose={() => setViewGrnMonth(null)} title={viewGrnMonth ? `Purchases (GRN) — ${monthLabelFor(viewGrnMonth)}` : ""} size="lg">
+        {viewGrnMonth && (() => {
+          const list = db.grns.filter(g => (g.date || "").startsWith(viewGrnMonth)).sort((a, b) => a.date.localeCompare(b.date));
+          return (
+            <div className="space-y-3" data-testid="pnl-grn-modal">
+              <div className="text-sm">{list.length} GRN(s) · value excl. GST (items + freight + packing) <b className="text-emerald-600">{fmtINR(list.reduce((s, g) => s + grnNetValue(db, g), 0))}</b></div>
+              <div className="max-h-[420px] overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700">
+                <Table>
+                  <thead className="sticky top-0 bg-white dark:bg-slate-900"><tr><Th>GRN</Th><Th>Date</Th><Th>PO / Vendor</Th><Th className="text-right">Value (excl. GST)</Th></tr></thead>
+                  <tbody>{list.map(g => { const po = db.purchaseOrders.find(p => p.id === g.poId); return (
+                    <tr key={g.id}><Td className="font-mono text-xs">{g.number}</Td><Td>{g.date}</Td><Td>{po?.number || "—"} · {db.parties.find(p => p.id === po?.vendorId)?.name || "—"}</Td><Td className="text-right font-semibold">{fmtINR(grnNetValue(db, g))}</Td></tr>
+                  ); })}</tbody>
+                </Table>
+              </div>
+              <div className="flex justify-end"><Button variant="ghost" onClick={() => setViewGrnMonth(null)}>Close</Button></div>
+            </div>
+          );
+        })()}
+      </Modal>
+
+      {expPreview && <ExpenseUploadPreview type={expPreview.type} rows={expPreview.rows} onClose={() => setExpPreview(null)}/>}
+      {expRecView && <ExpenseRecordsModal type={expRecView.type} month={expRecView.month} monthKeys={months.map(m => m.key)} onClose={() => setExpRecView(null)}/>}
     </div>
   );
 }
