@@ -1,0 +1,31 @@
+{
+  "summary": "Frontend-only test of the Copy SFG Mapping modal on Production SFG, run on the preview URL as admin/admin123. Before testing, settings.sfgStageItemsByJc, settings.sfgConsumptionMapByJc, sfgBatches, sfgConsumptions, productionEntries and items in Mongo erp_state were snapshotted. All requested checks passed. (1) Opening the modal with no job card selected leaves the source empty. The source dropdown lists only the 6 job cards that have a mapping. When JC-2026-009 is selected in map-jc-picker, the modal preselects it as source and loads its 4 rows with the correct produced/consumed items and qty. (2) Validation: no target, empty mapping, duplicate produced SFG, qty 0 or -2, a stage consuming its own SFG, a stage with nothing mapped, and replace without confirmation all show the expected message, and Preview is disabled while any error shows. (3) Editing works: removing a stage, changing a qty (1→2), adding a consumed SFG with qty 0.5, adding a stage. (4) Target search filters the list. Selecting several targets works. The 'Similar' badge shows on JC-2026-007, which has the same BOM as source JC-2026-012, and that job card is sorted to the top. 'Has mapping' badges are correct. (5) Preview shows applied stages, 'kept as is' and 'skipped (stage not in job card)' per target. Replace mode shows 'replaces 7 existing'. When every stage would be kept, Save is disabled. Back to edit keeps the current state. (6) Save, checked in Mongo and in the picker or chips: targets JC-2026-021 and JC-2026-024 got only the edited TANKING row. Source JC-2026-009 was unchanged. JC-2026-011 in keep mode was unchanged. A partial keep onto JC-2026-007 kept PT LV Winding and added 4 stages. Replace mode on 011 left only TANKING. sfgBatches, sfgConsumptions and productionEntries were byte-identical after every save. The 'Configured:' chips updated. (7) Regression: single-job-card Save Mapping on JC-2026-012 works. (8) Cleanup: everything was restored from the snapshot, plus the 5 activity log entries the test created. A diff against the snapshot shows no changes left.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "CopyMappingModal target list / preview", "issue": "Job card numbers are not unique in the data: JC-2026-025, -019, -016 and -006 each exist twice. Because the data-testid uses only the number, copy-map-target-<JC> and copy-map-plan-<JC> are duplicated, and users only tell the two apart by product name. Add the job card id to the testid or make it unique some other way.", "selector": "[data-testid^='copy-map-target-']", "priority": "LOW"},
+      {"component": "Configured chips", "issue": "A mapping exists for a job card id that no longer exists. The chip shows the raw uuid '642cfe11-… · 8 stages' (this was there before testing). Hide orphan mappings or label them as deleted job cards.", "selector": "[data-testid^='map-jc-chip-']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Copy modal target list / source dropdown", "issues": ["The label repeats the product, because the job card number already contains it ('JC-2026-021 - Meter Box PuVVNL · Meter Box PuVVNL'). Long names get truncated.", "Login inputs have no data-testid (only name attributes)"]}
+    ]
+  },
+  "test_report_links": ["/app/tests/sfg_snapshot.py"],
+  "action_items": [
+    "Optional: make copy-map-target-*/copy-map-plan-* testids unique (append jc.id) since JC numbers are duplicated in data",
+    "Optional: in the preview, warn when a copied stage consumes an SFG that no stage on the target produces (e.g. TANKING on Meter Box consuming 25 kV CCA Indus)",
+    "Optional: hide or label orphan mappings for deleted job cards in the 'Configured:' chips"
+  ],
+  "critical_code_review_comments": [
+    "In keep mode, a target that gets 0 applied stages is still listed in the activity log and still has its p[jc.id] and c[jc.id] objects rewritten (with the same content). Harmless, but the log says '(0 stages)'.",
+    "The 'similar' check calls j.product.trim(). If a job card has no product it would throw; use optional chaining.",
+    "The modal re-implements the mapped-stage key logic that selectMapJc in ProductionSFG also has; extract a shared helper"
+  ],
+  "updated_files": ["/app/tests/sfg_snapshot.py", "/app/test_reports/iteration_11.json"],
+  "success_rate": {"backend": "N/A", "frontend": "100% of requested checks"},
+  "seed_data_creation": "None kept. All mapping changes and the 5 activity logs were reverted from the snapshot.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Use /app/tests/sfg_snapshot.py snap|show|diff|restore to snapshot and restore the SFG mapping and stock data in erp_state. Navigate by clicking the 'Production SFG' text in the sidebar. The login inputs are name=amrest-login-username and name=amrest-login-password."
+}
