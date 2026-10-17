@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useStore, uid } from "../lib/store";
 import { Card, Button, Input, Select, Label, Modal, Table, Th, Td, Badge, Empty, KPI, Textarea } from "../components/ui";
 import { IconBox, IconFactory, IconSearch, IconRefresh, IconClipboard, IconX } from "../components/icons";
@@ -6,6 +6,7 @@ import { fmt2 } from "../lib/utils";
 import { userCan } from "../lib/permissions";
 import { sfgStages, sfgAvailable, consumeSfgItems } from "../lib/sfg";
 import type { Item } from "../lib/types";
+import { CopyMappingModal } from "../components/sfg/CopyMappingModal";
 
 type ConsRow = { itemId: string; qtyPerUnit: number };
 
@@ -27,6 +28,8 @@ export function ProductionSFG() {
   const [mcRemarks, setMcRemarks] = useState("");
   const [mcError, setMcError] = useState("");
   const [batchDrill, setBatchDrill] = useState<string | null>(null);
+  const [copyOpen, setCopyOpen] = useState(0);
+  const [refreshMap, setRefreshMap] = useState(0);
 
   const stages = useMemo(() => sfgStages(db), [db]);
   const sfgItems = useMemo(() => db.items.filter(i => i.category === "Semi-Finished"), [db.items]);
@@ -91,6 +94,8 @@ export function ProductionSFG() {
     Object.entries(consMapByJc[jcId] || {}).forEach(([s, v]) => { if ((v || []).length) keys.add(s); });
     setAddedStages([...keys]);
   };
+
+  useEffect(() => { if (refreshMap && mapJc) selectMapJc(mapJc); }, [refreshMap]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addStageRow = (stage: string) => {
     if (stage && !addedStages.includes(stage)) setAddedStages(a => [...a, stage]);
@@ -160,6 +165,7 @@ export function ProductionSFG() {
 
   return (
     <div className="space-y-6" data-testid="production-sfg-page">
+      {copyOpen > 0 && <CopyMappingModal key={copyOpen} open onClose={() => { setCopyOpen(0); setRefreshMap(n => n + 1); }} initialSource={mapJc} stages={stages}/>}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">Production SFG</h1>
@@ -182,7 +188,10 @@ export function ProductionSFG() {
               <h3 className="font-semibold">Stage → SFG Item Mapping (Job Card-wise)</h3>
               <p className="text-xs text-slate-500">Select a job card, then for each stage set the SFG it produces and the SFGs it consumes (with qty per unit). Entries create stock against this job card only.</p>
             </div>
-            <Button onClick={saveMapping} disabled={!mapJc || !mappingDirty} data-testid="save-stage-mapping">Save Mapping</Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setCopyOpen(Date.now())} data-testid="copy-sfg-mapping-btn">Copy SFG Mapping</Button>
+              <Button onClick={saveMapping} disabled={!mapJc || !mappingDirty} data-testid="save-stage-mapping">Save Mapping</Button>
+            </div>
           </div>
           <div className="p-4 border-b border-slate-100 dark:border-slate-800">
             <div className="max-w-xl">

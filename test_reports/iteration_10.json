@@ -1,0 +1,32 @@
+{
+  "summary": "Frontend-only test of the stage-wise progress bars on the Production Dashboard. Ran on the preview URL as admin/admin123; the system date was 2026-10-17. (1) Checked all 178 stage progress blocks (stage-progress-<jcId>-<stage>). For every block, pct = min(100, round(done/total*100)), bar width = pct, Bal = max(0, total-done), and the label/colour (green/amber/grey) follow the code rule. 0 real mismatches; the one flagged was a bug in my own checker. (2) Opened the modal for 60 blocks: the Total/Done/entry-count/Balance KPIs matched the block in all 60. (3) End to end on JC-2026-010 'S.Win 60 turn(M)' (total 270): it started grey at 0%. Added an entry of qty 10 → instantly 4%, amber, Done 10.00 (1), Bal 260. Clicking the block opened the history row (2026-10-17, Istiyaq, qty 10). Fix to 270 → 100%, green, Completed. Fix to 0 → 0%, still counted as 1 entry, amber (the stage tile was in-progress). The result survived a page reload. (4) Job Card search finds and shows JC-2026-010. The stage order is the same in the search detail and the card tiles. The Details button opens the modal. Clicking a stage tile still marks the stage done and does not open the modal. (5) Cleanup: restored productionEntries, the jobCards entry and logs in Mongo erp_state from a snapshot; a diff against the snapshot shows no changes left.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Stage details modal", "issue": "There is no Delete control for production entries, here or anywhere else in the app (only 'Fix'). The requirement says the bar updates when an entry is deleted, so the delete flow could not be tested.", "selector": "[data-testid^='stage-entry-edit-']", "priority": "MEDIUM"},
+      {"component": "Stage tile vs progress bar", "issue": "Fixing an entry (saveEditedEntry) does not recalculate jobCard.stages[].status. After editing qty to 270 the bar shows 100% Completed (green) but the tile stays amber/in-progress. After editing down from full qty, a 'done' tile would stay green while the bar shows less.", "selector": "stage-progress-<jc>-<stage>", "priority": "LOW"},
+      {"component": "Progress block", "issue": "A stage marked done by clicking its tile (no entries) shows '0%' with a green 'Completed' label and an empty bar. The percent and label disagree; consider showing 100% or 'Marked done'. Seen on JC-2026-023 PT Coil Casting.", "selector": "stage-progress-pct-*", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Production job card grid", "issues": ["Tiles that show operator and date are taller than other tiles, so progress blocks in the same row sit at different heights (misaligned grid)", "Progress block text is 10px slate-400/500 on white, which is small and low contrast"]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Add a Delete action for production entries (e.g. in the stage-details modal next to Fix), with stage status recalculated afterwards",
+    "In saveEditedEntry (and a future delete), recalculate the stage status (done/in-progress/pending) from the new entry totals so the tile matches the bar",
+    "Optional: show 100% (or 'Marked done') when a stage was manually completed with 0 entries"
+  ],
+  "critical_code_review_comments": [
+    "Production.tsx is 1390 lines; split ProductionDashboard and its modals into separate modules",
+    "Two ways of computing stage totals: entryAgg/stageProgress and the previousCompleted/stage-details reduce. They give the same numbers today but should share one helper",
+    "The modal KPI 'Previously Completed' is really the total completed; the label is misleading"
+  ],
+  "updated_files": ["/app/test_reports/iteration_10.json"],
+  "success_rate": {"backend": "N/A", "frontend": "90% (all requested checks passed except delete-entry, which has no UI)"},
+  "seed_data_creation": "None kept. A test entry and a tile completion on JC-2026-010 were created and then reverted from a Mongo snapshot.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Login: input[name='amrest-login-username'/'amrest-login-password']. Nav: get_by_role('button', name='Production', exact=True). Good test target: JC-2026-010 id 174cb60c-6d5b-441c-854a-3612d1ec7a3a, stage 'S.Win 60 turn(M)' (total 270, no SFG mapping, operator Istiyaq). Entry modal: the Job Card select has no testid (filter select by option value); Today qty input = div:has(> label:text-is('Today <stage> Quantity')) input; operator option text is 'Name · Dept', so select by value. Clicking a stage tile calls completeStage, which changes data. Snapshot erp_state (single doc in test_database) before testing and restore the changed keys afterwards."
+}
