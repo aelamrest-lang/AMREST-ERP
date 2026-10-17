@@ -197,6 +197,7 @@ export function MonthlyPnL() {
     });
   };
 
+  const money = (v: number) => v < 0 ? `-${fmtINR(Math.abs(v))}` : fmtINR(v);
   const derive = (openingVal: number, r: PnlRow) => {
     const consumed = openingVal + r.purchase - r.closing;
     const totalExp = consumed + r.indirect + r.direct;
@@ -575,7 +576,7 @@ export function MonthlyPnL() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold">Monthly Profit &amp; Loss</h1>
-          <p className="text-sm text-slate-500"><strong>AUTO</strong>: stock rebuilt month-end from Inventory transactions (valued at that month&apos;s purchase rates), Purchases from GRN (excl. GST), Sales from Sales Invoices (taxable, excl. GST) · entered / uploaded values always take priority · Closing Stock flows to next month&apos;s Opening</p>
+          <p className="text-sm text-slate-500"><strong>AUTO</strong>: stock rebuilt month-end from Inventory transactions (valued as of month-end — same as Inventory date filter), Purchases from GRN (excl. GST), Sales from Sales Invoices (taxable, excl. GST) · entered / uploaded values always take priority · Closing Stock flows to next month&apos;s Opening</p>
         </div>
         <div className="flex items-end gap-2 flex-wrap">
           <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={e => handleUpload(e.target.files?.[0])} data-testid="pnl-upload-input" />
@@ -686,7 +687,7 @@ export function MonthlyPnL() {
                           />
                         )}
                         {!hasLines(m.key, "opening") && r.isOpeningAuto && r.resolvedOpening > 0 && (
-                          <span className={"text-[9px] font-semibold px-1 rounded " + (r.basisSwitch ? "text-amber-700 bg-amber-50 dark:bg-amber-900/30" : "text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30")} title={r.basisSwitch ? `Inventory valuation on the 1st. Previous month's entered closing (${fmtINR(resolved[i - 1]?.closing || 0)}) differs, so the inventory-based value is used to keep this month's consumption accurate. Type a value to override.` : "Auto-carried from previous month's Closing Stock"} data-testid={`pnl-open-auto-${m.key}`}>{r.basisSwitch ? "AUTO · INV" : "AUTO"}</span>
+                          <span className={"text-[9px] font-semibold px-1 rounded whitespace-nowrap " + (r.basisSwitch ? "text-amber-700 bg-amber-50 dark:bg-amber-900/30" : "text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30")} title={r.basisSwitch ? `Inventory valuation on the 1st. Previous month's entered closing (${fmtINR(resolved[i - 1]?.closing || 0)}) differs, so the inventory-based value is used to keep this month's consumption accurate. Type a value to override.` : "Auto-carried from previous month's Closing Stock"} data-testid={`pnl-open-auto-${m.key}`}>{r.basisSwitch ? "AUTO · INV" : "AUTO"}</span>
                         )}
                         {!hasLines(m.key, "opening") && !r.isOpeningAuto && (
                           <button
@@ -749,7 +750,7 @@ export function MonthlyPnL() {
                 <Td className="text-right">{fmtINR(totals.opening)}</Td>
                 <Td className="text-right">{fmtINR(totals.purchase)}</Td>
                 <Td className="text-right">{fmtINR(totals.closing)}</Td>
-                <Td className="text-right text-indigo-700">{fmtINR(totals.consumed)}</Td>
+                <Td className="text-right text-indigo-700">{money(totals.consumed)}</Td>
               </tr>
             </tbody>
           </Table>
@@ -788,7 +789,7 @@ export function MonthlyPnL() {
                           {r.src.sales === "manual" && <button type="button" onClick={() => updateCell(m.key, "sales", 0)} className="text-[9px] text-slate-500 hover:text-indigo-600 underline" title="Reset to auto" data-testid={`pnl-sales-reset-${m.key}`}>reset</button>}
                       </div>
                     </Td>
-                    <Td className="text-right">{fmtINR(d.consumed)}</Td>
+                    <Td className="text-right">{money(d.consumed)}</Td>
                     <Td>
                       {r.src.indirect === "records" ? (
                         <button
@@ -819,7 +820,7 @@ export function MonthlyPnL() {
                         <Input type="number" value={r.direct} onChange={(e: any) => updateCell(m.key, "direct", Number(e.target.value) || 0)} className="text-right py-1 h-8 min-w-32 ml-auto" data-testid={`pnl-direct-${m.key}`} />
                       )}
                     </Td>
-                    <Td className="text-right font-semibold">{fmtINR(d.totalExp)}</Td>
+                    <Td className="text-right font-semibold">{money(d.totalExp)}</Td>
                     <Td className={"text-right font-semibold " + (d.gross >= 0 ? "text-emerald-600" : "text-rose-600")} data-testid={`pnl-gross-${m.key}`}>{d.gross < 0 ? `Loss ${fmtINR(Math.abs(d.gross))}` : fmtINR(d.gross)}</Td>
                     <Td className={"text-right font-semibold " + (d.profit >= 0 ? "text-emerald-600" : "text-rose-600")}>
                       {d.profit < 0 ? `Loss ${fmtINR(Math.abs(d.profit))}` : fmtINR(d.profit)}
@@ -831,10 +832,10 @@ export function MonthlyPnL() {
               <tr className="bg-emerald-50/60 dark:bg-emerald-900/20 font-semibold">
                 <Td>FY Total</Td>
                 <Td className="text-right">{fmtINR(totals.sales)}</Td>
-                <Td className="text-right">{fmtINR(totals.consumed)}</Td>
+                <Td className="text-right">{money(totals.consumed)}</Td>
                 <Td className="text-right">{fmtINR(totals.indirect)}</Td>
                 <Td className="text-right">{fmtINR(totals.direct)}</Td>
-                <Td className="text-right">{fmtINR(totals.totalExp)}</Td>
+                <Td className="text-right">{money(totals.totalExp)}</Td>
                 <Td className={"text-right " + (totals.gross >= 0 ? "text-emerald-700" : "text-rose-600")}>{totals.gross < 0 ? `Loss ${fmtINR(Math.abs(totals.gross))}` : fmtINR(totals.gross)}</Td>
                 <Td className={"text-right " + (totals.profit >= 0 ? "text-emerald-700" : "text-rose-600")}>
                   {totals.profit < 0 ? `Loss ${fmtINR(Math.abs(totals.profit))}` : fmtINR(totals.profit)}

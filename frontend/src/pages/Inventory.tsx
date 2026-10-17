@@ -3,7 +3,12 @@ import * as XLSX from "xlsx";
 import { useStore } from "../lib/store";
 import { Card, Button, Input, Select, Table, Th, Td, Badge, Empty, KPI } from "../components/ui";
 import { IconBox, IconRefresh, IconDownload, IconSearch, IconClipboard } from "../components/icons";
-import { downloadCSV, fmtINR, fmt2 } from "../lib/utils";
+import { downloadCSV, fmtINR, fmt2, todayISO } from "../lib/utils";
+import { buildStockLedger, movementsBetween, rateAsOf, stockAsOf } from "../lib/stockHistory";
+
+type DateMode = "today" | "yesterday" | "date" | "month" | "lastmonth" | "range";
+const isoD = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const dayBefore = (iso: string) => { const [y, m, d] = iso.split("-").map(Number); return isoD(new Date(y, m - 1, d - 1)); };
 import { userCan } from "../lib/permissions";
 
 export function Inventory() {
@@ -18,6 +23,28 @@ export function Inventory() {
   const [uploadMessage, setUploadMessage] = useState("");
   const [sortKey, setSortKey] = useState<"current" | "hold" | "available" | "cost" | "value" | "status" | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [dateMode, setDateMode] = useState<DateMode>("today");
+  const [pickDate, setPickDate] = useState(todayISO());
+  const [rangeFrom, setRangeFrom] = useState("");
+  const [rangeTo, setRangeTo] = useState(todayISO());
+  const period = useMemo(() => {
+    const t = todayISO(), now = new Date();
+    switch (dateMode) {
+      case "yesterday": return { to: dayBefore(t) };
+      case "date": return { to: pickDate || t };
+      case "month": return { from: isoD(new Date(now.getFullYear(), now.getMonth(), 1)), to: t };
+      case "lastmonth": return { from: isoD(new Date(now.getFullYear(), now.getMonth() - 1, 1)), to: isoD(new Date(now.getFullYear(), now.getMonth(), 0)) };
+      case "range": return { from: rangeFrom || undefined, to: rangeTo || t };
+      default: return { to: t };
+    }
+  }, [dateMode, pickDate, rangeFrom, rangeTo]) as { from?: string; to: string };
+  const asOf = period.to;
+  const isLive = asOf >= todayISO() && !period.from;
+  const ledger = useMemo(() => buildStockLedger(db), [db.grns, db.purchaseOrders, db.materialIssues, db.sfgBatches, db.sfgConsumptions, db.challans]); // eslint-disable-line react-hooks/exhaustive-deps
+  const histStock = useMemo(() => isLive ? null : stockAsOf(db, ledger, asOf), [isLive, ledger, asOf, db.items]); // eslint-disable-line react-hooks/exhaustive-deps
+  const openStock = useMemo(() => period.from ? stockAsOf(db, ledger, dayBefore(period.from)) : null, [period.from, ledger, db.items]); // eslint-disable-line react-hooks/exhaustive-deps
+  const flows = useMemo(() => period.from ? movementsBetween(ledger, period.from, asOf) : null, [period.from, asOf, ledger]);
+  const baseItems = useMemo(() => histStock ? db.items.map(i => ({ ...i, currentStock: histStock.get(i.id) || 0 })) : db.items, [histStock, db.items]);
   const toggleSort = (k: "current" | "hold" | "available" | "cost" | "value" | "status") => {
     if (sortKey === k) setSortDir(d => d === "asc" ? "desc" : "asc");
     else { setSortKey(k); setSortDir("desc"); }
@@ -26,7 +53,7 @@ export function Inventory() {
   const statusRank: Record<string, number> = { "Healthy": 0, "Reorder Soon": 1, "Below Buffer": 2, "Over-Committed": 3 };
 
   const CAT: Record<string, string> = { raw: "Raw Material", semi: "Semi-Finished", fg: "Finished Goods" };
-  const catItems = useMemo(() => filter === "all" ? db.items : db.items.filter(i => i.category === CAT[filter]), [db.items, filter]); // eslint-disable-line react-hooks/exhaustive-deps
+  const catItems = useMemo(() => filter === "all" ? baseItems : baseItems.filter(i => i.category === CAT[filter]), [baseItems, filter]); // eslint-disable-line react-hooks/exhaustive-deps
   const items = useMemo(() => {
     let arr = catItems.slice();
     if (view === "low") arr = arr.filter(i => i.currentStock <= i.minStock);
@@ -53,6 +80,7 @@ export function Inventory() {
   }, [db.grns, db.purchaseOrders]);
 
   const unitCost = (i: (typeof db.items)[0]) => {
+    if (!isLive) return rateAsOf(i, ledger, asOf).rate;
     if (i.category === "Finished Goods") return i.saleRate || i.purchaseRate;
     return lastPurchaseRates[i.id]?.avg ?? i.purchaseRate;
   };
@@ -61,14 +89,14 @@ export function Inventory() {
   const lowCount = catItems.filter(i => i.currentStock <= i.minStock).length;
   const catLabel = filter === "all" ? "All Items" : CAT[filter];
   const catBreakdown = ["Raw Material", "Semi-Finished", "Finished Goods"].filter(c => filter === "all" || c === CAT[filter]).map(c => {
-    const list = db.items.filter(i => i.category === c && i.currentStock !== 0);
+    const list = baseItems.filter(i => i.category === c && i.currentStock !== 0);
     return { c, count: list.length, qty: list.reduce((s, i) => s + i.currentStock, 0), value: list.reduce((s, i) => s + i.currentStock * unitCost(i), 0) };
   });
   const allHeldRows = useMemo(() => {
-    const rows = db.jobCards.flatMap(j => j.reservedItems.map(r => {
-      const item = db.items.find(i => i.id === r.itemId);
+    const rows = db.jobCards.filter(j => isLive || j.date <= asOf).flatMap(j => j.reservedItems.map(r => {
+      const item = baseItems.find(i => i.id === r.itemId);
       const issuedQty = db.materialIssues
-        .filter(issue => issue.jobCardId === j.id)
+        .filter(issue => issue.jobCardId === j.id && (isLive || issue.date <= asOf))
         .flatMap(issue => issue.lines)
         .filter(line => line.itemId === r.itemId)
         .reduce((sum, line) => sum + line.issueQty, 0);
@@ -83,7 +111,7 @@ export function Inventory() {
       };
     })).filter(r => r.item);
     return rows;
-  }, [db.jobCards, db.items, db.materialIssues]);
+  }, [db.jobCards, baseItems, db.materialIssues, isLive, asOf]);
   const heldByItem = useMemo(() => {
     const map = new Map<string, number>();
     allHeldRows.filter(r => r.jobStatus !== "Completed").forEach(r => {
@@ -233,16 +261,33 @@ export function Inventory() {
         <p className="text-sm text-slate-500">Real-time stock, valuation and movement</p>
       </div>
 
+      <div className="flex flex-wrap items-center gap-2" data-testid="inv-date-filter">
+        {([["today", "Today"], ["yesterday", "Yesterday"], ["date", "Select Date"], ["month", "This Month"], ["lastmonth", "Last Month"], ["range", "Custom Date Range"]] as const).map(([k, lbl]) => (
+          <button key={k} type="button" onClick={() => setDateMode(k)}
+            className={"text-xs px-3 py-1.5 rounded-full border font-medium " + (dateMode === k ? "bg-indigo-600 border-indigo-600 text-white" : "bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-600 hover:border-indigo-400")}
+            data-testid={`inv-date-${k}`}>{lbl}</button>
+        ))}
+        {dateMode === "date" && <Input type="date" className="!w-44" value={pickDate} max={todayISO()} onChange={(e: any) => setPickDate(e.target.value)} data-testid="inv-date-pick"/>}
+        {dateMode === "range" && <>
+          <Input type="date" className="!w-44" value={rangeFrom} max={rangeTo || todayISO()} onChange={(e: any) => setRangeFrom(e.target.value)} data-testid="inv-date-from"/>
+          <span className="text-xs text-slate-400">to</span>
+          <Input type="date" className="!w-44" value={rangeTo} max={todayISO()} onChange={(e: any) => setRangeTo(e.target.value)} data-testid="inv-date-to"/>
+        </>}
+        <span className="text-xs text-slate-500 ml-1" data-testid="inv-asof-label">{isLive ? "Live stock (today)" : period.from ? `Movements ${period.from} → ${asOf} · closing as of ${asOf}` : `Closing stock as of ${asOf}`}</span>
+      </div>
+      {!isLive && <div className="rounded-lg border border-indigo-200 dark:border-indigo-900 bg-indigo-50 dark:bg-indigo-950/30 px-3 py-2 text-xs text-indigo-800 dark:text-indigo-300" data-testid="inv-historical-banner">
+        Historical view (read-only): Stock = today&apos;s stock reversed through every dated GRN, Raw Material Issue, SFG production/consumption and Dispatch after {asOf}. Valuation uses purchase rates up to that date. Same values feed Monthly P&amp;L Opening/Closing Stock.
+      </div>}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {([
           ["all", <KPI label={`Total Items · ${catLabel}`} value={String(catItems.length)} color="indigo" icon={<IconBox size={22}/>} hint="click to list all items" />],
-          ["value", <KPI label={`Stock Value · ${catLabel}`} value={fmtINR(totalValue)} color="emerald" icon={<IconBox size={22}/>} hint="RM/SFG: avg last 3 purchases · FG: sale price"/>],
+          ["value", <KPI label={`Stock Value · ${catLabel}`} value={fmtINR(totalValue)} color="emerald" icon={<IconBox size={22}/>} hint={isLive ? "RM/SFG: avg last 3 purchases · FG: sale price" : `as of ${asOf} · rates up to that date`}/>],
           ["low", <KPI label={`Low Stock · ${catLabel}`} value={String(lowCount)} color="rose" icon={<IconRefresh size={22}/>} hint="stock ≤ minimum" />],
         ] as const).map(([k, el]) => (
           <button key={k} type="button" onClick={() => setView(k)} data-testid={`inv-kpi-${k}`}
             className={"text-left rounded-xl transition-shadow " + (view === k ? "ring-2 ring-indigo-500 shadow-md" : "hover:ring-2 hover:ring-indigo-200 dark:hover:ring-indigo-900")}>{el}</button>
         ))}
-        <KPI label="Held Inventory" value={fmt2(activeHeldQty)} color="amber" icon={<IconClipboard size={22}/>} hint="active job holds" />
+        <KPI label="Held Inventory" value={fmt2(activeHeldQty)} color="amber" icon={<IconClipboard size={22}/>} hint={isLive ? "active job holds" : `pending holds as of ${asOf}`} />
       </div>
 
       <Card>
@@ -254,8 +299,8 @@ export function Inventory() {
           <Select value={filter} onChange={(e: any) => setFilter(e.target.value)} className="w-52" data-testid="inv-category-filter">
             <option value="all">All Items</option><option value="raw">Raw Material</option><option value="semi">Semi-Finished Goods (SFG)</option><option value="fg">Finished Goods (FG)</option>
           </Select>
-          {canUpload && <Button variant="outline" onClick={downloadUploadTemplate}><IconDownload size={14}/> Template</Button>}
-          {canUpload && (
+          {canUpload && isLive && <Button variant="outline" onClick={downloadUploadTemplate}><IconDownload size={14}/> Template</Button>}
+          {canUpload && isLive && (
             <label className="inline-flex items-center justify-center gap-1.5 rounded-lg font-medium px-3.5 py-2 text-sm border border-slate-300 dark:border-slate-700 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200">
               Excel Upload
               <input
@@ -270,7 +315,7 @@ export function Inventory() {
             </label>
           )}
           {canExport && <Button variant="outline" onClick={exportCSV}><IconDownload size={14}/> Export</Button>}
-          {canUpload && <Button variant="outline" onClick={reconcileSfgStock} title="Recompute SFG item stock from the SFG production/consumption ledger and fix any mismatch" data-testid="sync-stock-btn"><IconRefresh size={14}/> Sync Stock</Button>}
+          {canUpload && isLive && <Button variant="outline" onClick={reconcileSfgStock} title="Recompute SFG item stock from the SFG production/consumption ledger and fix any mismatch" data-testid="sync-stock-btn"><IconRefresh size={14}/> Sync Stock</Button>}
         </div>
         <div className="px-4 py-2 border-b border-slate-100 dark:border-slate-800 flex flex-wrap items-center gap-2 text-xs" data-testid="inv-view-strip">
           <span className="text-slate-500">Showing:</span>
@@ -292,7 +337,8 @@ export function Inventory() {
           <thead><tr>
             <Th>Material Details</Th>
             <Th>UOM</Th>
-            <Th className="cursor-pointer select-none hover:text-indigo-600" onClick={() => toggleSort("current")} data-testid="inv-sort-current">Current Stock{arrow("current")}</Th>
+            {flows && <><Th>Opening ({dayBefore(period.from!)})</Th><Th>Stock In</Th><Th>Stock Out</Th></>}
+            <Th className="cursor-pointer select-none hover:text-indigo-600" onClick={() => toggleSort("current")} data-testid="inv-sort-current">{isLive ? "Current Stock" : `Stock as of ${asOf}`}{arrow("current")}</Th>
             <Th className="cursor-pointer select-none hover:text-indigo-600" onClick={() => toggleSort("hold")} data-testid="inv-sort-hold">Hold (Job Card){arrow("hold")}</Th>
             <Th className="cursor-pointer select-none hover:text-indigo-600" onClick={() => toggleSort("available")} data-testid="inv-sort-available">Required Quantity{arrow("available")}</Th>
             <Th className="cursor-pointer select-none hover:text-indigo-600" onClick={() => toggleSort("cost")} data-testid="inv-sort-cost">Avg Unit Cost{arrow("cost")}</Th>
@@ -310,11 +356,16 @@ export function Inventory() {
                     <div className="mt-1"><Badge color={i.category === "Raw Material" ? "blue" : i.category === "Finished Goods" ? "green" : "yellow"}>{i.category}</Badge></div>
                   </Td>
                   <Td className="font-medium">{i.unit}</Td>
-                  <Td className="font-semibold">{fmt2(totalStock)} {i.unit}</Td>
+                  {flows && <>
+                    <Td data-testid={`inv-open-${i.id}`}>{fmt2(openStock?.get(i.id) || 0)}</Td>
+                    <Td className="text-emerald-600" data-testid={`inv-in-${i.id}`}>{fmt2(flows.inQ.get(i.id) || 0)}</Td>
+                    <Td className="text-rose-600" data-testid={`inv-out-${i.id}`}>{fmt2(flows.outQ.get(i.id) || 0)}</Td>
+                  </>}
+                  <Td className="font-semibold" data-testid={`inv-stock-${i.id}`}>{fmt2(totalStock)} {i.unit}</Td>
                   <Td className="font-semibold text-amber-600">{fmt2(hold)} {i.unit}</Td>
                   <Td><span className={required > 0 ? "text-rose-600 font-bold" : "font-bold text-emerald-600"}>{fmt2(required)} {i.unit}</span>{required > 0 && <div className="text-[9px] text-rose-500">shortfall to procure</div>}</Td>
                   <Td>{fmtINR(unitCost(i))}
-                    {i.category === "Finished Goods"
+                    {!isLive ? <div className="text-[9px] text-slate-400">{rateAsOf(i, ledger, asOf).basis} (to {asOf})</div> : i.category === "Finished Goods"
                       ? <div className="text-[9px] text-slate-400">latest sale price</div>
                       : lastPurchaseRates[i.id]
                         ? <div className="text-[9px] text-slate-400">avg of last {lastPurchaseRates[i.id].count} purchase{lastPurchaseRates[i.id].count > 1 ? "s" : ""}</div>

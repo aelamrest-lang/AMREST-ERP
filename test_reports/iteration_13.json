@@ -1,0 +1,40 @@
+{
+  "summary": "Frontend-only retest of the iteration_12 Monthly P&L fixes (admin/admin123, preview URL, browser date 2026-10-17). FIX 1, 2, 3 and 5 pass. FIX 4 is only partly done: the Stock Consumption table shows '-₹…', but the P&L table's Consumed Stock and Total Expenses columns still show '₹-…'. The iteration_12 regression flows all pass. erp_state was snapshotted before testing and restored afterwards; the diff after restore is clean.",
+  "verified_working": [
+    "FIX1: Oct 2026 opening = 86383777.4 (matches pnl_auto_check.py inventory value). pnl-open-auto-2026-10 shows 'AUTO · INV' with a tooltip that names Sep's entered closing ₹6,85,93,250. Oct consumed = ₹41,928.95 (positive). Oct gross = Loss ₹41,928.95, so the fake profit is gone. May–Sep openings still show 'AUTO' and inherit the previous closing exactly. When Oct closing is typed manually, the opening goes back to 68593250 'AUTO'; after reset it returns to 86383777.4.",
+    "FIX2: Direct upload with rows dated Sep (manual 2935298) and Nov shows pnl-exp-manual-warning listing 2026-09 (₹29,35,298.00). The Sep row shows 'Skipped · manual value kept' and Import 1 record(s) · ₹2,000 imports Nov only. Sep direct stays 2935298 and Sep gross stays ₹43,66,019. Re-upload after ticking pnl-exp-replace-manual: Sep row becomes New and Nov becomes 'Already uploaded'. Import replaces Sep with ₹1,000 (1 item) and Sep gross becomes ₹73,00,317.",
+    "FIX3: Dec has 1 legacy line (5000) and 1 record (7000). The cell shows ₹12,000 2 items; the records modal shows 'Plus ₹5,000.00 from older Month/Type uploads'. pnl-exp-legacy-link opens pnl-exp-lines-modal with the legacy line. The link is hidden for months without legacy lines (Nov).",
+    "FIX5: Comparison by Year: FY26-27 opening ₹6,52,25,105 (Apr opening), closing ₹9,13,82,041.08 (Oct closing). FY25-26 opening 67816219 (Apr-25), closing 65326425 (Mar-26). Purchase/consumed are still summed.",
+    "Regression: duplicate prevention ('Already uploaded'); records edit (2000->2500), download (pnl-direct-expenses-2026-11.csv), delete with confirm (the cell returns to an input); data persists after reload; GRN modal (39 GRNs, ₹50,40,192.63); Gross Profit column; legacy Month/Type upload"
+  ],
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "P&L table Consumed Stock + Total Expenses columns", "issue": "FIX 4 only applied in the Stock Consumption table. With a negative consumed (Oct closing set to 99999999), the P&L table shows '₹-2,63,66,556.37' in both Consumed Stock (MonthlyPnL.tsx ~line 791 fmtINR(d.consumed)) and Total Expenses (~line 822 fmtINR(d.totalExp)). Totals rows (lines ~752, 834, 837) also use fmtINR directly.", "selector": "P&L table row Oct 26, columns 3 and 6", "priority": "LOW"},
+      {"component": "Manually entered negative consumed", "issue": "If the user types a closing larger than opening + purchase, the negative consumed still turns into Gross/Net profit (Oct showed ₹2.63 Cr profit). The red warning only shows in the stock table, not in the P&L row. This happens only with a user-entered value, so it is acceptable, but consider flagging it in the P&L row too.", "selector": "[data-testid='pnl-gross-2026-10']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Stock Consumption Oct row", "issues": ["The 'AUTO · INV' badge wraps onto 2 lines and narrows the opening input (use whitespace-nowrap)"]},
+      {"screen": "Expense upload preview", "issues": ["Warning text says 'Uploaded records would replace it' even when the checkbox is unticked and those rows are skipped. Clearer: 'These rows will be skipped unless you tick Replace'", "Native date input is still used"]}
+    ]
+  },
+  "test_report_links": ["/app/tests/pnl_auto_check.py", "/app/tests/erp_full_snapshot.py"],
+  "action_items": [
+    "Apply the '-₹' negative format to the P&L table Consumed Stock and Total Expenses cells and the Totals rows (MonthlyPnL.tsx ~lines 752, 791, 822, 834, 837). A small fmtSigned helper would cover all of them.",
+    "Optional: add whitespace-nowrap to the AUTO · INV badge; reword the manual-expense warning when the checkbox is unticked"
+  ],
+  "critical_code_review_comments": [
+    "manualMonths in the ExpenseUploadPreview call uses only `persisted`. A manual expense that is typed but not saved yet (draft) is not protected or warned about.",
+    "The legacy Month/Type expense upload (handleExpUpload) still silently replaces a manual expense value with no warning, which is inconsistent with FIX 2",
+    "MonthlyPnL.tsx is still about 1180 lines; split it into components",
+    "Clicking pnl-exp-legacy-link closes the records modal instead of stacking the lines modal; the user cannot go back to the records view without reopening it (acceptable)"
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped)", "frontend": "~95%: FIX 1/2/3/5 and regression pass; FIX 4 partial"},
+  "test_credentials": "admin / admin123",
+  "seed_data_creation": "Temporary TEST_ direct records (Sep/Nov/Dec), a legacy Dec line and an Oct closing draft (not saved). Removed by restoring the snapshot (/tmp/erp_full_snap.json); the diff after restore is clean.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Use `python3 /app/tests/erp_full_snapshot.py snap|diff|restore`. `python3 /app/tests/pnl_auto_check.py 2026-10` gives the expected AUTO values (Oct opening 86383777.4, closing 91382041.08). Test CSVs are in /tmp/pnl (direct1.csv Sep+Nov, legacy.csv, direct_dec.csv). Browser date is 2026-10-17."
+}

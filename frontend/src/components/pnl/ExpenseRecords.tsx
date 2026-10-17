@@ -77,7 +77,7 @@ export function ExpenseUploadPreview({ type, rows: initial, onClose, manualMonth
         <div className="text-xs text-slate-500">{rows.length} rows · <b className="text-emerald-600">{fresh.length} new</b> · duplicates and invalid rows are skipped. Edit any cell before importing.</div>
         {hitManual.length > 0 && (
           <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-xs text-amber-800 dark:text-amber-300" data-testid="pnl-exp-manual-warning">
-            These months already have a manually entered {LABEL[type].toLowerCase()} value: {hitManual.map(k => `${k} (${fmtINR(manualMonths[k])})`).join(", ")}. Uploaded records would replace it.
+            These months already have a manually entered {LABEL[type].toLowerCase()} value: {hitManual.map(k => `${k} (${fmtINR(manualMonths[k])})`).join(", ")}. Rows for these months will be skipped unless you tick Replace.
             <label className="flex items-center gap-2 mt-1 font-semibold"><input type="checkbox" checked={replaceManual} onChange={e => setReplaceManual(e.target.checked)} data-testid="pnl-exp-replace-manual"/> Replace the manual values with uploaded records for these months</label>
           </div>
         )}
