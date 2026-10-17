@@ -1,0 +1,58 @@
+{
+  "summary": "Frontend-only E2E test of the Monthly P&L update (AUTO stock consumption, GRN purchases, Sales Invoice sales, Direct/Indirect expense record uploads, Gross Profit, comparison). Logged in as admin/admin123 on the preview URL, browser date 2026-10-17. All requested flows work and the UI values match a Python copy of computeAutoPnl (/app/tests/pnl_auto_check.py): Oct opening 68593250 (Sep's manual closing), purchase 5040192.63 from 39 GRNs, closing 91382041.08. Found 1 important business-logic issue (fake Oct profit from negative consumption when manual and AUTO months are mixed) and 1 precedence issue (expense records silently replace a manually entered expense). erp_state was snapshotted before testing and restored afterwards; the diff after restore is clean.",
+  "verified_working": [
+    "Apr–Sep 2026 manual values unchanged (Sep 73323456/37083533/68593250/49115056/1933610/2935298) with reset links; Opening AUTO badge inherits previous month's closing",
+    "Oct 2026 shows pnl-purchase-auto-2026-10 and pnl-closing-auto-2026-10; Nov–Mar show 0",
+    "Clicking the purchase AUTO badge opens pnl-grn-modal: 39 GRNs, ₹50,40,192.63 excl GST",
+    "Typing 6000000 overrides purchase (Save (1)); after save and reload the value persists with a reset link; reset returns to AUTO 5040192.63",
+    "Opening override and reset back to 68593250 work",
+    "Created direct Sales Invoice AE-2026-001 (2 x 1000 + 500 freight) dated 2026-10-17: Oct sales becomes 2500 AUTO; pnl-ps-modal lists the invoice with taxable ₹2,500",
+    "Dispatching 2 units lowers Oct AUTO closing by 420 (2 x rate 210); deleting the invoice restores sales to 0 and closing to 91382041.08",
+    "Direct xlsx upload preview shows New x3, Invalid (no date), Duplicate in file; Excel date cell, yyyy-mm-dd and dd-mm-yyyy all parse; import adds 3 records; Nov direct becomes a button '₹2,83,000 3 items'",
+    "Re-uploading the same file marks every row 'Already uploaded' and disables 'Import 0 record(s)'",
+    "Indirect CSV upload works ('60,000' parsed; amount 0 marked Invalid); Oct indirect shows ₹85,000 2 items",
+    "Records modal: Edit + Save works; validation blocks amount 0; Download gives pnl-direct-expenses-2026-11.csv with correct rows; Delete (after confirm) 3 -> 2 and the cell total updates; FY Indirect Records list works; both templates download",
+    "Data persists after page reload",
+    "P&L table: on all 12 rows Gross = Sales − Consumed − Direct, Net = Gross − Indirect, Total = Consumed + Ind + Dir; FY Total row equals the column sums",
+    "Comparison by month (Sep vs Oct) and by year (FY25-26 vs FY26-27) both show the Gross Profit metric",
+    "Negative consumed shows red 'negative — check Opening/Closing' text",
+    "Legacy Upload Stock Excel / Upload Expenses Excel buttons are present; legacy expense upload (Month/Type/Description/Amount) works and is added to new records in the same month (Dec 5000 + 7000 = 12000); trend charts render"
+  ],
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "MonthlyPnL Oct 2026 (manual Sep closing + AUTO Oct closing)", "issue": "Sep manual closing 68,593,250 carries into Oct opening, but Oct AUTO closing is the inventory valuation 91,382,041 (inventory-based Sep closing would be 86,383,777). Consumed = -17,748,598, which turns into a fake Oct Gross/Net profit of about ₹1.77 Cr, Profit % of 706627% (with sales 2500) and a big green Oct bar in the trend chart. FY 2026-27 totals are inflated by the same amount. The red warning shows, but the profit numbers stay misleading.", "selector": "[data-testid='pnl-consumed-2026-10'], [data-testid='pnl-gross-2026-10']", "priority": "HIGH"},
+      {"component": "Direct/Indirect expense precedence", "issue": "Uploading a record dated in a month that has a manual expense silently replaces the manual value. Sep direct 2,935,298 became ₹1,000 after a 1-row upload dated 2026-09-20, and Sep gross jumped from 43.66L to 73.00L. This conflicts with 'entered value wins'. Either add manual + records, or warn/confirm before replacing.", "selector": "[data-testid='pnl-direct-view-2026-09']", "priority": "MEDIUM"},
+      {"component": "Expense cell with both legacy lines and records", "issue": "Dec direct shows '₹12,000 2 items' (1 legacy line + 1 record), but clicking it opens only the records modal (1 record, ₹7,000). The legacy line cannot be reached from that cell.", "selector": "[data-testid='pnl-direct-view-2026-12']", "priority": "LOW"},
+      {"component": "Consumed / Total Expenses formatting", "issue": "Negative money is shown as '₹-1,77,48,598.45' while the profit columns use 'Loss ₹…'. Inconsistent sign format.", "selector": "[data-testid='pnl-consumed-2026-10']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Expense preview / records edit", "issues": ["Uses the native browser date input (mm/dd/yyyy) instead of the app's date component, while the Month column shows yyyy-mm"]},
+      {"screen": "Comparison by Year", "issues": ["Year Opening and Closing Stock are sums of 12 monthly values (e.g. FY25-26 opening ₹74.7 Cr). For a year they should be the first month's opening and the last month's closing (pre-existing computeYear logic)"]}
+    ]
+  },
+  "test_report_links": ["/app/tests/pnl_auto_check.py", "/app/tests/erp_full_snapshot.py"],
+  "action_items": [
+    "Decide how to handle mixed manual/AUTO months: e.g. when the previous month's closing is manual and the current closing is AUTO, use AUTO for the current opening too (or flag the gap), so a negative consumed does not show as profit; at least don't count negative consumed as profit in Gross/Net, % and charts",
+    "Expense precedence: either add manual + records, or confirm/warn before records replace an entered manual expense",
+    "When a month has both legacy lines and records, the expense cell click should show both",
+    "Format negative consumed and total expenses consistently (−₹ or a 'Negative' label)",
+    "Optional: year comparison should use the FY's first opening and last closing instead of sums"
+  ],
+  "critical_code_review_comments": [
+    "MonthlyPnL.tsx is about 1169 lines; split the stock table, P&L table, comparison and upload handlers into components",
+    "computeAutoPnl uses the browser's new Date() to pick the current month. A client clock or timezone mismatch can change which months are 'future'",
+    "moves.sort uses a.date.localeCompare; a GRN, issue or dispatch with a missing date throws and breaks the whole page. Guard with (a.date||'')",
+    "A manual value of 0 can't be entered for purchase/closing/sales because 0 means AUTO. If a month truly has 0 sales but invoices exist, it can't be overridden",
+    "Save stays enabled (Save (1)) after an override + reset returns the draft to the persisted values (no real change)",
+    "The closing AUTO badge is a <button> with no onClick (no drill-down, unlike purchase/sales)"
+  ],
+  "updated_files": ["/app/tests/erp_full_snapshot.py", "/app/tests/pnl_auto_check.py"],
+  "success_rate": {"backend": "N/A (skipped)", "frontend": "95% of requested flows pass; 2 logic issues (1 HIGH, 1 MEDIUM)"},
+  "test_credentials": "admin / admin123 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Temporary: Sales Invoice AE-2026-001 plus its dispatch (deleted via UI), TEST_ expense records Oct/Nov/Sep/Dec, legacy Dec expense lines, Oct monthlyPnl override. All removed by restoring the erp_state snapshot (/tmp/erp_full_snap.json); the diff after restore is clean.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Use `python3 /app/tests/erp_full_snapshot.py snap|diff|restore` to snapshot and restore the whole erp_state data doc. `python3 /app/tests/pnl_auto_check.py 2026-10` prints the expected AUTO opening/closing/purchase/sales for a month (it mirrors pnlAuto.ts). The login inputs are name=amrest-login-username/password; navigate by clicking the 'Monthly P&L' and 'Sales Invoice' sidebar text. Direct invoice creation: new-invoice-btn > inv-mode-direct > inv-supply-type > inv-customer-select > inv-add-item > inv-item-0/qty/rate/freight > inv-save-btn. Browser date is 2026-10-17."
+}

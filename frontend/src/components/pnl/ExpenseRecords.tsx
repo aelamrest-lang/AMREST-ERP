@@ -49,14 +49,17 @@ export const downloadExpenseTemplate = (type: ExpKind) => downloadCSV(`pnl-${typ
     : [["2026-04-01", "Rent", "Office rent", 60000], ["2026-04-10", "Electricity", "Office electricity", 25000], ["30-04-2026", "Salaries", "Admin staff salaries", 180000]]),
 ]);
 
-export function ExpenseUploadPreview({ type, rows: initial, onClose }: { type: ExpKind; rows: Draft[]; onClose: () => void }) {
+export function ExpenseUploadPreview({ type, rows: initial, onClose, manualMonths }: { type: ExpKind; rows: Draft[]; onClose: () => void; manualMonths: Record<string, number> }) {
   const { db, setDB, log } = useStore();
   const [rows, setRows] = useState(initial);
+  const [replaceManual, setReplaceManual] = useState(false);
+  const hitManual = [...new Set(rows.map(r => r.date.slice(0, 7)).filter(k => k in manualMonths))].sort();
   const existing = useMemo(() => new Set(expenseRecords(db.settings).map(expKey)), [db.settings]);
   const status = (r: Draft, idx: number) => {
     if (!r.date || !r.category || !(r.amount > 0)) return "invalid";
     if (existing.has(expKey(r))) return "duplicate";
     if (rows.slice(0, idx).some(x => expKey(x) === expKey(r))) return "dup-in-file";
+    if (!replaceManual && r.date.slice(0, 7) in manualMonths) return "manual-kept";
     return "new";
   };
   const fresh = rows.filter((r, i) => status(r, i) === "new");
@@ -72,6 +75,12 @@ export function ExpenseUploadPreview({ type, rows: initial, onClose }: { type: E
     <Modal open onClose={onClose} title={`Preview Upload — ${LABEL[type]}`} size="xl">
       <div className="space-y-3" data-testid="pnl-exp-preview">
         <div className="text-xs text-slate-500">{rows.length} rows · <b className="text-emerald-600">{fresh.length} new</b> · duplicates and invalid rows are skipped. Edit any cell before importing.</div>
+        {hitManual.length > 0 && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-xs text-amber-800 dark:text-amber-300" data-testid="pnl-exp-manual-warning">
+            These months already have a manually entered {LABEL[type].toLowerCase()} value: {hitManual.map(k => `${k} (${fmtINR(manualMonths[k])})`).join(", ")}. Uploaded records would replace it.
+            <label className="flex items-center gap-2 mt-1 font-semibold"><input type="checkbox" checked={replaceManual} onChange={e => setReplaceManual(e.target.checked)} data-testid="pnl-exp-replace-manual"/> Replace the manual values with uploaded records for these months</label>
+          </div>
+        )}
         <div className="max-h-[440px] overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700">
           <Table>
             <thead className="sticky top-0 bg-white dark:bg-slate-900"><tr><Th>Date</Th><Th>Month</Th><Th>Expense Category</Th><Th>Description</Th><Th className="text-right">Amount</Th><Th>Status</Th><Th></Th></tr></thead>
@@ -82,7 +91,7 @@ export function ExpenseUploadPreview({ type, rows: initial, onClose }: { type: E
                 <Td><Input value={r.category} onChange={(e: any) => upd(r.key, { category: e.target.value })} className="!py-1 h-8"/></Td>
                 <Td><Input value={r.description} onChange={(e: any) => upd(r.key, { description: e.target.value })} className="!py-1 h-8"/></Td>
                 <Td><Input type="number" value={r.amount} onChange={(e: any) => upd(r.key, { amount: Number(e.target.value) || 0 })} className="!py-1 h-8 w-28 text-right"/></Td>
-                <Td><Badge color={st === "new" ? "green" : st === "invalid" ? "red" : "yellow"}>{st === "new" ? "New" : st === "invalid" ? "Invalid" : st === "duplicate" ? "Already uploaded" : "Duplicate in file"}</Badge></Td>
+                <Td><Badge color={st === "new" ? "green" : st === "invalid" ? "red" : "yellow"}>{st === "new" ? "New" : st === "invalid" ? "Invalid" : st === "duplicate" ? "Already uploaded" : st === "manual-kept" ? "Skipped · manual value kept" : "Duplicate in file"}</Badge></Td>
                 <Td><button type="button" className="text-xs text-rose-600 hover:underline" onClick={() => setRows(rs => rs.filter(x => x.key !== r.key))}>Remove</button></Td>
               </tr>); })}</tbody>
           </Table>
@@ -96,7 +105,7 @@ export function ExpenseUploadPreview({ type, rows: initial, onClose }: { type: E
   );
 }
 
-export function ExpenseRecordsModal({ type, monthKeys, month, onClose }: { type: ExpKind; monthKeys: string[]; month?: string; onClose: () => void }) {
+export function ExpenseRecordsModal({ type, monthKeys, month, onClose, legacyTotal = 0, onLegacy }: { type: ExpKind; monthKeys: string[]; month?: string; onClose: () => void; legacyTotal?: number; onLegacy?: () => void }) {
   const { db, setDB, log } = useStore();
   const [edit, setEdit] = useState<ExpenseRecord | null>(null);
   const [err, setErr] = useState("");
@@ -116,6 +125,7 @@ export function ExpenseRecordsModal({ type, monthKeys, month, onClose }: { type:
     <Modal open onClose={onClose} title={`${LABEL[type]} Records${month ? ` — ${month}` : " — FY"}`} size="xl">
       <div className="space-y-3" data-testid="pnl-exp-records-modal">
         <div className="flex items-center justify-between text-sm"><span>{list.length} record(s) · <b className="text-emerald-600">{fmtINR(total)}</b></span><Button variant="outline" size="sm" onClick={download} disabled={!list.length} data-testid="pnl-exp-records-download">Download</Button></div>
+        {legacyTotal > 0 && <div className="text-xs text-slate-600 dark:text-slate-300">Plus {fmtINR(legacyTotal)} from older Month/Type uploads · <button type="button" className="text-indigo-600 hover:underline" onClick={onLegacy} data-testid="pnl-exp-legacy-link">view older line items</button></div>}
         {err && <div className="text-xs text-rose-600">{err}</div>}
         <div className="max-h-[440px] overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700">
           <Table>

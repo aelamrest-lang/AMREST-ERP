@@ -157,27 +157,31 @@ export function MonthlyPnL() {
   };
 
   type Src = "lines" | "manual" | "auto" | "records";
-  type EffRow = PnlRow & { opening: number; resolvedOpening: number; isOpeningAuto: boolean; src: Record<"opening" | "purchase" | "closing" | "sales" | "indirect" | "direct", Src> };
+  type EffRow = PnlRow & { opening: number; resolvedOpening: number; isOpeningAuto: boolean; basisSwitch: boolean; src: Record<"opening" | "purchase" | "closing" | "sales" | "indirect" | "direct", Src> };
   // Entered values (uploaded lines / manual) win; otherwise auto from Inventory, GRN and Sales Invoice.
   const effectiveRows = (fyStart: number): EffRow[] => {
     const auto = autoFor(fyStart);
     let prevClosing = 0;
+    let prevClosingAuto = true;
     return fyKeys(fyStart).map((m, i) => {
       const r = rawRow(m.key);
       const a = auto[m.key];
       const pick = (type: StockType, manual: number, autoVal: number): [number, Src] =>
         hasLines(m.key, type) ? [sumLines(m.key, type), "lines"] : manual > 0 ? [manual, "manual"] : [autoVal, "auto"];
-      const [opening, so] = hasLines(m.key, "opening") ? [sumLines(m.key, "opening"), "lines" as Src]
-        : r.opening !== null ? [r.opening as number, "manual" as Src] : [a.future ? 0 : i === 0 ? a.opening : prevClosing, "auto" as Src];
       const [purchase, sp] = pick("purchase", r.purchase, a.purchase);
       const [closing, sc] = pick("closing", r.closing, a.closing);
+      // When the previous closing was entered manually but this month's closing is AUTO, use the inventory-based opening so both sides share one valuation basis.
+      const basisSwitch = i > 0 && !a.future && sc === "auto" && !prevClosingAuto;
+      const [opening, so] = hasLines(m.key, "opening") ? [sumLines(m.key, "opening"), "lines" as Src]
+        : r.opening !== null ? [r.opening as number, "manual" as Src] : [a.future ? 0 : (i === 0 || basisSwitch) ? a.opening : prevClosing, "auto" as Src];
       const [sales, ss]: [number, Src] = r.sales > 0 ? [r.sales, "manual"] : [a.sales, "auto"];
       const exp = (type: ExpType, manual: number): [number, Src] =>
         (hasExpLines(m.key, type) || recCount(m.key, type)) ? [sumExpLines(m.key, type) + recSum(m.key, type), "records"] : [manual, "manual"];
       const [indirect, si] = exp("indirect", r.indirect);
       const [direct, sd] = exp("direct", r.direct);
       prevClosing = closing;
-      return { key: m.key, opening, resolvedOpening: opening, isOpeningAuto: so === "auto", purchase, closing, sales, indirect, direct,
+      prevClosingAuto = sc === "auto";
+      return { key: m.key, opening, resolvedOpening: opening, isOpeningAuto: so === "auto", basisSwitch: basisSwitch && so === "auto", purchase, closing, sales, indirect, direct,
         src: { opening: so, purchase: sp, closing: sc, sales: ss, indirect: si, direct: sd } };
     });
   };
@@ -496,9 +500,13 @@ export function MonthlyPnL() {
 
   const computeYear = (fyStart: number) => {
     const agg = { opening: 0, purchase: 0, closing: 0, consumed: 0, sales: 0, indirect: 0, direct: 0, totalExp: 0, gross: 0, profit: 0, profitPct: 0 };
-    effectiveRows(fyStart).forEach(r => {
+    const rowsY = effectiveRows(fyStart);
+    const withData = rowsY.filter(r => r.opening || r.closing || r.purchase);
+    agg.opening = rowsY[0]?.opening || 0;
+    agg.closing = withData[withData.length - 1]?.closing || 0;
+    rowsY.forEach(r => {
       const d = derive(r.opening, r);
-      agg.opening += r.opening; agg.purchase += r.purchase; agg.closing += r.closing; agg.consumed += d.consumed;
+      agg.purchase += r.purchase; agg.consumed += d.consumed;
       agg.sales += r.sales; agg.indirect += r.indirect; agg.direct += r.direct; agg.totalExp += d.totalExp; agg.gross += d.gross; agg.profit += d.profit;
     });
     agg.profitPct = agg.sales > 0 ? (agg.profit / agg.sales) * 100 : 0;
@@ -678,7 +686,7 @@ export function MonthlyPnL() {
                           />
                         )}
                         {!hasLines(m.key, "opening") && r.isOpeningAuto && r.resolvedOpening > 0 && (
-                          <span className="text-[9px] font-semibold text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 px-1 rounded" title="Auto-carried from previous month's Closing Stock">AUTO</span>
+                          <span className={"text-[9px] font-semibold px-1 rounded " + (r.basisSwitch ? "text-amber-700 bg-amber-50 dark:bg-amber-900/30" : "text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30")} title={r.basisSwitch ? `Inventory valuation on the 1st. Previous month's entered closing (${fmtINR(resolved[i - 1]?.closing || 0)}) differs, so the inventory-based value is used to keep this month's consumption accurate. Type a value to override.` : "Auto-carried from previous month's Closing Stock"} data-testid={`pnl-open-auto-${m.key}`}>{r.basisSwitch ? "AUTO · INV" : "AUTO"}</span>
                         )}
                         {!hasLines(m.key, "opening") && !r.isOpeningAuto && (
                           <button
@@ -730,7 +738,7 @@ export function MonthlyPnL() {
                       )}
                     </Td>
                     <Td className={"text-right font-semibold " + (d.consumed < 0 ? "text-rose-600" : "text-indigo-600")} data-testid={`pnl-consumed-${m.key}`}>
-                      {fmtINR(d.consumed)}
+                      {d.consumed < 0 ? `-${fmtINR(Math.abs(d.consumed))}` : fmtINR(d.consumed)}
                       {d.consumed < 0 && <div className="text-[9px] font-normal" title="Closing stock is higher than Opening + Purchases. Usually an entered Opening/Closing does not match the inventory-based AUTO value.">negative — check Opening/Closing</div>}
                     </Td>
                   </tr>
@@ -1161,8 +1169,11 @@ export function MonthlyPnL() {
         })()}
       </Modal>
 
-      {expPreview && <ExpenseUploadPreview type={expPreview.type} rows={expPreview.rows} onClose={() => setExpPreview(null)}/>}
-      {expRecView && <ExpenseRecordsModal type={expRecView.type} month={expRecView.month} monthKeys={months.map(m => m.key)} onClose={() => setExpRecView(null)}/>}
+      {expPreview && <ExpenseUploadPreview type={expPreview.type} rows={expPreview.rows} onClose={() => setExpPreview(null)}
+        manualMonths={Object.fromEntries(Object.keys(persisted).filter(k => Number(persisted[k]?.[expPreview.type]) > 0 && !hasExpLines(k, expPreview.type) && !recCount(k, expPreview.type)).map(k => [k, Number(persisted[k][expPreview.type])]))}/>}
+      {expRecView && <ExpenseRecordsModal type={expRecView.type} month={expRecView.month} monthKeys={months.map(m => m.key)} onClose={() => setExpRecView(null)}
+        legacyTotal={expRecView.month ? sumExpLines(expRecView.month, expRecView.type) : 0}
+        onLegacy={() => { const v = expRecView; setExpRecView(null); setViewExpLines({ month: v.month!, type: v.type }); }}/>}
     </div>
   );
 }
