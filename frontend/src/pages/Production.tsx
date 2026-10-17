@@ -681,6 +681,17 @@ export function ProductionDashboard() {
   const [entryJobId, setEntryJobId] = useState(db.jobCards[0]?.id || "");
   const [entryStage, setEntryStage] = useState<ProductionStage>(STAGES[0]);
   const [stageDetails, setStageDetails] = useState<{ jcId: string; stage: ProductionStage } | null>(null);
+  const entryAgg = useMemo(() => {
+    const m = new Map<string, { done: number; count: number }>();
+    db.productionEntries.forEach(e => { const k = `${e.jobCardId}|${e.stage}`; const r = m.get(k) || { done: 0, count: 0 }; r.done += Number(e.todayQty) || 0; r.count += 1; m.set(k, r); });
+    return m;
+  }, [db.productionEntries]);
+  const stageProgress = (j: (typeof db.jobCards)[0]) => Object.fromEntries(j.stages.map(s => {
+    const target = j.stageQuantities?.find(r => r.stage === s.stage)?.totalQty ?? j.qty;
+    const a = entryAgg.get(`${j.id}|${s.stage}`) || { done: 0, count: 0 };
+    const pct = target > 0 ? Math.min(100, Math.round(a.done / target * 100)) : 0;
+    return [s.stage, { target, done: a.done, count: a.count, balance: Math.max(0, target - a.done), pct }];
+  })) as Record<string, { target: number; done: number; count: number; balance: number; pct: number }>;
   const [editEntry, setEditEntry] = useState<ProductionEntry | null>(null);
   const [editEntryForm, setEditEntryForm] = useState<Partial<ProductionEntry>>({});
   const [editEntryNote, setEditEntryNote] = useState<string>("");
@@ -966,7 +977,7 @@ export function ProductionDashboard() {
       </Card>
 
       <div className="space-y-3">
-        {inProg.map(j => (
+        {inProg.map(j => { const prog = stageProgress(j); return (
           <div key={j.id} id={`jc-${j.id}`} className="rounded-xl transition-shadow scroll-mt-4">
           <Card>
             <div className="p-4">
@@ -998,13 +1009,34 @@ export function ProductionDashboard() {
                     title="View stage details & history"
                     data-testid={`stage-details-${j.id}-${s.stage}`}
                   >Details</button>
+                  {(() => {
+                    const pr = prog[s.stage];
+                    const done = (pr.target > 0 && pr.done >= pr.target) || (s.status === "done" && pr.count === 0);
+                    const started = pr.done > 0 || s.status === "in-progress";
+                    const bar = done ? "bg-emerald-500" : started ? "bg-amber-400" : "bg-slate-300 dark:bg-slate-600";
+                    const label = done ? "Completed" : started ? "In Progress" : "Not Started";
+                    return (
+                      <button type="button" onClick={() => setStageDetails({ jcId: j.id, stage: s.stage })}
+                        className="w-full mt-1 text-left px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:border-indigo-400 bg-white dark:bg-slate-900"
+                        title={`${j.number} · ${s.stage} — click for production history`} data-testid={`stage-progress-${j.id}-${s.stage}`}>
+                        <div className="flex items-center justify-between text-[10px] text-slate-500">
+                          <span className="truncate"><b className="text-slate-700 dark:text-slate-200">{j.number.split(" - ")[0]}</b> · {s.stage}</span>
+                          <b className={done ? "text-emerald-600" : started ? "text-amber-600" : "text-slate-400"} data-testid={`stage-progress-pct-${j.id}-${s.stage}`}>{pr.pct}%</b>
+                        </div>
+                        <div className="h-2 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden my-1"><div className={`h-full ${bar} transition-[width] duration-500`} style={{ width: `${pr.pct}%` }}/></div>
+                        <div className="flex justify-between text-[10px] text-slate-500">
+                          <span>Total {fmt2(pr.target)}</span><span>Done {fmt2(pr.done)} ({pr.count})</span><span>Bal {fmt2(pr.balance)}</span><span className={done ? "text-emerald-600" : started ? "text-amber-600" : "text-slate-400"}>{label}</span>
+                        </div>
+                      </button>
+                    );
+                  })()}
                   </div>
                 ))}
               </div>
             </div>
           </Card>
           </div>
-        ))}
+        ); })}
         {inProg.length === 0 && <Card><Empty title="No active production" subtitle="Create a job card to start"/></Card>}
       </div>
 
