@@ -34,7 +34,7 @@ export function Inventory() {
       case "date": return { to: pickDate || t };
       case "month": return { from: isoD(new Date(now.getFullYear(), now.getMonth(), 1)), to: t };
       case "lastmonth": return { from: isoD(new Date(now.getFullYear(), now.getMonth() - 1, 1)), to: isoD(new Date(now.getFullYear(), now.getMonth(), 0)) };
-      case "range": return { from: rangeFrom || undefined, to: rangeTo || t };
+      case "range": { const to = rangeTo || t; const from = rangeFrom || undefined; return from && from > to ? { from: to, to: from } : { from, to }; }
       default: return { to: t };
     }
   }, [dateMode, pickDate, rangeFrom, rangeTo]) as { from?: string; to: string };
@@ -273,6 +273,7 @@ export function Inventory() {
           <span className="text-xs text-slate-400">to</span>
           <Input type="date" className="!w-44" value={rangeTo} max={todayISO()} onChange={(e: any) => setRangeTo(e.target.value)} data-testid="inv-date-to"/>
         </>}
+        {dateMode === "range" && !rangeFrom && <span className="text-xs text-amber-600" data-testid="inv-range-hint">Pick a From date to see movements</span>}
         <span className="text-xs text-slate-500 ml-1" data-testid="inv-asof-label">{isLive ? "Live stock (today)" : period.from ? `Movements ${period.from} → ${asOf} · closing as of ${asOf}` : `Closing stock as of ${asOf}`}</span>
       </div>
       {!isLive && <div className="rounded-lg border border-indigo-200 dark:border-indigo-900 bg-indigo-50 dark:bg-indigo-950/30 px-3 py-2 text-xs text-indigo-800 dark:text-indigo-300" data-testid="inv-historical-banner">

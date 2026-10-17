@@ -1,0 +1,32 @@
+{
+  "summary": "Frontend-only test of Inventory historical stock-by-date filter + Monthly P&L AUTO alignment and iteration_13 small fixes. Every requested check passed. All UI numbers matched an independent Python version of the ledger logic built from Mongo erp_state (/app/tests/inv_history_check.py). Today: 1432 items, ₹8,95,51,062.11, 220 low stock, held 248986.21. Yesterday (2026-10-16): same numbers, which is correct because the latest movement is dated 2026-10-14. 2026-09-30: ₹8,45,50,327.43, 253 low, held 195208.41. 2026-09-01: ₹6,03,86,036.57, 310 low, held 0. 2026-04-01: ₹5,85,09,625.44, 338 low, held 0. Item-level checks: Paper Sandwich 39.57 now -> 50.00 on 09-30; Core 61x83 1337 -> 1137; Alu Cap 150 -> 50. Range modes: Opening (day before) / Stock In / Stock Out columns render, and Opening + In − Out = Closing for all 1432 rows in This Month, Last Month and Custom range 2026-09-15→2026-10-05. Category values on 09-30 add up: RM 7,68,01,967.43 + SFG 63,68,360 + FG 13,80,000 = card total. The value view breakdown strip matches the card. Valuation rows sum to 84550327.48, a 5-paise rounding difference. Low view counts match (253 all / 57 SFG). Export CSV is historical (sum 84550327.44; Paper Sandwich 49.998). Template / Excel Upload / Sync Stock are hidden in historical view, Export is shown, the banner and as-of label are correct, and there were no page errors. Monthly P&L: Oct opening is AUTO·INV ₹84550327.43 (= Inventory 09-30) and Oct closing AUTO is ₹89551062.11 (= today). After resetting Sep closing in draft, Sep closing AUTO is ₹84550327.43 and Sep opening is AUTO·INV ₹60386036.57 (= Inventory 08-31). Oct consumed ₹39,457.96 = opening + purchase − closing. Negative-money check (draft Nov closing 999999999): '-₹' appears in the Stock Consumption cell and Totals, and in the P&L table Consumed, Total Expenses and FY Total. The AUTO·INV badge stays on one line. The expense preview manual-value warning text is correct. Nothing was saved; the snapshot diff shows only activity logs changed.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Inventory Custom Date Range", "issue": "No check that From is on or before To when the date is typed. If From > To, the stock moves are empty but Opening (From−1) differs from Closing (To), so Opening + In − Out ≠ Closing. Also, with From left empty the view quietly falls back to 'Live stock (today)' with no flow columns and no hint.", "selector": "[data-testid=inv-date-from]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Inventory date filter", "issues": ["Select Date and Custom Range use the browser's native date picker (<input type=date>), not the shadcn Calendar/Popover. The look differs across browsers."]}
+    ]
+  },
+  "test_report_links": ["/app/tests/inv_history_check.py"],
+  "action_items": [
+    "(Logic, medium) Historical stock can go negative. 70 items are negative on 2026-04-01, 43 on 2026-09-01 and 4 even today (e.g. Paper Sandwich 4 mil 122 mm is -28.36 on 2026-09-14). Cause: stock set via Item Master edit or Inventory Excel upload is not a dated movement, so reversing later issues goes below zero. Negative qty × rate then lowers the historical Stock Value and the P&L Opening/Closing. Consider clamping to 0 in stockValueAsOf / display, or recording uploads/edits as dated adjustment moves. The old pnl_auto_check.py clamped with max(0, …).",
+    "(Logic, low) Held Inventory as of a past date still uses the job card's current status. A job card that was active on that date but is Completed today is left out of past held totals. It also ignores reservations added after the date. No completion date is stored, so this can't be rebuilt exactly; at least document it in the banner.",
+    "(Low) Validate From ≤ To in Custom Date Range, and show a hint when From is empty."
+  ],
+  "critical_code_review_comments": [
+    "stockHistory.ts stockAsOf relies on moves sorted newest-first and stops at the first move dated on or before the cutoff. This is correct, and moves with an empty date sort last so they count as oldest.",
+    "Inventory.tsx keeps two copies of the last-3-purchase average: lastPurchaseRates for live and rateAsOf for historical. Live could just call rateAsOf(i, ledger, todayISO()) to stay DRY. Results only differ if a GRN is dated in the future.",
+    "Moves for deleted items (3 item IDs with GRN/Issue lines) are ignored. That is fine, but it explains small differences in counts between the Python and UI checks.",
+    "MonthlyPnL.tsx is 1180 lines (>700); consider splitting it."
+  ],
+  "updated_files": ["/app/tests/inv_history_check.py (new test helper only)"],
+  "success_rate": {"backend": "N/A (skipped)", "frontend": "100% of requested checks"},
+  "test_credentials": "admin / admin123 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None. The P&L edits (Sep closing reset, Nov closing 999999999) and the expense preview were draft-only or cancelled and never saved. The snapshot diff shows only activity logs changed.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Use `python3 /app/tests/inv_history_check.py sum <dates...>` for the expected Inventory value / low / held per date and per category. `item <date>` gives sample item historical qty; `range <from> <to>` gives open/in/out/close. Expected values: today ₹89551062.11, 09-30 ₹84550327.43, 08-31 and 09-01 ₹60386036.57, 04-01 ₹58509625.44. Login: inputs name=amrest-login-username / amrest-login-password. Sidebar: aside text 'Inventory' and 'Monthly P&L'. Browser date is 2026-10-17. The Sep closing manual value is 68593250, which makes Oct opening AUTO·INV. Snapshot: python3 /app/tests/erp_full_snapshot.py snap|diff|restore."
+}
