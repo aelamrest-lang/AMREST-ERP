@@ -11,7 +11,8 @@ export function Inventory() {
   const canExport = userCan(currentUser, "inventory", "export");
   const canUpload = currentUser?.role === "admin";
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<"all" | "low" | "raw" | "semi" | "fg">("all");
+  const [filter, setFilter] = useState<"all" | "raw" | "semi" | "fg">("all");
+  const [view, setView] = useState<"all" | "value" | "low">("all");
   const [heldSearch, setHeldSearch] = useState("");
   const [heldType, setHeldType] = useState<"all" | "Raw Material" | "Semi-Finished" | "Finished Goods">("all");
   const [uploadMessage, setUploadMessage] = useState("");
@@ -24,15 +25,15 @@ export function Inventory() {
   const arrow = (k: string) => sortKey === k ? (sortDir === "desc" ? " ▼" : " ▲") : " ↕";
   const statusRank: Record<string, number> = { "Healthy": 0, "Reorder Soon": 1, "Below Buffer": 2, "Over-Committed": 3 };
 
+  const CAT: Record<string, string> = { raw: "Raw Material", semi: "Semi-Finished", fg: "Finished Goods" };
+  const catItems = useMemo(() => filter === "all" ? db.items : db.items.filter(i => i.category === CAT[filter]), [db.items, filter]); // eslint-disable-line react-hooks/exhaustive-deps
   const items = useMemo(() => {
-    let arr = db.items.slice();
-    if (filter === "low") arr = arr.filter(i => i.currentStock <= i.minStock);
-    if (filter === "raw") arr = arr.filter(i => i.category === "Raw Material");
-    if (filter === "semi") arr = arr.filter(i => i.category === "Semi-Finished");
-    if (filter === "fg") arr = arr.filter(i => i.category === "Finished Goods");
+    let arr = catItems.slice();
+    if (view === "low") arr = arr.filter(i => i.currentStock <= i.minStock);
+    if (view === "value") arr = arr.filter(i => i.currentStock !== 0);
     if (search) arr = arr.filter(i => i.name.toLowerCase().startsWith(search.toLowerCase().trim()));
     return arr;
-  }, [db.items, filter, search]);
+  }, [catItems, view, search]);
 
   const lastPurchaseRates = useMemo(() => {
     const rows: Record<string, { date: string; rate: number }[]> = {};
@@ -56,8 +57,13 @@ export function Inventory() {
     return lastPurchaseRates[i.id]?.avg ?? i.purchaseRate;
   };
 
-  const totalValue = db.items.reduce((s, i) => s + i.currentStock * unitCost(i), 0);
-  const lowCount = db.items.filter(i => i.currentStock <= i.minStock).length;
+  const totalValue = catItems.reduce((s, i) => s + i.currentStock * unitCost(i), 0);
+  const lowCount = catItems.filter(i => i.currentStock <= i.minStock).length;
+  const catLabel = filter === "all" ? "All Items" : CAT[filter];
+  const catBreakdown = ["Raw Material", "Semi-Finished", "Finished Goods"].filter(c => filter === "all" || c === CAT[filter]).map(c => {
+    const list = db.items.filter(i => i.category === c && i.currentStock !== 0);
+    return { c, count: list.length, qty: list.reduce((s, i) => s + i.currentStock, 0), value: list.reduce((s, i) => s + i.currentStock * unitCost(i), 0) };
+  });
   const allHeldRows = useMemo(() => {
     const rows = db.jobCards.flatMap(j => j.reservedItems.map(r => {
       const item = db.items.find(i => i.id === r.itemId);
@@ -94,7 +100,7 @@ export function Inventory() {
       const status = item.currentStock <= item.minStock ? "Below Buffer" : item.currentStock <= item.reorderLevel ? "Reorder Soon" : "Healthy";
       return { item, hold, required, totalStock, status };
     });
-    if (!sortKey) return rows;
+    if (!sortKey) return view === "value" ? rows.slice().sort((a, b) => b.totalStock * unitCost(b.item) - a.totalStock * unitCost(a.item)) : rows;
     const val = (r: typeof rows[0]) => {
       switch (sortKey) {
         case "current": return r.totalStock;
@@ -107,7 +113,7 @@ export function Inventory() {
     };
     const sign = sortDir === "desc" ? -1 : 1;
     return rows.slice().sort((a, b) => sign * ((val(a) as number) - (val(b) as number)));
-  }, [items, heldByItem, sortKey, sortDir]);
+  }, [items, heldByItem, sortKey, sortDir, view]); // eslint-disable-line react-hooks/exhaustive-deps
   const heldRows = useMemo(() => {
     return allHeldRows.filter(r => {
       const text = `${r.jobCardNumber} ${r.item?.name || ""}`.toLowerCase();
@@ -228,9 +234,14 @@ export function Inventory() {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <KPI label="Total Items" value={String(db.items.length)} color="indigo" icon={<IconBox size={22}/>} />
-        <KPI label="Stock Value" value={fmtINR(totalValue)} color="emerald" icon={<IconBox size={22}/>} hint="RM: avg last 3 purchases · FG: sale price"/>
-        <KPI label="Low Stock" value={String(lowCount)} color="rose" icon={<IconRefresh size={22}/>} />
+        {([
+          ["all", <KPI label={`Total Items · ${catLabel}`} value={String(catItems.length)} color="indigo" icon={<IconBox size={22}/>} hint="click to list all items" />],
+          ["value", <KPI label={`Stock Value · ${catLabel}`} value={fmtINR(totalValue)} color="emerald" icon={<IconBox size={22}/>} hint="RM/SFG: avg last 3 purchases · FG: sale price"/>],
+          ["low", <KPI label={`Low Stock · ${catLabel}`} value={String(lowCount)} color="rose" icon={<IconRefresh size={22}/>} hint="stock ≤ minimum" />],
+        ] as const).map(([k, el]) => (
+          <button key={k} type="button" onClick={() => setView(k)} data-testid={`inv-kpi-${k}`}
+            className={"text-left rounded-xl transition-shadow " + (view === k ? "ring-2 ring-indigo-500 shadow-md" : "hover:ring-2 hover:ring-indigo-200 dark:hover:ring-indigo-900")}>{el}</button>
+        ))}
         <KPI label="Held Inventory" value={fmt2(activeHeldQty)} color="amber" icon={<IconClipboard size={22}/>} hint="active job holds" />
       </div>
 
@@ -240,8 +251,8 @@ export function Inventory() {
             <IconSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
             <Input className="pl-9" placeholder="Search items by starting letters (e.g. A, Co, Lu)..." value={search} onChange={(e: any) => setSearch(e.target.value)} data-testid="inventory-search"/>
           </div>
-          <Select value={filter} onChange={(e: any) => setFilter(e.target.value)} className="w-44">
-            <option value="all">All Items</option><option value="low">Low Stock</option><option value="raw">Raw Material</option><option value="semi">Semi-Finished</option><option value="fg">Finished Goods</option>
+          <Select value={filter} onChange={(e: any) => setFilter(e.target.value)} className="w-52" data-testid="inv-category-filter">
+            <option value="all">All Items</option><option value="raw">Raw Material</option><option value="semi">Semi-Finished Goods (SFG)</option><option value="fg">Finished Goods (FG)</option>
           </Select>
           {canUpload && <Button variant="outline" onClick={downloadUploadTemplate}><IconDownload size={14}/> Template</Button>}
           {canUpload && (
@@ -260,6 +271,14 @@ export function Inventory() {
           )}
           {canExport && <Button variant="outline" onClick={exportCSV}><IconDownload size={14}/> Export</Button>}
           {canUpload && <Button variant="outline" onClick={reconcileSfgStock} title="Recompute SFG item stock from the SFG production/consumption ledger and fix any mismatch" data-testid="sync-stock-btn"><IconRefresh size={14}/> Sync Stock</Button>}
+        </div>
+        <div className="px-4 py-2 border-b border-slate-100 dark:border-slate-800 flex flex-wrap items-center gap-2 text-xs" data-testid="inv-view-strip">
+          <span className="text-slate-500">Showing:</span>
+          <Badge color={view === "low" ? "red" : view === "value" ? "green" : "blue"}>{view === "low" ? "Low Stock" : view === "value" ? "Stock Valuation" : "All Items"} · {catLabel} · {items.length}</Badge>
+          {view !== "all" && <button type="button" className="text-indigo-600 hover:underline" onClick={() => setView("all")} data-testid="inv-view-clear">Show all</button>}
+          {view === "value" && catBreakdown.map(b => (
+            <span key={b.c} className="ml-2 rounded-md border border-slate-200 dark:border-slate-700 px-2 py-0.5" data-testid={`inv-value-${b.c.replace(/\s+/g, "-").toLowerCase()}`}>{b.c}: {b.count} items · {fmt2(b.qty)} qty · <b className="text-emerald-600">{fmtINR(b.value)}</b></span>
+          ))}
         </div>
         {canUpload && uploadMessage && <div className="px-4 py-2 text-xs border-b border-slate-100 dark:border-slate-800 text-slate-600 dark:text-slate-300">{uploadMessage}</div>}
         <div className="px-4 py-3 border-b border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/20 flex items-center justify-between gap-3 flex-wrap text-sm">
