@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { Item } from "../lib/types";
 import { Input } from "./ui";
 import { IconSearch } from "./icons";
@@ -17,7 +18,7 @@ export function FinishedGoodCombobox({ items, value, onPick, placeholder = "Sear
   const [query, setQuery] = useState("");
   const [highlight, setHighlight] = useState(0);
   const wrapRef = useRef<HTMLDivElement>(null);
-  const [popupPos, setPopupPos] = useState<{ top: number; left: number; width: number }>({ top: 0, left: 0, width: 0 });
+  const [popupPos, setPopupPos] = useState<{ top?: number; bottom?: number; left: number; width: number; maxHeight: number }>({ top: 0, left: 0, width: 0, maxHeight: 288 });
   const displayText = open ? query : (value || "");
 
   const filtered = useMemo(() => {
@@ -32,14 +33,25 @@ export function FinishedGoodCombobox({ items, value, onPick, placeholder = "Sear
   const recomputePos = () => {
     const el = wrapRef.current;
     if (!el) return;
-    const r = el.getBoundingClientRect();
-    setPopupPos({ top: r.bottom + 4, left: r.left, width: r.width });
+    const r = el.querySelector("input")!.getBoundingClientRect();
+    // Keep the list inside the nearest scrolling container (the modal body) and the viewport.
+    let p: HTMLElement | null = el.parentElement, bTop = 0, bBottom = window.innerHeight;
+    while (p && p !== document.body) {
+      const st = getComputedStyle(p);
+      if (/(auto|scroll)/.test(st.overflowY) && p.scrollHeight > p.clientHeight) { const b = p.getBoundingClientRect(); bTop = Math.max(0, b.top); bBottom = Math.min(window.innerHeight, b.bottom); break; }
+      p = p.parentElement;
+    }
+    const gap = 4, ideal = 288, below = bBottom - r.bottom - gap - 8, above = r.top - bTop - gap - 8;
+    const width = Math.max(r.width, 280);
+    const left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8));
+    if (below >= Math.min(ideal, 160) || below >= above) setPopupPos({ top: r.bottom + gap, left, width, maxHeight: Math.max(120, Math.min(ideal, below)) });
+    else setPopupPos({ bottom: window.innerHeight - r.top + gap, left, width, maxHeight: Math.max(120, Math.min(ideal, above)) });
   };
 
   useLayoutEffect(() => {
     if (!open) return;
     recomputePos();
-  }, [open]);
+  }, [open, filtered.length]);
 
   useEffect(() => {
     if (!open) return;
@@ -96,10 +108,12 @@ export function FinishedGoodCombobox({ items, value, onPick, placeholder = "Sear
           data-testid={testId}
         />
       </div>
-      {open && (
+      {open && createPortal(
         <div
-          className="fixed z-[100] max-h-72 overflow-auto rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg"
-          style={{ top: popupPos.top, left: popupPos.left, width: popupPos.width }}
+          className="fixed z-[1000] overflow-auto rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-xl"
+          style={{ top: popupPos.top, bottom: popupPos.bottom, left: popupPos.left, width: popupPos.width, maxHeight: popupPos.maxHeight }}
+          onMouseDown={e => e.preventDefault()}
+          data-testid={testId ? `${testId}-dropdown` : undefined}
         >
           {filtered.length === 0 && !onCreateNew && <div className="p-3 text-sm text-slate-500">No finished goods match “{query}”.</div>}
           {filtered.length === 0 && onCreateNew && (
@@ -143,7 +157,8 @@ export function FinishedGoodCombobox({ items, value, onPick, placeholder = "Sear
               + Create new finished good{query.trim() ? ` "${query.trim()}"` : "..."}
             </button>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
