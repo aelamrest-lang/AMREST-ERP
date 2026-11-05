@@ -6,6 +6,7 @@ import { IconPlus, IconEdit, IconTrash, IconFactory, IconCheck, IconPrint, IconS
 import { fmtINR, fmt2, nextNumber, printArea, professionalDocument, todayISO } from "../lib/utils";
 import { userCan } from "../lib/permissions";
 import { applySfgProduction, applySfgAutoConsumption } from "../lib/sfg";
+import { DailyReportModal } from "../components/production/DailyReportModal";
 
 const STAGES: ProductionStage[] = ["LV Winding", "HV Winding", "Primary Winding", "Secondary Winding 1", "Secondary Winding 2", "Secondary Winding 3", "Core Coil Assembly", "Tanking", "Finishing", "Testing Ready", "Dispatch Ready"];
 const STAGE_MULTIPLIERS: Record<string, number> = {
@@ -681,6 +682,7 @@ export function ProductionDashboard() {
   const [entryJobId, setEntryJobId] = useState(db.jobCards[0]?.id || "");
   const [entryStage, setEntryStage] = useState<ProductionStage>(STAGES[0]);
   const [stageDetails, setStageDetails] = useState<{ jcId: string; stage: ProductionStage } | null>(null);
+  const [dailyReportOpen, setDailyReportOpen] = useState(false);
   const entryAgg = useMemo(() => {
     const m = new Map<string, { done: number; count: number }>();
     db.productionEntries.forEach(e => { const k = `${e.jobCardId}|${e.stage}`; const r = m.get(k) || { done: 0, count: 0 }; r.done += Number(e.todayQty) || 0; r.count += 1; m.set(k, r); });
@@ -894,7 +896,7 @@ export function ProductionDashboard() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3 flex-wrap"><div><h1 className="text-2xl font-bold">Production Dashboard</h1><p className="text-sm text-slate-500">Stage-wise tracking and daily updates</p></div><div className="flex gap-2"><Button variant="outline" onClick={printDailyProduction}><IconPrint size={14}/> Daily Report</Button>{canEditProduction && <Button onClick={() => { setDateMode("today"); setCustomDate(""); setEntryOpen(true); }} data-testid="open-daily-entry"><IconPlus size={14}/> Daily Production Entry</Button>}</div></div>
+      <div className="flex items-center justify-between gap-3 flex-wrap"><div><h1 className="text-2xl font-bold">Production Dashboard</h1><p className="text-sm text-slate-500">Stage-wise tracking and daily updates</p></div><div className="flex gap-2"><Button variant="outline" onClick={() => setDailyReportOpen(true)} data-testid="open-daily-report"><IconPrint size={14}/> Daily Report</Button>{dailyReportOpen && <DailyReportModal open onClose={() => setDailyReportOpen(false)}/>}{canEditProduction && <Button onClick={() => { setDateMode("today"); setCustomDate(""); setEntryOpen(true); }} data-testid="open-daily-entry"><IconPlus size={14}/> Daily Production Entry</Button>}</div></div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <KPI label="Daily Production" value={String(dailyProduction)} color="indigo" icon={<IconFactory size={22}/>}/>

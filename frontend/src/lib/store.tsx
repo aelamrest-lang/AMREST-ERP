@@ -304,7 +304,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [adopt, pull]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    let cancelled = false;
+    // hydrated ref makes this run once (StrictMode double effect); no cancel flag, or the only run would be discarded.
+    const cancelled = false;
     (async () => {
       if (hydrated.current) return;
       hydrated.current = true;
@@ -327,7 +328,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (!cancelled) setHydrating(false);
       }
     })();
-    return () => { cancelled = true; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Pull other users' committed changes every 10s (incremental; never overwrites this tab's unsaved edits).
