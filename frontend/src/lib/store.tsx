@@ -129,7 +129,7 @@ interface Ctx {
 }
 
 export type SaveState = "saving" | "saved" | "unsaved" | "failed" | "conflict" | "expired";
-export interface ConflictItem { coll?: string; rid?: string; key?: string; reason: string; label: string; theirs: any; mine: any; rev: number | null; fields: { field: string; base: any; mine: any; theirs: any }[] }
+export interface ConflictItem { coll?: string; rid?: string; key?: string; reason: string; label: string; theirs: any; mine: any; rev: number | null; fields: { field: string; base: any; mine: any; theirs: any; mineChanged?: boolean }[] }
 const UNSAVED_KEY = "amrest-erp-unsaved-ops";
 const StoreCtx = createContext<Ctx | null>(null);
 
@@ -152,7 +152,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const dbRef = useRef<DB | null>(null);
   const revs = useRef<Record<string, Record<string, number>>>({});
   const vrevs = useRef<Record<string, number>>({});
-  const inflight = useRef<{ opId: string; ops: SyncOp[]; snapshot: DB } | null>(null);
+  const inflight = useRef<{ opId: string; ops: SyncOp[]; snapshot: DB; origs?: Record<string, any> } | null>(null);
+  const rejected = useRef<{ origs: Record<string, any>; sideIds: Set<string> }>({ origs: {}, sideIds: new Set() });
+  const hydrated = useRef(false);
+  const origsFor = (ops: SyncOp[], base: any) => Object.fromEntries(ops.filter(o => (o.kind === "upsert" || o.kind === "delete") && o.coll && o.coll !== "logs")
+    .map(o => [`${o.coll}:${o.rid}`, pulled.current.get(`${o.coll}:${o.rid}`)?.data ?? (base?.[o.coll!] || []).find((x: any) => x.id === o.rid) ?? null]));
   const blocked = useRef(false);
   const pulled = useRef<PullInfo>(new Map());
   const setSaveState = (st: SaveState, msg = "") => {
@@ -193,8 +197,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!inflight.current) {
       const ops = pendingOps();
       if (!ops.length) { setSaveState("saved"); return; }
-      inflight.current = { opId: crypto.randomUUID(), ops, snapshot: dbRef.current! };
-      saveUnsaved({ opId: inflight.current.opId, ops });
+      const origs = origsFor(ops, baseRef.current);
+      inflight.current = { opId: crypto.randomUUID(), ops, snapshot: dbRef.current!, origs };
+      saveUnsaved({ opId: inflight.current.opId, ops, origs });
     }
     saving.current = true;
     setSaveState("saving");
@@ -212,8 +217,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return;
     }
     if (res.status === "conflict") {
+      const batchOrigs = inflight.current?.origs || {};
       inflight.current = null;
-      saveUnsaved({ opId: crypto.randomUUID(), ops });
+      saveUnsaved({ opId: crypto.randomUUID(), ops, origs: batchOrigs });
+      rejected.current = { origs: batchOrigs, sideIds: new Set(ops.filter(o => o.kind === "upsert" && o.baseRev == null && (o.coll === "logs" || o.coll === "grnAudit")).map(o => `${o.coll}:${o.rid}`)) };
       try { await pull(); } catch {}
       if (res.duplicates.length && !res.conflicts.length) {
         const { db: fixed, map } = renumber(dbRef.current, res.duplicates);
@@ -229,9 +236,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const b: any = baseRef.current, l: any = dbRef.current;
       setConflicts(res.conflicts.map((c: any) => {
         const mine = c.key ? (c.key.startsWith("settings.") ? l.settings?.[c.key.slice(9)] : l[c.key]) : (l[c.coll] || []).find((x: any) => x.id === c.rid);
-        const orig = c.key ? (c.key.startsWith("settings.") ? b.settings?.[c.key.slice(9)] : b[c.key]) : (pulled.current.get(`${c.coll}:${c.rid}`)?.data ?? (b[c.coll] || []).find((x: any) => x.id === c.rid));
+        const k0 = `${c.coll}:${c.rid}`;
+        const orig = c.key ? (c.key.startsWith("settings.") ? b.settings?.[c.key.slice(9)] : b[c.key]) : (k0 in batchOrigs ? batchOrigs[k0] : (pulled.current.get(k0)?.data ?? (b[c.coll] || []).find((x: any) => x.id === c.rid)));
+        const eq = (x: any, y: any) => JSON.stringify(x) === JSON.stringify(y);
         const fields = mine && typeof mine === "object" && !Array.isArray(mine)
-          ? Object.keys(mine).filter(k => JSON.stringify(mine[k]) !== JSON.stringify(orig?.[k])).map(k => ({ field: k, base: orig?.[k], mine: mine[k], theirs: c.theirs?.[k] }))
+          ? [...new Set([...Object.keys(mine), ...Object.keys(c.theirs || {})])].filter(k => !(c.coll === "items" && k === "currentStock") && (!eq(mine[k], orig?.[k]) || !eq(c.theirs?.[k], orig?.[k])))
+              .map(k => ({ field: k, base: orig?.[k], mine: mine[k], theirs: c.theirs?.[k], mineChanged: !eq(mine[k], orig?.[k]) }))
           : [{ field: c.key || "value", base: orig, mine, theirs: c.theirs }];
         return { ...c, mine, label: c.key || `${c.coll} · ${mine?.number || mine?.name || orig?.number || orig?.name || c.rid}`, fields };
       }));
@@ -258,16 +268,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const coll = c.coll!;
       const put = (list: any[], rec: any) => rec ? (list.some(x => x.id === c.rid) ? list.map(x => x.id === c.rid ? rec : x) : [rec, ...list]) : list.filter(x => x.id !== c.rid);
       b[coll] = put(b[coll] || [], c.theirs);
-      const mineChanges = Object.fromEntries(c.fields.map(f => [f.field, f.mine]));
+      const mineChanges = Object.fromEntries(c.fields.filter((f: any) => f.mineChanged !== false).map(f => [f.field, f.mine]));
       l[coll] = put(l[coll] || [], mode === "reload" ? c.theirs : (c.theirs ? { ...c.theirs, ...mineChanges } : c.mine));
       if (c.rev != null && c.theirs) (revs.current[coll] = revs.current[coll] || {})[c.rid!] = c.rev; else delete revs.current[coll]?.[c.rid!];
     });
     if (mode === "reload") {
       // Drop activity-log / audit lines that described the discarded changes.
-      const nums = conflicts.map(c => String(c.mine?.number || c.theirs?.number || "")).filter(Boolean);
-      const baseLog = new Set((b.logs || []).map((x: any) => x.id)), baseAudit = new Set((b.grnAudit || []).map((x: any) => x.id));
-      l.logs = (l.logs || []).filter((x: any) => baseLog.has(x.id) || !nums.some(n => String(x.action).includes(n)));
-      if (l.grnAudit) l.grnAudit = l.grnAudit.filter((x: any) => baseAudit.has(x.id) || !nums.includes(String(x.grnNumber)));
+      const side = rejected.current.sideIds;
+      l.logs = (l.logs || []).filter((x: any) => !side.has(`logs:${x.id}`));
+      if (l.grnAudit) l.grnAudit = l.grnAudit.filter((x: any) => !side.has(`grnAudit:${x.id}`));
     }
     conflicts.forEach(c => { if (c.coll && c.rid) pulled.current.delete(`${c.coll}:${c.rid}`); });
     baseRef.current = b; dbRef.current = l; setDb(l);
@@ -287,7 +296,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (saved?.ops?.length) {
       const withMine = applyOpsLocally(next, saved.ops) as DB;
       dbRef.current = withMine; setDb(withMine);
-      inflight.current = { opId: saved.opId, ops: saved.ops, snapshot: withMine };
+      inflight.current = { opId: saved.opId, ops: saved.ops, snapshot: withMine, origs: saved.origs || {} };
       setSaveState("unsaved", "Re-sending changes that were not saved last time…");
       setTimeout(async () => { await flushRef.current(); try { await pull(); } catch {} }, 0);
     } else setSaveState("saved");
@@ -297,6 +306,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      if (hydrated.current) return;
+      hydrated.current = true;
       if (!getToken()) { setSyncStatus("not-configured"); setHydrating(false); return; }
       setSyncStatus("syncing");
       try {
@@ -337,7 +348,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const keep = (e: BeforeUnloadEvent) => {
       if (inflight.current || pendingOps().length) {
-        if (!inflight.current) saveUnsaved({ opId: crypto.randomUUID(), ops: pendingOps() });
+        if (!inflight.current) { const ops = pendingOps(); saveUnsaved({ opId: crypto.randomUUID(), ops, origs: origsFor(ops, baseRef.current) }); }
         flushRef.current();
         e.preventDefault(); e.returnValue = "";
       }
@@ -378,7 +389,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const res = await apiLogin(username, password);
       setSyncStatus("syncing");
       // Unsaved work of an expired session stays in this browser and is re-sent (with conflict checks) after login.
-      if (inflight.current || pendingOps().length) saveUnsaved({ opId: inflight.current?.opId || crypto.randomUUID(), ops: inflight.current?.ops || pendingOps() });
+      if (inflight.current) saveUnsaved({ opId: inflight.current.opId, ops: inflight.current.ops, origs: inflight.current.origs });
+      else if (pendingOps().length) { const ops = pendingOps(); saveUnsaved({ opId: crypto.randomUUID(), ops, origs: origsFor(ops, baseRef.current) }); }
       inflight.current = null; blocked.current = false;
       const next = await hydrateFromServer();
       const user = next.users.find(u => u.id === res.user.id) || res.user;

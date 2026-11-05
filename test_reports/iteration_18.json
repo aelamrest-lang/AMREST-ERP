@@ -1,0 +1,51 @@
+{
+  "summary": "Retested the 3 CRITICAL bugs and the integration issues from iteration_17. Backend: test_concurrency.py passes 12/12, and test_record_store_edge.py passes 7/7 (I added 2 tests: inc on a missing or deleted item returns 409, and erp_applied has a TTL index on exp). UI tests used admin in the browser as user A and aaa@amrest.in via the API as user B. C1 (stale edit form, B's save pulled more than 12s before A saves) is FIXED for GRN edit, PO edit and an Item Master non-stock field (minStock): the Conflict panel appears every time and nothing is silently reverted. GRN 'Reload latest' keeps B's Invoice# and drops A's Activity Log and grnAudit lines. GRN 'Re-apply' saved B's Invoice# together with A's amount (TEST_B2 + 777), with correct audit text. C2 (stale stock in the Item Master form) is FIXED: stock 384 -> B's GRN made it 385 -> A saved Sale Rate=1 with stock 385 kept and no conflict. C3 (replay after re-login with a duplicate GRN number) is FIXED: A's GRN-2026-392 was renumbered to GRN-2026-393 and saved once. Stock rose by exactly 1 for B and 1 for A (385 -> 387). The log and audit were renumbered, the GRN was visible right away without a reload, and the unsaved-ops key was cleared only when the indicator turned Saved. New or remaining issues: (1) HIGH: when a replayed batch (after re-login or reload) hits a real conflict, the panel shows the wrong 'When you opened it' values and lists fields the user never changed, and 'Re-apply' then silently reverts the other user's change. (2) MEDIUM: after a page reload with unsaved ops, the re-sent GRN and stock were not visible for about 10-15s, until the next periodic pull (dev StrictMode double hydrate race). (3) MEDIUM: Conflict 'Reload latest' on an Item Master conflict keeps the 'Updated item: ...' Activity Log line for the discarded change. (4) LOW: the Conflict panel does not show the field the other user changed, and can show a stale currentStock row. All test data was cleaned up.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/erp/commit", "issue": "Still relies on a per-process asyncio.Lock. Transactions are used only if Mongo is a replica set, so multi-worker deployments are not safe. This was already known; there is no regression."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "store.tsx flushSave conflict branch for REPLAYED batches (hydrateFromServer / login replay)", "issue": "HIGH. Repro: A has GRN-2026-390 (Invoice# TEST_B2, amount 777). A's token expires, A edits Invoice Amount to 888 (kept unsaved). B sets Invoice# to TEST_B3. A logs in again and gets the Conflict panel, which shows vendorInvoiceNo: opened=TEST_B3, mine=TEST_B2, theirs=TEST_B3 (wrong, because A never changed Invoice#), plus vendorInvoiceAmount 777/888/777. Clicking 'Re-apply' saved TEST_B2 + 888, which silently reverts B's Invoice#. Root cause: after hydrate, baseRef holds the latest server data and pulled is empty, so 'orig' = theirs. Every field where A's stale full-record upsert differs from theirs is treated as 'my change', and mineChanges spreads all of them onto theirs.", "selector": "conflict-panel, conflict-reapply-btn", "priority": "HIGH"}
+    ],
+    "integration_issues": [
+      {"flow": "Replay after page reload (unsaved ops in localStorage)", "issue": "MEDIUM. The server saved GRN-2026-394/395 exactly once and stock was correct, but the GRN row was not in A's list and Item Master showed the old stock (387 instead of 388) for about 10-15s, until the next 10s pull. RCA: React.StrictMode (src/index.tsx) runs the mount effect twice, so hydrateFromServer runs twice (2x GET /erp/state). The second adopt() overwrites dbRef/baseRef/version with server state fetched before the replay commit, and then finds no unsaved key. The 'cancelled' flag only guards setCurrentUser. The re-login path does not have this race and works. Fix: run hydrate only once (useRef guard), or check 'cancelled' before adopt(), or pull() after the second hydrate.", "affected_selectors": ["grn-view-*", "save-indicator"]},
+      {"flow": "Conflict 'Reload latest' for records without a number (Item Master)", "issue": "MEDIUM. The 'Updated item: PVC Body Silica Gel Breather 250 GM' Activity Log entry for the discarded change was still saved. The resolveConflicts cleanup only matches mine.number/theirs.number, and items have no number. Fix: drop logs and audit entries that are not in base and were created in the rejected batch (for example, by tracking ids of the rejected ops), not by matching text.", "affected_selectors": ["conflict-reload-btn"]},
+      {"flow": "Conflict panel content", "issue": "LOW. The table only lists fields where mine differs from 'opened', so the field the OTHER user changed (e.g. Invoice# or minStock, which is the reason for the conflict) is never shown. In the Item conflict it also showed a confusing 'currentStock 384 -> 385 -> 385' row: the pulled entry is re-set right after the user's own save with the pre-normalisation stock. Suggest listing fields where theirs != opened too, and excluding currentStock and server-derived fields.", "affected_selectors": ["conflict-item-0"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_concurrency.py",
+    "/app/backend/tests/test_record_store_edge.py",
+    "/app/backend/tests/iter18_helper.py",
+    "/app/backend/tests/cleanup_iter18.py",
+    "/app/test_reports/pytest/pytest_record_store_edge.xml"
+  ],
+  "action_items": [
+    "HIGH: For replayed batches, save the original record data (the base at the time the ops were computed) with each upsert in amrest-erp-unsaved-ops. Use it as 'When you opened it' and compute Re-apply's mineChanges against it, so only fields the user actually changed are re-applied and the other user's fields are kept.",
+    "MEDIUM: Make hydrateFromServer run only once on mount (StrictMode double effect), or check 'cancelled' before adopt(), so the replayed change is visible right away after a reload.",
+    "MEDIUM: Conflict 'Reload latest' must drop the Activity Log and audit entries from the rejected batch for records without a number (Item Master, parties, etc.). Track them by op/record id, not by matching the document number in the text.",
+    "LOW: In the Conflict panel, also show the fields the other user changed, and hide currentStock and derived-status rows."
+  ],
+  "critical_code_review_comments": [
+    "sync.revertsPulled depends on PULL_TTL = 30 min. An edit modal left open longer than 30 minutes falls back to silent-overwrite behaviour. Consider pinning the rev or original data when the modal opens, instead of using a time-based pulled map.",
+    "applyChanges line 80 re-creates the pulled entry right after this tab's own commit, with the pre-server-normalisation data (e.g. stale currentStock). This is harmless for conflict detection but leaks into the panel's 'When you opened it'.",
+    "Item Master stock: when the user deliberately edits Current Stock while a concurrent GRN was pulled, delta = typed - newBase. The typed absolute value wins, and the user's intended delta is not preserved. Document this or show a warning.",
+    "store.tsx login(): it saves unsaved ops and then calls hydrateFromServer, which is fine. The mount effect has the double-hydrate race described above."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_record_store_edge.py",
+    "/app/backend/tests/iter18_helper.py",
+    "/app/backend/tests/cleanup_iter18.py"
+  ],
+  "success_rate": {"backend": "100% (12/12 concurrency, 7/7 edge)", "frontend": "~80% (C1 GRN/PO/Item, C2, C3 re-login, GRN reload-latest cleanup and re-apply passed; replay-conflict re-apply, reload replay visibility and item reload-latest log cleanup failed)"},
+  "seed_data_creation": "None kept. Created GRN-2026-390..395 (390/391/392 via the API as B, 393/394/395 via the UI as A), grnAudit entries and logs. All were deleted by id with cleanup_iter18.py. Item 7c4dbe20 restored to stock 383, saleRate 0, minStock 0. PO-2026-322 is back to Approved and expectedDeliveryDate 2026-11-04. Remaining: 'Logged in' activity logs from the test sessions.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "admin/admin123 and aaa@amrest.in/anwar@123 work.",
+  "context_for_next_testing_agent": "Navigate with window.__amrestSetRoute('grn'|'items'|'purchase'). To simulate user B, call page.request inside Playwright: login as aaa@amrest.in, GET /api/erp/state, then POST /api/erp/commit with an upsert using revs[coll][id] as baseRev. To expire the session: localStorage.setItem('amrest_erp_token','garbage-token'). Item edit button: the first button in the last td of the tr that contains [data-testid=item-name-<id>]. PO edit: the same, for the tr containing [data-testid=po-preview-PO-2026-322]. To reproduce the HIGH bug: expire the session, edit only Invoice Amount, B changes Invoice#, log in again, click Re-apply, and B's Invoice# is reverted. Clean up with tests/cleanup_iter18.py (edit NUMS).",
+  "rca of the issue": "Replay conflict: the unsaved-ops payload stores only the full new record data, not the original it was based on. After hydrate, base = latest server, so the conflict panel diffs mine against theirs and every stale field looks like the user's own change. Reload visibility: StrictMode double-invokes the mount effect, and the second hydrateFromServer overwrites refs with pre-commit server state; the next 10s pull repairs it. Item reload-latest log: the cleanup filter matches the document number in the log text, and items have no number."
+}

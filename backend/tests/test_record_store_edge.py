@@ -76,3 +76,25 @@ def test_changes_feed_and_migration_report(h):
 def test_bad_op_not_500(h):
     r = requests.post(f"{API}/erp/commit", headers=h, json={"opId": str(uuid.uuid4()), "ops": [{"kind": "inc", "coll": "items", "rid": "does-not-exist", "delta": 1}]})
     assert r.status_code < 500
+
+
+# Stock inc on a deleted / missing item must be rejected (409), not silently ignored
+def test_inc_on_missing_or_deleted_item_409(h):
+    code, body = commit(h, [{"kind": "inc", "coll": "items", "rid": f"TEST_missing_{uuid.uuid4().hex[:6]}", "delta": 1}])
+    assert code == 409, body
+    rid = f"TEST_item_{uuid.uuid4().hex[:6]}"
+    item = {"id": rid, "name": "TEST_edge deleted", "currentStock": 0}
+    assert commit(h, [{"kind": "upsert", "coll": "items", "rid": rid, "baseRev": None, "data": item}])[0] == 200
+    rev = state(h)["revs"]["items"][rid]
+    assert commit(h, [{"kind": "delete", "coll": "items", "rid": rid, "baseRev": rev}])[0] == 200
+    code, body = commit(h, [{"kind": "inc", "coll": "items", "rid": rid, "delta": 1}])
+    assert code == 409, body
+
+
+# erp_applied has a TTL index on exp
+def test_erp_applied_ttl_index():
+    from pymongo import MongoClient
+    env = dict(l.strip().split("=", 1) for l in open("/app/backend/.env") if "=" in l)
+    db = MongoClient(env["MONGO_URL"].strip('"'))[env["DB_NAME"].strip('"')]
+    idx = db.erp_applied.index_information()
+    assert any(v.get("expireAfterSeconds") and v["key"][0][0] == "exp" for v in idx.values()), idx
