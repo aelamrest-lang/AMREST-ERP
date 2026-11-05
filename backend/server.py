@@ -278,6 +278,11 @@ async def commit(body: CommitBody, user_id: str = Depends(get_current_user_id)):
         return JSONResponse(status_code=409, content=c.payload)
 
 
+@api_router.get("/erp/applied/{op_id}")
+async def op_applied(op_id: str, user_id: str = Depends(get_current_user_id)):
+    return {"applied": bool(await db.erp_applied.find_one({"_id": op_id}, {"_id": 1}))}
+
+
 @api_router.get("/erp/version")
 async def get_version(user_id: str = Depends(get_current_user_id)):
     return {"version": await store.version()}

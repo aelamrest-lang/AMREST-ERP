@@ -3,7 +3,7 @@ import { legacyDispatch } from "./invoice";
 import type { DB, User, ActivityLog } from "./types";
 import { defaultDocumentFormats, seedDB } from "./seed";
 import { defaultPermissionsForRole, normalizePermissions } from "./permissions";
-import { apiLogin, fetchState, fetchChanges, commitOps, fetchRemoteVersion, getToken, setToken, type RemoteState } from "./api";
+import { apiLogin, fetchState, fetchChanges, isApplied, commitOps, fetchRemoteVersion, getToken, setToken, type RemoteState } from "./api";
 import { applyChanges, applyOpsLocally, computeOps, renumber, type PullInfo, type SyncOp } from "./sync";
 
 const SESSION_KEY = "amrest_erp_session";
@@ -293,6 +293,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     writeCachedSettings(next.settings);
     let saved: any = null;
     try { saved = JSON.parse(localStorage.getItem(UNSAVED_KEY) || "null"); } catch {}
+    if (saved?.opId && saved?.ops?.length && await isApplied(saved.opId).catch(() => false)) { saveUnsaved(null); saved = null; }
     if (saved?.ops?.length) {
       const withMine = applyOpsLocally(next, saved.ops) as DB;
       dbRef.current = withMine; setDb(withMine);

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { useStore } from "../../lib/store";
 import { Button, Input, Select, Modal, Table, Th, Td, Empty } from "../ui";
@@ -10,18 +10,20 @@ const isoD = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStar
 export function DailyReportModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { db } = useStore();
   const [mode, setMode] = useState<Mode>("today");
-  const [from, setFrom] = useState(todayISO());
-  const [to, setTo] = useState(todayISO());
+  const today = isoD(new Date());
+  const [from, setFrom] = useState(today);
+  const [to, setTo] = useState(today);
   const [jc, setJc] = useState("");
   const [stage, setStage] = useState("");
   const [op, setOp] = useState("");
 
   const range = useMemo(() => {
-    const t = todayISO();
+    const t = isoD(new Date());
     if (mode === "today") return { from: t, to: t };
     if (mode === "yesterday") { const d = new Date(); d.setDate(d.getDate() - 1); const y = isoD(d); return { from: y, to: y }; }
     return from <= to ? { from, to } : { from: to, to: from };
   }, [mode, from, to]);
+  useEffect(() => { setJc(""); setStage(""); setOp(""); }, [range.from, range.to]);
 
   const jcNo = (id: string, fallback?: string) => (db.jobCards.find(j => j.id === id)?.number || fallback || "—").split(" - ")[0];
   const inRange = db.productionEntries.filter(e => e.date >= range.from && e.date <= range.to);
@@ -71,7 +73,7 @@ export function DailyReportModal({ open, onClose }: { open: boolean; onClose: ()
           <Select value={stage} onChange={(e: any) => setStage(e.target.value)} data-testid="dr-filter-stage"><option value="">All Stages</option>{opts(e => e.stage).map(s => <option key={s} value={s}>{s}</option>)}</Select>
           <Select value={op} onChange={(e: any) => setOp(e.target.value)} data-testid="dr-filter-operator"><option value="">All Operators</option>{opts(e => e.operatorName || "—").map(o => <option key={o} value={o}>{o}</option>)}</Select>
         </div>
-        <div className="max-h-[460px] overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700">
+        <div className="max-h-[460px] overflow-auto rounded-lg border border-slate-200 dark:border-slate-700">
           <Table>
             <thead className="sticky top-0 bg-white dark:bg-slate-900"><tr><Th>Date</Th><Th>Job Card Number</Th><Th>Product Name</Th><Th>Production Stage</Th><Th className="text-right">Total Production Qty</Th><Th>Operator Name</Th></tr></thead>
             <tbody>

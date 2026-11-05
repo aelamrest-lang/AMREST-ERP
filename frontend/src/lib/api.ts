@@ -113,6 +113,7 @@ export type CommitResult =
 
 const authHeaders = () => { const t = getToken(); return { "Content-Type": "application/json", ...(t ? { Authorization: `Bearer ${t}` } : {}) }; };
 export const fetchState = async (): Promise<RemoteState> => request("/erp/state");
+export const isApplied = async (opId: string): Promise<boolean> => !!(await request(`/erp/applied/${encodeURIComponent(opId)}`))?.applied;
 export const fetchChanges = async (since: number): Promise<RemoteChanges> => request(`/erp/changes?since=${since}`);
 
 export async function commitOps(opId: string, ops: any[]): Promise<CommitResult> {

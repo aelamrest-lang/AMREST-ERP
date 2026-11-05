@@ -1,0 +1,52 @@
+{
+  "summary": "Iteration 19 tested (A) the new Production Daily Report and (B) the retest of the iteration_18 concurrency fixes. Backend: test_concurrency.py passed 12/12 and test_record_store_edge.py passed 7/7. A) Daily Report: all checks passed. I created 4 TEST production entries (today: TEST_OpA 5+7 and TEST_OpB 3; yesterday: TEST_OpA 4). Today showed 2 grouped rows (12 and 3) with total 15. Yesterday showed 1 row of 4. Custom range 2026-10-01..2026-11-05 showed 377 rows and 14473, which matches the API/Mongo sum. Rows were sorted newest first across 33 dates. Reversing from/to gave the same result. Each filter total matched the API: JC-026 = 1379, JC-026 + PT HV Winding = 491, + Veerpal = 133, HV COIL only = 1161, Today + TEST_OpB = 3. Excel export has the 6 columns and a Total row (verified with openpyxl). Print/PDF downloads production-daily-<date>.pdf. Empty ranges disable Export. The production role can open the report. B) Concurrency retest: B1 (HIGH) is FIXED. In the replayed batch after re-login, the panel showed vendorInvoiceNo opened=TEST_INV0 / mine=TEST_INV0 / theirs=TEST_B3 and vendorInvoiceAmount 100/888/100. Re-apply saved TEST_B3 + 888. B2 is FIXED for the normal case: 1 GET /erp/state on reload, and the replayed GRN edit and stock were visible within 3s. B3 is FIXED: Item conflict 'Reload latest' left 0 'Updated item' logs and the server kept B's minStock=7 and saleRate 0. B4 is FIXED: the panel shows the other user's field (minStock 5/5/7) and no currentStock row. NEW MEDIUM bug: a replayed batch whose opId the server had already applied double-counts stock in the UI. Repro: the commit reaches the server but the response is lost (or the beforeunload flush lands just before the reload's GET /erp/state). Server stock was 389 (correct, applied once) but the UI showed 390 and stayed wrong after 16s+ until a full reload. All test data was cleaned up.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/erp/commit", "issue": "Still uses a per-process asyncio.Lock (known; no regression). The idempotent replay returns the stored result correctly."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "store.tsx hydrateFromServer replay (applyOpsLocally)", "issue": "MEDIUM. If the unsaved batch was already committed on the server (response lost, or the beforeunload flush landed before the reload's fetchState), hydrate applies the 'inc' ops again on top of server state that already includes them. The idempotent commit returns ok, baseRef is set to that doubled snapshot, and pull() finds no changes. Item stock in the UI stays at +delta (server 389, UI 390) until the next full reload. Upserts are idempotent, so only stock (inc) is affected. Repro: in Playwright, route /api/erp/commit with route.fetch() then route.abort(), edit the GRN qty, then reload. The re-login replay path has the same logic.", "selector": "item-name-<id> row stock", "priority": "MEDIUM"},
+      {"component": "DailyReportModal date modes", "issue": "LOW. 'Today' uses todayISO(), which is the UTC date (toISOString). 'Yesterday' uses the local date (isoD(new Date()-1)). In IST between 00:00 and 05:30, Today and Yesterday resolve to the SAME date and the real local today is not reachable. Use one consistent date source; the entry-date logic should also match.", "selector": "dr-mode-today, dr-mode-yesterday", "priority": "LOW"},
+      {"component": "DailyReportModal filters", "issue": "LOW. JC, Stage and Operator filter values persist when the date mode/range changes. If the chosen value is not among the new range's options, the select shows a mismatched value while still filtering (can show an empty list without an obvious reason). Reset the filters or keep the selected value in the options.", "selector": "dr-filter-*", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Production Daily Report (mobile 390px)", "issues": ["The Total Qty and Operator columns are pushed off-screen, so you must scroll horizontally to see the qty. Consider a compact layout or a sticky qty column."]},
+      {"screen": "Conflict panel", "issues": ["For fields the user did NOT change (e.g. vendorInvoiceNo), the 'Your change' column still shows the old value styled as a change, which reads as if the user wants the old value. Consider showing '(unchanged)' or greying it out when mineChanged is false."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_concurrency.py",
+    "/app/backend/tests/test_record_store_edge.py",
+    "/app/backend/tests/iter19_daily_report_expected.py",
+    "/app/backend/tests/iter19_prod_entries.py",
+    "/app/backend/tests/cleanup_iter19.py",
+    "/app/test_reports/pytest/pytest_record_store_edge.xml"
+  ],
+  "action_items": [
+    "MEDIUM: Prevent double stock after replaying an already-applied batch. Options: have the server flag idempotent hits (e.g. replayed:true) and re-fetch /erp/state and adopt() after them; always adopt a fresh state after a replay commit succeeds; or do not apply 'inc' ops locally during hydrate and let the pull bring the stock.",
+    "LOW: Use one date source (local date) for Today and Yesterday in DailyReportModal, and keep it consistent with how productionEntries.date is written.",
+    "LOW: Reset the Daily Report filters when the mode/range changes, or keep stale selected values as options.",
+    "LOW: In the Conflict panel, visually mark fields the user did not change."
+  ],
+  "critical_code_review_comments": [
+    "DailyReportModal: inRange is recomputed every render and used as a useMemo dep, so the memo never caches. Harmless at this size; wrap inRange in useMemo.",
+    "DailyReportModal print(): product, stage and operator names are interpolated into HTML without escaping (an operator name with '<' would break the PDF).",
+    "store.tsx: GRN-2026-390 (TEST_B5) and GRN-2026-391 (TEST_REPLAY) and item minStock=5 / stock 385 were already present before this run (left from the main agent's own testing at 04:52 UTC). I did not touch them; the main agent should clean them up (and restore item 7c4dbe20 stock 383, minStock 0 if those were the true originals)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/iter19_daily_report_expected.py",
+    "/app/backend/tests/iter19_prod_entries.py",
+    "/app/backend/tests/cleanup_iter19.py"
+  ],
+  "success_rate": {"backend": "100% (12/12 concurrency, 7/7 edge)", "frontend": "~92% (Daily Report A1-A4 all pass; B1-B4 pass; new replay-of-applied-batch stock double count fails)"},
+  "seed_data_creation": "None kept. Created 4 TEST production entries (operators TEST_OpA/TEST_OpB) and GRN-2026-392 (with grnAudit and logs). All were deleted by id. Item 7c4dbe20 was restored to the state found at start (stock 385, minStock 5, saleRate 0). Remaining: 'Logged in' activity logs from the test sessions. Pre-existing GRN-2026-390/391 are not mine and were left untouched.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "admin/admin123, aaa@amrest.in/anwar@123 and production/prod123 work.",
+  "context_for_next_testing_agent": "Daily Report: compute the expected values with tests/iter19_daily_report_expected.py FROM TO [jcId|-] [stage|-] [operator|-]. Create or clean up today's/yesterday's TEST entries with iter19_prod_entries.py create|cleanup (dates are hardcoded to 2026-11-05/04; update them). The system date is 2026-11-05 UTC. Replay double-stock repro: log in, open the GRN edit, page.route('**/api/erp/commit', async r => { await r.fetch(); await r.abort() }), change qty+1, save, unroute, reload, then compare the Item Master stock with the server. Item edit form has no data-testids; use xpath //*[normalize-space(text())='Sale Rate (₹)']/following::input[1] and the 'Update' button. Use iter19_helper.py create/bedit/show for user B.",
+  "rca of the issue": "Replay double stock: hydrateFromServer -> adopt(server state that already contains the batch) -> applyOpsLocally(saved.ops) re-applies the inc delta -> commit with the same opId returns the cached ok result -> flushSave sets baseRef = snapshot (doubled) -> pull() sees no new versions, so local and base stay doubled. Daily Report today/yesterday: todayISO() is UTC-based while the yesterday calculation is local-based."
+}

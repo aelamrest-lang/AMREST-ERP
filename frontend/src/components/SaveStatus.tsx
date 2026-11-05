@@ -42,7 +42,7 @@ export function SaveBanner() {
                 <tbody>{c.fields.slice(0, 12).map(f => (
                   <tr key={f.field} className="border-t border-slate-100 dark:border-slate-800">
                     <td className="px-3 py-1.5 font-medium">{f.field}</td><td className="px-3 py-1.5 text-slate-500">{fmt(f.base)}</td>
-                    <td className="px-3 py-1.5 text-indigo-700 dark:text-indigo-300 font-semibold">{fmt(f.mine)}</td><td className="px-3 py-1.5 text-amber-700 dark:text-amber-300 font-semibold">{fmt(f.theirs)}</td>
+                    <td className={"px-3 py-1.5 " + (f.mineChanged === false ? "text-slate-400 italic" : "text-indigo-700 dark:text-indigo-300 font-semibold")}>{f.mineChanged === false ? "(unchanged)" : fmt(f.mine)}</td><td className="px-3 py-1.5 text-amber-700 dark:text-amber-300 font-semibold">{fmt(f.theirs)}</td>
                   </tr>
                 ))}</tbody>
               </table>
