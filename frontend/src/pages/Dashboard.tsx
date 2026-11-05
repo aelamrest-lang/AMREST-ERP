@@ -118,7 +118,7 @@ export function Dashboard() {
 
   const inventoryByCategory = ["Raw Material", "Semi-Finished", "Finished Goods"].map((c, i) => ({
     label: c,
-    value: db.items.filter(it => it.category === c).reduce((s, it) => s + it.currentStock, 0),
+    value: Math.round(db.items.filter(it => it.category === c).reduce((s, it) => s + it.currentStock, 0) * 100) / 100,
     color: ["#6366f1", "#f59e0b", "#10b981"][i],
   }));
 

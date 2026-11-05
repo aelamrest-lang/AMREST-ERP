@@ -51,7 +51,7 @@ const navGroups: { label: string; items: { id: Route; label: string; icon: any }
 ];
 
 export function Layout({ route, setRoute, children }: { route: Route; setRoute: (r: Route) => void; children: ReactNode }) {
-  const { currentUser, logout, theme, toggleTheme, db } = useStore();
+  const { currentUser, logout, theme, toggleTheme, db, syncStatus, syncError, syncNow } = useStore();
   const [open, setOpen] = useState(false);
   const canSeeLowStock = currentUser?.role === "admin" || currentUser?.role === "store";
 
@@ -148,6 +148,14 @@ export function Layout({ route, setRoute, children }: { route: Route; setRoute: 
           </div>
         </header>
         <main className="flex-1 p-4 lg:p-6 overflow-x-hidden">
+          {syncStatus === "error" && (
+            <div className="mb-4 rounded-lg border border-rose-300 bg-rose-50 dark:bg-rose-950/40 dark:border-rose-800 px-4 py-2.5 flex flex-wrap items-center gap-3 text-sm text-rose-800 dark:text-rose-300" data-testid="sync-error-banner">
+              <b>Not saved to server.</b><span className="flex-1">{syncError}</span>
+              {/Session expired/.test(syncError)
+                ? <button type="button" onClick={logout} className="px-3 py-1 rounded-md bg-rose-600 text-white text-xs font-semibold" data-testid="sync-relogin-btn">Log in again</button>
+                : <button type="button" onClick={() => syncNow()} className="px-3 py-1 rounded-md bg-rose-600 text-white text-xs font-semibold" data-testid="sync-retry-btn">Retry now</button>}
+            </div>
+          )}
           {children}
         </main>
       </div>

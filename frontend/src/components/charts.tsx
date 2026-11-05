@@ -104,7 +104,7 @@ export function DonutChart({ data, size = 180 }: { data: { label: string; value:
             ><title>{`${d.label}: ${d.value}`}</title></circle>
           );
         })}
-        <text x={cx} y={cy - 4} textAnchor="middle" className="fill-slate-700 dark:fill-slate-200" fontSize="14" fontWeight="700">{total}</text>
+        <text x={cx} y={cy - 4} textAnchor="middle" className="fill-slate-700 dark:fill-slate-200" fontSize="14" fontWeight="700">{Math.round(total * 100) / 100}</text>
         <text x={cx} y={cy + 14} textAnchor="middle" className="fill-slate-500" fontSize="9">Total</text>
       </svg>
       <div className="space-y-1.5 text-sm">

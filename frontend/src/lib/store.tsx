@@ -4,7 +4,7 @@ import type { DB, User, ActivityLog } from "./types";
 import { defaultDocumentFormats, seedDB } from "./seed";
 import { defaultPermissionsForRole, normalizePermissions } from "./permissions";
 import { apiLogin, fetchRemoteState, patchRemoteDB, patchRemoteDBFinal, fetchRemoteVersion, getToken, setToken, ConflictError } from "./api";
-import { changedKeys, merge3 } from "./merge";
+import { changedKeys, merge3, renumberCollisions } from "./merge";
 
 const SESSION_KEY = "amrest_erp_session";
 const THEME_KEY = "amrest_theme";
@@ -217,6 +217,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(int);
   }, [currentUser, adopt]);
 
+  const mergeOnto = (remoteDb: DB): DB => {
+    const raw = merge3(baseRef.current, dbRef.current, remoteDb) as DB;
+    const { db: merged } = renumberCollisions(raw, baseRef.current, dbRef.current);
+    merged.logs = [...merged.logs].sort((a: ActivityLog, b: ActivityLog) => b.timestamp.localeCompare(a.timestamp)).slice(0, 500);
+    return merged;
+  };
+
   const flushSave = useCallback(async () => {
     if (saving.current) return;
     saving.current = true;
@@ -234,23 +241,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           // Someone else saved first: merge their records with ours, then retry.
           const remote = await fetchRemoteState();
           const remoteDb = migrateDB(remote.data || seedDB());
-          const merged = merge3(baseRef.current, dbRef.current, remoteDb) as DB;
-          merged.logs = [...merged.logs].sort((a, b) => b.timestamp.localeCompare(a.timestamp)).slice(0, 500);
+          const merged = mergeOnto(remoteDb);
           baseRef.current = remoteDb;
           localVersion.current = remote.version;
           dbRef.current = merged;
           setDb(merged);
         }
       }
+      if (hasLocalChanges()) throw new Error("Could not save — other users are saving at the same time. Retrying…");
       setSyncStatus("connected");
       setSyncError("");
     } catch (err: any) {
       setSyncStatus("error");
-      setSyncError(err?.message || "Save failed");
+      setSyncError(err?.message === "Unauthorized" ? "Session expired — your changes are NOT saved yet. Log in again to save them." : (err?.message || "Save failed"));
     } finally {
       saving.current = false;
     }
-    if (hasLocalChanges() && !saveTimer.current) saveTimer.current = setTimeout(() => { saveTimer.current = null; flushSave(); }, 1500);
+    if (hasLocalChanges() && getToken() && !saveTimer.current) saveTimer.current = setTimeout(() => { saveTimer.current = null; flushSave(); }, 3000);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const persistRemote = useCallback((next: DB) => {
@@ -267,7 +274,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
       patchRemoteDBFinal(localVersion.current, changes);
     };
-    const onVis = () => { if (document.visibilityState === "hidden") flush(); };
+    const onVis = () => { if (document.visibilityState === "hidden" && dbRef.current && Object.keys(changedKeys(baseRef.current, dbRef.current)).length) { if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; } flushSave(); } };
     window.addEventListener("beforeunload", flush);
     document.addEventListener("visibilitychange", onVis);
     return () => {
@@ -288,6 +295,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setSyncStatus("syncing");
     try {
       if (hasLocalChanges()) await flushSave();
+      if (hasLocalChanges()) return;
       const remote = await fetchRemoteState();
       adopt(remote.data, remote.version);
       setSyncStatus("connected");
@@ -319,7 +327,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // After login, hydrate state
       setSyncStatus("syncing");
       const remote = await fetchRemoteState();
-      const next = adopt(remote.data, remote.version);
+      let next: DB;
+      if (hasLocalChanges()) {
+        // Unsaved work from an expired session: merge it onto the latest server data instead of discarding it.
+        const remoteDb = migrateDB(remote.data || seedDB());
+        next = mergeOnto(remoteDb);
+        baseRef.current = remoteDb;
+        localVersion.current = remote.version;
+        dbRef.current = next;
+        setDb(next);
+      } else next = adopt(remote.data, remote.version);
       const user = next.users.find(u => u.id === res.user.id) || res.user;
       writeCachedSettings(next.settings);
       setCurrentUser(user);
