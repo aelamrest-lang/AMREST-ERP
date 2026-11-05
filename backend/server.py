@@ -4,6 +4,8 @@ from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel
+from fastapi.responses import JSONResponse
+from record_store import RecordStore, CommitBody, Conflict
 from typing import Optional
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -214,10 +216,8 @@ async def _read_state(keys: Optional[list] = None) -> dict:
 
 @api_router.post("/auth/login")
 async def login(body: LoginBody):
-    await _ensure_chunked()
-    state = await _read_state(["users"])
-
-    users = state.get("users", [])
+    await _activate_record_store()
+    users = await store.users()
     user = next(
         (u for u in users if u.get("username", "").lower() == body.username.lower() and u.get("password") == body.password),
         None,
@@ -232,47 +232,67 @@ async def login(body: LoginBody):
     }
 
 
+store = RecordStore(db, client)
+
+
+async def _activate_record_store():
+    if await store.is_active():
+        return
+    # One-time migration: back up, migrate, verify counts + stock.
+    meta = await _ensure_chunked()
+    state = await _read_state()
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    await db.erp_backup_chunks.delete_many({"backup": ts})
+    async for c in db.erp_chunks.find({}):
+        await db.erp_backup_chunks.insert_one({**c, "_id": f"{ts}:{c['_id']}", "backup": ts})
+    report = await store.migrate_from(state, int(meta.get("version", 1)))
+    check = (await store.read_state())["data"]
+    mismatch = {k: (len(state.get(k) or []), len(check.get(k) or [])) for k in state if isinstance(state.get(k), list) and k != "logs" and len(state.get(k) or []) != len(check.get(k) or [])}
+    stock_after = round(sum(float(i.get("currentStock") or 0) for i in check.get("items", [])), 4)
+    report.update({"backup": ts, "mismatch": mismatch, "stockAfter": stock_after})
+    await db.erp_meta.update_one({"_id": "record-store"}, {"$set": {"migration": report}})
+    if mismatch or abs(stock_after - report["stockSum"]) > 0.001:
+        await db.erp_meta.update_one({"_id": "record-store"}, {"$set": {"active": False}})
+        logger.error("Record-store migration verification FAILED: %s", report)
+        raise HTTPException(status_code=500, detail="Storage migration verification failed — old storage kept")
+    logger.info("Record-store migration verified: %s", report)
+
+
 @api_router.get("/erp/state")
 async def get_state(user_id: str = Depends(get_current_user_id)):
-    meta = await _ensure_chunked()
-    return {"data": await _read_state(), "version": meta.get("version", 1)}
+    await _activate_record_store()
+    return await store.read_state()
 
 
-class PatchBody(BaseModel):
-    baseVersion: Optional[int] = None
-    changes: dict
+@api_router.get("/erp/changes")
+async def get_changes(since: int = Query(0), user_id: str = Depends(get_current_user_id)):
+    return await store.changes_since(since)
 
 
-async def _commit(changes: dict, base_version: Optional[int], user_id: str) -> dict:
-    meta = await _ensure_chunked()
-    now = datetime.now(timezone.utc).isoformat()
-    filt = {"_id": STATE_ID} if base_version is None else {"_id": STATE_ID, "version": base_version}
-    updated = await db.erp_state.find_one_and_update(
-        filt,
-        {"$inc": {"version": 1}, "$set": {"updatedAt": now, "updatedBy": user_id}, "$addToSet": {"keys": {"$each": list(changes.keys())}}},
-        return_document=True,
-    )
-    if not updated:
-        cur = await db.erp_state.find_one({"_id": STATE_ID}, {"version": 1})
-        raise HTTPException(status_code=409, detail={"message": "State changed by another user", "version": (cur or meta).get("version")})
-    await _write_keys(changes)
-    return {"ok": True, "version": updated["version"]}
-
-
-@api_router.patch("/erp/state")
-async def patch_state(body: PatchBody, user_id: str = Depends(get_current_user_id)):
-    return await _commit(body.changes, body.baseVersion, user_id)
-
-
-@api_router.put("/erp/state")
-async def put_state(body: StateBody, user_id: str = Depends(get_current_user_id)):
-    return await _commit(body.data, None, user_id)
+@api_router.post("/erp/commit")
+async def commit(body: CommitBody, user_id: str = Depends(get_current_user_id)):
+    await _activate_record_store()
+    try:
+        return await store.commit(body, user_id)
+    except Conflict as c:
+        return JSONResponse(status_code=409, content=c.payload)
 
 
 @api_router.get("/erp/version")
 async def get_version(user_id: str = Depends(get_current_user_id)):
-    doc = await db.erp_state.find_one({"_id": STATE_ID}, {"version": 1})
-    return {"version": (doc.get("version", 0) if doc else 0)}
+    return {"version": await store.version()}
+
+
+@api_router.get("/erp/migration-report")
+async def migration_report(user_id: str = Depends(get_current_user_id)):
+    m = await db.erp_meta.find_one({"_id": "record-store"})
+    return {"active": bool(m and m.get("active")), "report": (m or {}).get("migration")}
+
+
+@api_router.api_route("/erp/state", methods=["PUT", "PATCH"])
+async def legacy_save(user_id: str = Depends(get_current_user_id)):
+    # Old browser tabs must reload — whole-state saves are disabled to prevent overwrites.
+    raise HTTPException(status_code=426, detail="ERP was updated. Please reload the page (your browser tab is outdated).")
 
 
 # ---------------------------------------------------------------------------
@@ -354,25 +374,17 @@ async def _startup_storage():
     except Exception as e:
         logger.error(f"Storage init failed: {e}")
 
-    # Migrate to chunked storage, then ensure the aaa@amrest.in admin exists (idempotent)
     try:
-        await _ensure_chunked()
-        users = (await _read_state(["users"])).get("users", [])
+        await store.init()
+        await _activate_record_store()
+        users = await store.users()
         if not any((u.get("username", "").lower() == "aaa@amrest.in") for u in users):
-            users.append({
-                "id": "u-admin-anwar",
-                "name": "Anwar (Admin)",
-                "email": "aaa@amrest.in",
-                "username": "aaa@amrest.in",
-                "password": "anwar@123",
-                "role": "admin",
-                "active": True,
-                "createdAt": datetime.now(timezone.utc).isoformat(),
-            })
-            await _commit({"users": users}, None, "system")
-            logger.info("Injected aaa@amrest.in admin into existing state")
+            from record_store import Op
+            await store.commit(CommitBody(opId="seed-admin-anwar", ops=[Op(kind="upsert", coll="users", rid="u-admin-anwar", data={
+                "id": "u-admin-anwar", "name": "Anwar (Admin)", "email": "aaa@amrest.in", "username": "aaa@amrest.in",
+                "password": "anwar@123", "role": "admin", "active": True, "createdAt": datetime.now(timezone.utc).isoformat()})]), "system")
     except Exception as e:
-        logger.error(f"State migration failed: {e}")
+        logger.error(f"Record store startup failed: {e}")
 
 
 async def get_current_user_from_any(

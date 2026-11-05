@@ -102,3 +102,29 @@ export async function fetchRemoteVersion(): Promise<number> {
   const res = await request("/erp/version");
   return res?.version ?? 0;
 }
+
+
+export interface RemoteState { data: DB; revs: Record<string, Record<string, number>>; vrevs: Record<string, number>; version: number }
+export interface RemoteChanges { records: { coll: string; rid: string; rev: number; deleted: boolean; data: any }[]; values: { key: string; rev: number; value: any }[]; version: number }
+export type CommitResult =
+  | { status: "ok"; version: number; revs: { coll?: string; rid?: string; key?: string; rev: number }[] }
+  | { status: "conflict"; conflicts: any[]; duplicates: { coll: string; rid: string; number: string }[] }
+  | { status: "expired" } | { status: "outdated" } | { status: "failed"; message: string };
+
+const authHeaders = () => { const t = getToken(); return { "Content-Type": "application/json", ...(t ? { Authorization: `Bearer ${t}` } : {}) }; };
+export const fetchState = async (): Promise<RemoteState> => request("/erp/state");
+export const fetchChanges = async (since: number): Promise<RemoteChanges> => request(`/erp/changes?since=${since}`);
+
+export async function commitOps(opId: string, ops: any[]): Promise<CommitResult> {
+  try {
+    const res = await fetch(`${API}/erp/commit`, { method: "POST", headers: authHeaders(), body: JSON.stringify({ opId, ops }) });
+    if (res.status === 401) return { status: "expired" };
+    if (res.status === 409) { const j = await res.json(); return { status: "conflict", conflicts: j.conflicts || [], duplicates: j.duplicates || [] }; }
+    if (res.status === 426) return { status: "outdated" };
+    if (!res.ok) return { status: "failed", message: `Server error ${res.status}` };
+    const j = await res.json();
+    return { status: "ok", version: j.version, revs: j.revs || [] };
+  } catch (e: any) {
+    return { status: "failed", message: "Network error — check internet connection" };
+  }
+}

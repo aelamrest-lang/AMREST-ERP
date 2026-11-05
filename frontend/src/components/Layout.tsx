@@ -3,6 +3,7 @@ import { useStore } from "../lib/store";
 import { cn } from "../utils/cn";
 import { canAccessRoute, roleLabels, type RouteId } from "../lib/permissions";
 import { IconBolt, IconDashboard, IconUsers, IconUser, IconBriefcase, IconFile, IconShop, IconBox, IconTruck, IconFactory, IconCart, IconClipboard, IconSettings, IconChart, IconLogout, IconSun, IconMoon, IconMenu, IconBell } from "./icons";
+import { SaveBanner, SaveIndicator } from "./SaveStatus";
 
 export type Route = RouteId;
 
@@ -51,7 +52,7 @@ const navGroups: { label: string; items: { id: Route; label: string; icon: any }
 ];
 
 export function Layout({ route, setRoute, children }: { route: Route; setRoute: (r: Route) => void; children: ReactNode }) {
-  const { currentUser, logout, theme, toggleTheme, db, syncStatus, syncError, syncNow } = useStore();
+  const { currentUser, logout, theme, toggleTheme, db } = useStore();
   const [open, setOpen] = useState(false);
   const canSeeLowStock = currentUser?.role === "admin" || currentUser?.role === "store";
 
@@ -130,6 +131,7 @@ export function Layout({ route, setRoute, children }: { route: Route; setRoute: 
                 <span className="absolute -top-0.5 -right-0.5 h-4 min-w-4 px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">{lowStock}</span>
               </button>
             )}
+            <SaveIndicator/>
             <button onClick={toggleTheme} className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300" title="Toggle theme">
               {theme === "light" ? <IconMoon /> : <IconSun />}
             </button>
@@ -148,14 +150,7 @@ export function Layout({ route, setRoute, children }: { route: Route; setRoute: 
           </div>
         </header>
         <main className="flex-1 p-4 lg:p-6 overflow-x-hidden">
-          {syncStatus === "error" && (
-            <div className="mb-4 rounded-lg border border-rose-300 bg-rose-50 dark:bg-rose-950/40 dark:border-rose-800 px-4 py-2.5 flex flex-wrap items-center gap-3 text-sm text-rose-800 dark:text-rose-300" data-testid="sync-error-banner">
-              <b>Not saved to server.</b><span className="flex-1">{syncError}</span>
-              {/Session expired/.test(syncError)
-                ? <button type="button" onClick={logout} className="px-3 py-1 rounded-md bg-rose-600 text-white text-xs font-semibold" data-testid="sync-relogin-btn">Log in again</button>
-                : <button type="button" onClick={() => syncNow()} className="px-3 py-1 rounded-md bg-rose-600 text-white text-xs font-semibold" data-testid="sync-retry-btn">Retry now</button>}
-            </div>
-          )}
+          <SaveBanner/>
           {children}
         </main>
       </div>

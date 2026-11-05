@@ -3,8 +3,8 @@ import { legacyDispatch } from "./invoice";
 import type { DB, User, ActivityLog } from "./types";
 import { defaultDocumentFormats, seedDB } from "./seed";
 import { defaultPermissionsForRole, normalizePermissions } from "./permissions";
-import { apiLogin, fetchRemoteState, patchRemoteDB, patchRemoteDBFinal, fetchRemoteVersion, getToken, setToken, ConflictError } from "./api";
-import { changedKeys, merge3, normalizePoStatus, renumberCollisions } from "./merge";
+import { apiLogin, fetchState, fetchChanges, commitOps, fetchRemoteVersion, getToken, setToken, type RemoteState } from "./api";
+import { applyChanges, computeOps, renumber, type SyncOp } from "./sync";
 
 const SESSION_KEY = "amrest_erp_session";
 const THEME_KEY = "amrest_theme";
@@ -115,16 +115,22 @@ interface Ctx {
   currentUser: User | null;
   hydrating: boolean;
   login: (username: string, password: string) => Promise<{ ok: boolean; msg?: string }>;
-  logout: () => void;
+  logout: () => void | Promise<void>;
   changePassword: (oldPwd: string, newPwd: string) => { ok: boolean; msg?: string };
   log: (action: string, module: string) => void;
   syncStatus: "syncing" | "connected" | "error" | "not-configured";
   syncError: string;
   syncNow: () => Promise<void>;
+  saveState: SaveState;
+  conflicts: ConflictItem[];
+  resolveConflicts: (mode: "reload" | "reapply") => void;
   theme: "light" | "dark";
   toggleTheme: () => void;
 }
 
+export type SaveState = "saving" | "saved" | "unsaved" | "failed" | "conflict" | "expired";
+export interface ConflictItem { coll?: string; rid?: string; key?: string; reason: string; label: string; theirs: any; mine: any; rev: number | null; fields: { field: string; base: any; mine: any; theirs: any }[] }
+const UNSAVED_KEY = "amrest-erp-unsaved-ops";
 const StoreCtx = createContext<Ctx | null>(null);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
@@ -137,46 +143,154 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [theme, setTheme] = useState<"light" | "dark">(() => (localStorage.getItem(THEME_KEY) as any) || "light");
   const [syncStatus, setSyncStatus] = useState<Ctx["syncStatus"]>("syncing");
   const [syncError, setSyncError] = useState("");
+  const [saveState, setSaveStateRaw] = useState<SaveState>("saved");
+  const [conflicts, setConflicts] = useState<ConflictItem[]>([]);
   const saveTimer = useRef<any>(null);
   const saving = useRef(false);
-  const localVersion = useRef<number>(0);
+  const version = useRef<number>(0);
   const baseRef = useRef<DB | null>(null);
   const dbRef = useRef<DB | null>(null);
-  const hasLocalChanges = () => !!dbRef.current && Object.keys(changedKeys(baseRef.current, dbRef.current)).length > 0;
-  const adopt = useCallback((data: DB | null, version: number) => {
-    const next = migrateDB(data || seedDB());
-    baseRef.current = next;
-    dbRef.current = next;
-    localVersion.current = version;
+  const revs = useRef<Record<string, Record<string, number>>>({});
+  const vrevs = useRef<Record<string, number>>({});
+  const inflight = useRef<{ opId: string; ops: SyncOp[]; snapshot: DB } | null>(null);
+  const blocked = useRef(false);
+  const setSaveState = (st: SaveState, msg = "") => {
+    setSaveStateRaw(st); setSyncError(msg);
+    setSyncStatus(st === "saved" ? "connected" : st === "saving" || st === "unsaved" ? "syncing" : "error");
+  };
+  const pendingOps = () => (dbRef.current && baseRef.current ? computeOps(baseRef.current, dbRef.current, revs.current, vrevs.current) : []);
+  const adopt = useCallback((remote: RemoteState) => {
+    const next = migrateDB(remote.data || seedDB());
+    baseRef.current = next; dbRef.current = next;
+    revs.current = remote.revs || {}; vrevs.current = remote.vrevs || {}; version.current = remote.version;
     setDb(next);
     return next;
   }, []);
+  const saveUnsaved = (v: any) => { try { v ? localStorage.setItem(UNSAVED_KEY, JSON.stringify(v)) : localStorage.removeItem(UNSAVED_KEY); } catch {} };
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
     localStorage.setItem(THEME_KEY, theme);
   }, [theme]);
 
-  // Hydrate from backend on mount. If a valid JWT token exists in localStorage
-  // and the stored session ID matches a user, restore the session automatically.
-  // Session is only cleared on explicit Logout or if the token is rejected.
-  const [hydrating, setHydrating] = useState<boolean>(() => !!getToken());
-  useEffect(() => {
-    let cancelled = false;
-    async function hydrate() {
-      if (!getToken()) {
-        setSyncStatus("not-configured");
-        setHydrating(false);
+  const pull = useCallback(async () => {
+    const ch = await fetchChanges(version.current);
+    if (!ch.records.length && !ch.values.length) { version.current = ch.version; return; }
+    const r = applyChanges(baseRef.current, dbRef.current, revs.current, vrevs.current, ch);
+    baseRef.current = r.base; dbRef.current = r.local; version.current = ch.version;
+    setDb(r.local);
+  }, []);
+
+  const schedule = (ms: number) => {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => { saveTimer.current = null; flushRef.current(); }, ms);
+  };
+  const flushRef = useRef<() => Promise<void>>(async () => {});
+
+  const flushSave = useCallback(async (): Promise<void> => {
+    if (saving.current || blocked.current || !baseRef.current) return;
+    if (!inflight.current) {
+      const ops = pendingOps();
+      if (!ops.length) { setSaveState("saved"); return; }
+      inflight.current = { opId: crypto.randomUUID(), ops, snapshot: dbRef.current! };
+      saveUnsaved({ opId: inflight.current.opId, ops });
+    }
+    saving.current = true;
+    setSaveState("saving");
+    const { opId, ops, snapshot } = inflight.current;
+    const res = await commitOps(opId, ops);
+    saving.current = false;
+    if (res.status === "ok") {
+      res.revs.forEach(r => { if (r.key) vrevs.current[r.key] = r.rev; else if (r.coll && r.rid) (revs.current[r.coll] = revs.current[r.coll] || {})[r.rid] = r.rev; });
+      ops.forEach(o => { if (o.kind === "delete" && o.coll && o.rid) delete revs.current[o.coll]?.[o.rid]; });
+      baseRef.current = snapshot;
+      inflight.current = null;
+      saveUnsaved(null);
+      if (res.version > version.current + 1) { try { await pull(); } catch {} } else version.current = res.version;
+      if (pendingOps().length) { setSaveState("unsaved"); schedule(400); } else setSaveState("saved");
+      return;
+    }
+    if (res.status === "conflict") {
+      inflight.current = null;
+      saveUnsaved({ opId: crypto.randomUUID(), ops });
+      try { await pull(); } catch {}
+      if (res.duplicates.length && !res.conflicts.length) {
+        const { db: fixed, map } = renumber(dbRef.current, res.duplicates);
+        const baseLogs = new Set((baseRef.current!.logs || []).map(l => l.id));
+        const fix = (t: string) => map.reduce((a, [o, n]) => a.split(o).join(n), t);
+        fixed.logs = fixed.logs.map((l: ActivityLog) => baseLogs.has(l.id) ? l : { ...l, action: fix(l.action) });
+        const baseAudit = new Set(((baseRef.current as any).grnAudit || []).map((a: any) => a.id));
+        if (fixed.grnAudit) fixed.grnAudit = fixed.grnAudit.map((a: any) => baseAudit.has(a.id) ? a : { ...a, grnNumber: fix(String(a.grnNumber || "")) });
+        dbRef.current = fixed; setDb(fixed);
+        schedule(100);
         return;
       }
+      const b: any = baseRef.current, l: any = dbRef.current;
+      setConflicts(res.conflicts.map((c: any) => {
+        const mine = c.key ? (c.key.startsWith("settings.") ? l.settings?.[c.key.slice(9)] : l[c.key]) : (l[c.coll] || []).find((x: any) => x.id === c.rid);
+        const orig = c.key ? (c.key.startsWith("settings.") ? b.settings?.[c.key.slice(9)] : b[c.key]) : (b[c.coll] || []).find((x: any) => x.id === c.rid);
+        const fields = mine && typeof mine === "object" && !Array.isArray(mine)
+          ? Object.keys(mine).filter(k => JSON.stringify(mine[k]) !== JSON.stringify(orig?.[k])).map(k => ({ field: k, base: orig?.[k], mine: mine[k], theirs: c.theirs?.[k] }))
+          : [{ field: c.key || "value", base: orig, mine, theirs: c.theirs }];
+        return { ...c, mine, label: c.key || `${c.coll} · ${mine?.number || mine?.name || orig?.number || orig?.name || c.rid}`, fields };
+      }));
+      blocked.current = true;
+      setSaveState("conflict", "Another user changed the same record. Review and choose how to continue.");
+      return;
+    }
+    if (res.status === "expired") { blocked.current = true; setSaveState("expired", "Session expired — your changes are NOT saved yet (kept in this browser). Log in again to save them."); return; }
+    if (res.status === "outdated") { blocked.current = true; setSaveState("failed", "The ERP was updated. Reload the page — your unsaved changes are kept in this browser."); return; }
+    setSaveState("failed", `${res.message}. Your changes are kept and will be retried.`);
+    schedule(5000);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  flushRef.current = flushSave;
+
+  const resolveConflicts = useCallback((mode: "reload" | "reapply") => {
+    const b: any = { ...baseRef.current, settings: { ...baseRef.current!.settings } }, l: any = { ...dbRef.current, settings: { ...dbRef.current!.settings } };
+    conflicts.forEach(c => {
+      if (c.key) {
+        const sub = c.key.startsWith("settings.") ? c.key.slice(9) : null;
+        if (sub) { b.settings[sub] = c.theirs; if (mode === "reload") l.settings[sub] = c.theirs; } else { b[c.key] = c.theirs; if (mode === "reload") l[c.key] = c.theirs; }
+        vrevs.current[c.key] = c.rev ?? 0;
+        return;
+      }
+      const coll = c.coll!;
+      const put = (list: any[], rec: any) => rec ? (list.some(x => x.id === c.rid) ? list.map(x => x.id === c.rid ? rec : x) : [rec, ...list]) : list.filter(x => x.id !== c.rid);
+      b[coll] = put(b[coll] || [], c.theirs);
+      const mineChanges = Object.fromEntries(c.fields.map(f => [f.field, f.mine]));
+      l[coll] = put(l[coll] || [], mode === "reload" ? c.theirs : (c.theirs ? { ...c.theirs, ...mineChanges } : c.mine));
+      if (c.rev != null && c.theirs) (revs.current[coll] = revs.current[coll] || {})[c.rid!] = c.rev; else delete revs.current[coll]?.[c.rid!];
+    });
+    baseRef.current = b; dbRef.current = l; setDb(l);
+    setConflicts([]); blocked.current = false;
+    saveUnsaved(null);
+    schedule(50);
+  }, [conflicts]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Hydrate from backend on mount; replays any unsaved batch left from a previous session (same one-time key).
+  const [hydrating, setHydrating] = useState<boolean>(() => !!getToken());
+  const hydrateFromServer = useCallback(async () => {
+    const remote = await fetchState();
+    const next = adopt(remote);
+    writeCachedSettings(next.settings);
+    let saved: any = null;
+    try { saved = JSON.parse(localStorage.getItem(UNSAVED_KEY) || "null"); } catch {}
+    if (saved?.ops?.length) {
+      inflight.current = { opId: saved.opId, ops: saved.ops, snapshot: next };
+      setSaveState("unsaved", "Re-sending changes that were not saved last time…");
+      setTimeout(async () => { await flushRef.current(); try { await pull(); } catch {} }, 0);
+    } else setSaveState("saved");
+    return next;
+  }, [adopt, pull]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!getToken()) { setSyncStatus("not-configured"); setHydrating(false); return; }
       setSyncStatus("syncing");
       try {
-        const remote = await fetchRemoteState();
+        const next = await hydrateFromServer();
         if (cancelled) return;
-        const next = adopt(remote.data, remote.version);
-        writeCachedSettings(next.settings);
-        setSyncStatus("connected");
-        setSyncError("");
         const sessionId = localStorage.getItem(SESSION_KEY);
         if (sessionId) {
           const restored = next.users.find(u => u.id === sessionId) || null;
@@ -185,103 +299,43 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
       } catch (err: any) {
         if (cancelled) return;
-        setSyncStatus("error");
-        setSyncError(err?.message || "Load failed");
-        // Only clear session if the server explicitly rejected the token
-        if (err?.message === "Unauthorized") {
-          setToken(null);
-          localStorage.removeItem(SESSION_KEY);
-          setCurrentUser(null);
-        }
+        setSaveState("failed", err?.message || "Load failed");
+        if (err?.message === "Unauthorized") { setToken(null); localStorage.removeItem(SESSION_KEY); setCurrentUser(null); }
       } finally {
         if (!cancelled) setHydrating(false);
       }
-    }
-    hydrate();
+    })();
     return () => { cancelled = true; };
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Poll for external changes every 15s (only adopt remote when this tab has nothing unsaved)
+  // Pull other users' committed changes every 10s (incremental; never overwrites this tab's unsaved edits).
   useEffect(() => {
     if (!currentUser) return;
     const int = setInterval(async () => {
-      if (!getToken() || saving.current || saveTimer.current || hasLocalChanges()) return;
-      try {
-        const v = await fetchRemoteVersion();
-        if (v !== localVersion.current) {
-          const remote = await fetchRemoteState();
-          if (!saving.current && !saveTimer.current && !hasLocalChanges()) adopt(remote.data, remote.version);
-        }
-      } catch {}
-    }, 15000);
+      if (!getToken() || saving.current || blocked.current) return;
+      try { if ((await fetchRemoteVersion()) !== version.current) await pull(); } catch {}
+    }, 10000);
     return () => clearInterval(int);
-  }, [currentUser, adopt]);
-
-  const mergeOnto = (remoteDb: DB): DB => {
-    const raw = merge3(baseRef.current, dbRef.current, remoteDb) as DB;
-    const merged = normalizePoStatus(renumberCollisions(raw, baseRef.current, dbRef.current).db, baseRef.current) as DB;
-    merged.logs = [...merged.logs].sort((a: ActivityLog, b: ActivityLog) => b.timestamp.localeCompare(a.timestamp)).slice(0, 500);
-    return merged;
-  };
-
-  const flushSave = useCallback(async () => {
-    if (saving.current) return;
-    saving.current = true;
-    setSyncStatus("syncing");
-    try {
-      for (let attempt = 0; attempt < 6; attempt++) {
-        const local = dbRef.current!;
-        const changes = changedKeys(baseRef.current, local);
-        if (!Object.keys(changes).length) break;
-        try {
-          localVersion.current = await patchRemoteDB(localVersion.current, changes);
-          baseRef.current = local;
-        } catch (err) {
-          if (!(err instanceof ConflictError)) throw err;
-          // Someone else saved first: merge their records with ours, then retry.
-          const remote = await fetchRemoteState();
-          const remoteDb = migrateDB(remote.data || seedDB());
-          const merged = mergeOnto(remoteDb);
-          baseRef.current = remoteDb;
-          localVersion.current = remote.version;
-          dbRef.current = merged;
-          setDb(merged);
-        }
-      }
-      if (hasLocalChanges()) throw new Error("Could not save — other users are saving at the same time. Retrying…");
-      setSyncStatus("connected");
-      setSyncError("");
-    } catch (err: any) {
-      setSyncStatus("error");
-      setSyncError(err?.message === "Unauthorized" ? "Session expired — your changes are NOT saved yet. Log in again to save them." : (err?.message || "Save failed"));
-    } finally {
-      saving.current = false;
-    }
-    if (hasLocalChanges() && getToken() && !saveTimer.current) saveTimer.current = setTimeout(() => { saveTimer.current = null; flushSave(); }, 3000);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [currentUser, pull]);
 
   const persistRemote = useCallback((next: DB) => {
     dbRef.current = next;
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => { saveTimer.current = null; flushSave(); }, 400);
-  }, [flushSave]);
+    if (!blocked.current) { setSaveState("unsaved"); schedule(400); }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    const flush = () => {
-      if (!dbRef.current || saving.current) return;
-      const changes = changedKeys(baseRef.current, dbRef.current);
-      if (!Object.keys(changes).length) return;
-      if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
-      patchRemoteDBFinal(localVersion.current, changes);
+    const keep = (e: BeforeUnloadEvent) => {
+      if (inflight.current || pendingOps().length) {
+        if (!inflight.current) saveUnsaved({ opId: crypto.randomUUID(), ops: pendingOps() });
+        flushRef.current();
+        e.preventDefault(); e.returnValue = "";
+      }
     };
-    const onVis = () => { if (document.visibilityState === "hidden" && dbRef.current && Object.keys(changedKeys(baseRef.current, dbRef.current)).length) { if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; } flushSave(); } };
-    window.addEventListener("beforeunload", flush);
+    const onVis = () => { if (document.visibilityState === "hidden" && pendingOps().length) flushRef.current(); };
+    window.addEventListener("beforeunload", keep);
     document.addEventListener("visibilitychange", onVis);
-    return () => {
-      window.removeEventListener("beforeunload", flush);
-      document.removeEventListener("visibilitychange", onVis);
-    };
-  }, []);
+    return () => { window.removeEventListener("beforeunload", keep); document.removeEventListener("visibilitychange", onVis); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setDB = useCallback((updater: (db: DB) => DB) => {
     setDb(prev => {
@@ -292,28 +346,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [persistRemote]);
 
   const syncNow = useCallback(async () => {
-    setSyncStatus("syncing");
-    try {
-      if (hasLocalChanges()) await flushSave();
-      if (hasLocalChanges()) return;
-      const remote = await fetchRemoteState();
-      adopt(remote.data, remote.version);
-      setSyncStatus("connected");
-      setSyncError("");
-    } catch (err: any) {
-      setSyncStatus("error");
-      setSyncError(err?.message || "Sync failed");
-    }
-  }, [db]);
+    if (saveState === "expired") return;
+    blocked.current = false;
+    await flushRef.current();
+    try { await pull(); } catch {}
+  }, [pull, saveState]);
 
   const log = useCallback((action: string, module: string) => {
     if (!currentUser) return;
-    const entry: ActivityLog = {
-      id: crypto.randomUUID(),
-      userId: currentUser.id,
-      action, module,
-      timestamp: new Date().toISOString(),
-    };
+    const entry: ActivityLog = { id: crypto.randomUUID(), userId: currentUser.id, action, module, timestamp: new Date().toISOString() };
     setDb(prev => {
       const next = { ...prev, logs: [entry, ...prev.logs].slice(0, 500) };
       persistRemote(next);
@@ -324,49 +365,35 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (username: string, password: string) => {
     try {
       const res = await apiLogin(username, password);
-      // After login, hydrate state
       setSyncStatus("syncing");
-      const remote = await fetchRemoteState();
-      let next: DB;
-      if (hasLocalChanges()) {
-        // Unsaved work from an expired session: merge it onto the latest server data instead of discarding it.
-        const remoteDb = migrateDB(remote.data || seedDB());
-        next = mergeOnto(remoteDb);
-        baseRef.current = remoteDb;
-        localVersion.current = remote.version;
-        dbRef.current = next;
-        setDb(next);
-      } else next = adopt(remote.data, remote.version);
+      // Unsaved work of an expired session stays in this browser and is re-sent (with conflict checks) after login.
+      if (inflight.current || pendingOps().length) saveUnsaved({ opId: inflight.current?.opId || crypto.randomUUID(), ops: inflight.current?.ops || pendingOps() });
+      inflight.current = null; blocked.current = false;
+      const next = await hydrateFromServer();
       const user = next.users.find(u => u.id === res.user.id) || res.user;
-      writeCachedSettings(next.settings);
       setCurrentUser(user);
       localStorage.setItem(SESSION_KEY, user.id);
       const entry: ActivityLog = { id: crypto.randomUUID(), userId: user.id, action: "Logged in", module: "Auth", timestamp: new Date().toISOString() };
-      const withLog = { ...next, logs: [entry, ...next.logs].slice(0, 500) };
-      setDb(withLog);
-      persistRemote(withLog);
-      setSyncStatus("connected");
+      setDb(prev => { const withLog = { ...prev, logs: [entry, ...prev.logs].slice(0, 500) }; persistRemote(withLog); return withLog; });
       return { ok: true };
     } catch (err: any) {
       return { ok: false, msg: err?.message || "Login failed" };
     }
-  }, [persistRemote]);
+  }, [persistRemote, hydrateFromServer]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const logout = useCallback(() => {
-    if (currentUser) {
+  const logout = useCallback(async () => {
+    if (currentUser && saveState !== "expired") {
       const entry: ActivityLog = { id: crypto.randomUUID(), userId: currentUser.id, action: "Logged out", module: "Auth", timestamp: new Date().toISOString() };
       const cur = dbRef.current || db;
-      const next = { ...cur, logs: [entry, ...cur.logs].slice(0, 500) };
-      dbRef.current = next;
-      setDb(next);
+      dbRef.current = { ...cur, logs: [entry, ...cur.logs].slice(0, 500) };
       if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
-      patchRemoteDBFinal(localVersion.current, changedKeys(baseRef.current, next));
+      await flushRef.current();
     }
     setCurrentUser(null);
     setToken(null);
     localStorage.removeItem(SESSION_KEY);
     setSyncStatus("not-configured");
-  }, [currentUser, db]);
+  }, [currentUser, db, saveState]);
 
   const changePassword = useCallback((oldPwd: string, newPwd: string) => {
     if (!currentUser) return { ok: false, msg: "Not logged in" };
@@ -382,7 +409,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const toggleTheme = () => setTheme(t => t === "light" ? "dark" : "light");
 
   return (
-    <StoreCtx.Provider value={{ db, setDB, currentUser, hydrating, login, logout, changePassword, log, syncStatus, syncError, syncNow, theme, toggleTheme }}>
+    <StoreCtx.Provider value={{ db, setDB, currentUser, hydrating, login, logout, changePassword, log, syncStatus, syncError, syncNow, saveState, conflicts, resolveConflicts, theme, toggleTheme }}>
       {children}
     </StoreCtx.Provider>
   );
