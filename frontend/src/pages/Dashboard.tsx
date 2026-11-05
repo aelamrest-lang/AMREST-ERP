@@ -539,7 +539,7 @@ function OverduePOs({ db }: { db: any }) {
                     <span className="truncate">{vendor?.name || "Unknown Vendor"}</span>
                   </div>
                   <div className="text-xs text-slate-500 mt-0.5">
-                    Received {summary.received} / Pending {summary.pending} of {summary.ordered}
+                    Received {fmt2(summary.received)} / Pending {fmt2(summary.pending)} of {fmt2(summary.ordered)}
                     {po.expectedDeliveryDate ? ` · Expected ${po.expectedDeliveryDate}` : ""}
                   </div>
                 </div>

@@ -4,7 +4,7 @@ import type { DB, User, ActivityLog } from "./types";
 import { defaultDocumentFormats, seedDB } from "./seed";
 import { defaultPermissionsForRole, normalizePermissions } from "./permissions";
 import { apiLogin, fetchRemoteState, patchRemoteDB, patchRemoteDBFinal, fetchRemoteVersion, getToken, setToken, ConflictError } from "./api";
-import { changedKeys, merge3, renumberCollisions } from "./merge";
+import { changedKeys, merge3, normalizePoStatus, renumberCollisions } from "./merge";
 
 const SESSION_KEY = "amrest_erp_session";
 const THEME_KEY = "amrest_theme";
@@ -219,7 +219,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const mergeOnto = (remoteDb: DB): DB => {
     const raw = merge3(baseRef.current, dbRef.current, remoteDb) as DB;
-    const { db: merged } = renumberCollisions(raw, baseRef.current, dbRef.current);
+    const merged = normalizePoStatus(renumberCollisions(raw, baseRef.current, dbRef.current).db, baseRef.current) as DB;
     merged.logs = [...merged.logs].sort((a: ActivityLog, b: ActivityLog) => b.timestamp.localeCompare(a.timestamp)).slice(0, 500);
     return merged;
   };

@@ -1,0 +1,41 @@
+{
+  "summary": "Retested the iteration_15 multi-user fixes on the preview URL. BACKEND: 12/12 pass (test_chunked_state.py). S4 STOCK FIXED: admin and aaa@amrest.in each created a GRN on PO-2026-365 at the same moment (B got PATCH 409, merged, then 200). Item bff2a141 stock went 6.6 → 8.6 (+2) and line-2 item 32c365ec went 0 → 18 (9 + 9). NUMBERING FIXED: the two GRNs became GRN-2026-380 and GRN-2026-381, with no new duplicates. B's activity log text was rewritten to GRN-2026-381. BUT B's grnAudit 'Created' entry still says GRN-2026-380, so GRN-381's audit history is attributed to GRN-380. SYNC BANNER: (a) with a garbage token, a change gets PATCH 401 and the banner reads 'Not saved to server. Session expired — your changes are NOT saved yet. Log in again to save them.' with sync-relogin-btn. After clicking it and logging in again, the unsaved phone change was merged and saved (PATCH 200) and survived a reload. (b) A simulated PATCH 500 shows the banner with sync-retry-btn. Clicking Retry after the route was restored returned 200 and the banner disappeared. VISIBILITY: hiding the tab starts the PATCH 0.02s after the change, against 0.41s for the normal debounce. In a stale tab it got 409, merged and returned 200. Field-level settings merge works: A's phone change and B's address change both persisted. REGRESSION S3-like: A and B deleted GRN-380 and GRN-381 at the same time (both 409 → 200). Stock was reversed correctly (back to 6.6 and 0). BUT the PO status was left at 'Partially Received' with zero GRNs; it was 'Approved'. DASHBOARD: the donut now shows rounded numbers (587113.63 and 577575.63). The 'Overdue Purchase Orders' card still shows raw floats (12.200000000000045, 91.86000000000013). UNIT CHECK of renumberCollisions (merge.ts compiled with tsc): the PO renumber works, but there is a self-collision bug (details in the issues). CLEANUP: took a snapshot before testing, deleted the test GRNs through the UI (stock returned exactly), then used PATCH to restore logs, grnAudit, the PO-2026-365 status and the settings phone/address. The final diff against the snapshot shows only another session's concurrent change (admin 'Updated item: Circuit Breaker 3 Phase 63 KVA', unit pcs→Pcs, made at 07:26:33 while my tabs were on Settings). I kept it.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PATCH/PUT /api/erp/state (_commit)", "issue": "Still not atomic. The version is increased before _write_keys, so a reader can get the new version together with old chunks. This is unchanged from iteration_15."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Dashboard > Overdue Purchase Orders card", "issue": "Raw floats are shown: '12.200000000000045' and '91.86000000000013' (pending qty)", "selector": "Dashboard Overdue Purchase Orders list", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "renumberCollisions: grnAudit", "issue": "After renumbering, only the GRN number and logs are updated. The grnAudit entry (grnNumber field) created by the renumbered tab still has the old number. Reproduced: GRN-2026-381 exists, but both 'Created' audit rows say GRN-2026-380. The GRN Audit modal for 381 shows no Created entry, and the one for 380 shows two. Other records that reference the number by text are also not updated.", "affected_selectors": ["grn-audit-*"]},
+      {"flow": "renumberCollisions: self-collision", "issue": "The 'taken' set only contains OTHER users' numbers. If a tab has 2 or more unsaved new records (for example several creations while the session had expired, or two within the 400ms debounce), e.g. local 366 and 367 while remote has 366, then local 366 is renamed to 367 and duplicates the tab's own 367. Reproduced with a node unit test: the result has two PO-2026-367. The log rewrite also maps both log texts to 367. Fix: add this tab's own non-colliding numbers to 'taken' first, and rewrite logs per record id instead of a global string replace chain.", "affected_selectors": []},
+      {"flow": "Concurrent GRN delete or create: PO status", "issue": "PO status is a derived field computed from each tab's local grns (poStatusFor) and merged as 'local wins'. When two GRNs on the same PO are deleted at the same time, PO-2026-365 stayed 'Partially Received' with zero GRNs (expected 'Approved'). Recompute derived statuses after the merge (or derive them at render time).", "affected_selectors": ["grn-delete-*"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_chunked_state.py", "/app/test_reports/pytest/pytest_chunked16.xml"],
+  "action_items": [
+    "MEDIUM: renumberCollisions should also update grnAudit[].grnNumber (and any other number references) for renamed records.",
+    "MEDIUM: renumberCollisions self-collision: seed 'taken' with this tab's own new numbers that are not being renamed, and rewrite log text per record so chained renames do not cascade.",
+    "MEDIUM: After a merge, recompute PO status from the merged grns (poStatusFor) so concurrent GRN create/delete leaves a correct status.",
+    "LOW: Format the numbers in the Dashboard 'Overdue Purchase Orders' card (fmt2).",
+    "LOW (carry-over): Make _commit atomic. patchRemoteDBFinal on unload/logout is still fire-and-forget on a 409."
+  ],
+  "critical_code_review_comments": [
+    "ACCUMULATORS only contains currentStock. Other numeric counters on shared records (for example any stored qty/produced counters on jobCards or stage progress) still use 'local wins' under concurrent edits.",
+    "syncNow's useCallback depends on [db] although it only uses refs, so it is recreated on every change. This is harmless.",
+    "login(): when merging unsaved changes after a re-login, the 'Logged out' log created during the expired session is merged too. This is fine."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (12/12)", "frontend": "~85% (all requested fixes work; 3 secondary merge gaps found)"},
+  "test_credentials": "admin/admin123 and aaa@amrest.in/anwar@123 work.",
+  "seed_data_creation": "None left behind. GRN-2026-380 and 381 were created and deleted through the UI. Logs, grnAudit, the PO-2026-365 status and the settings phone/address were restored by PATCH (/tmp/restore16.py). Final diff against /tmp/s16_pre.json shows only a foreign concurrent item-unit edit, which was kept.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Snapshot with /tmp/snap.py, compare with /tmp/diff.py, restore pattern in /tmp/restore16.py (keeps foreign logs). PO-2026-365 (id a991bf19, status Approved) has 2 lines: bff2a141 (stock 6.6) and 32c365ec (stock 0, Receive Now defaults to 9). Settings phone input: label:text-is('Phone') ~ input. Token key: amrest_erp_token. Simulate hidden: Object.defineProperty(document,'visibilityState',...) then dispatch visibilitychange. merge.ts can be unit-tested with: node + typescript.transpileModule into /tmp/mt/merge.js.",
+  "rca of the issue": "Stock and number fixes work for the reported case. The remaining gaps all come from the merge being field-level and unaware of cross-record references. Renumbering does not touch grnAudit, and derived fields such as PO status are not recomputed from the merged lists."
+}
