@@ -62,6 +62,7 @@ class RecordStore:
         await self.rec.create_index([("coll", ASCENDING), ("num", ASCENDING)], unique=True, partialFilterExpression={"num": {"$type": "string"}})
         await self.val.create_index([("ver", ASCENDING)])
         await self.audit.create_index([("coll", ASCENDING), ("rid", ASCENDING)])
+        await self.applied.create_index("exp", expireAfterSeconds=30 * 86400)
         try:
             hello = await self.client.admin.command("hello")
             self.tx = bool(hello.get("setName") or hello.get("msg") == "isdbgrid")
@@ -180,6 +181,10 @@ class RecordStore:
                         other = await self.rec.find_one({"coll": op.coll, "num": num, "_id": {"$ne": f"{op.coll}:{op.rid}"}}, session=s)
                         if other:
                             dups.append({"coll": op.coll, "rid": op.rid, "number": num})
+            elif op.kind == "inc":
+                r = await self.rec.find_one({"_id": f"{op.coll}:{op.rid}"}, session=s)
+                if not r or r.get("deleted"):
+                    conflicts.append({"coll": op.coll, "rid": op.rid, "reason": "deleted", "theirs": None, "rev": r["rev"] if r else None})
             elif op.kind == "set":
                 v = await self.val.find_one({"_id": op.key}, session=s)
                 if (v["rev"] if v else None) != op.baseRev and not (v is None and op.baseRev == 0):
@@ -197,7 +202,8 @@ class RecordStore:
                 prev = cur.get((op.coll, op.rid))
                 data = dict(op.data or {})
                 if op.coll == "items" and prev and prev.get("data") and not prev.get("deleted"):
-                    data[STOCK_FIELD] = prev["data"].get(STOCK_FIELD, 0)  # stock only moves through atomic "inc" ops
+                    fresh = await self.rec.find_one({"_id": prev["_id"]}, session=s)  # re-read: an "inc" earlier in this batch may have moved stock
+                    data[STOCK_FIELD] = ((fresh or prev).get("data") or {}).get(STOCK_FIELD, 0)  # stock only moves through atomic "inc" ops
                 derived = ("Approved", "Partially Received", "Completed")
                 if op.coll == "purchaseOrders" and prev and prev.get("data", {}).get("status") in derived and data.get("status") in derived:
                     data["status"] = prev["data"]["status"]  # receipt status is derived server-side from GRNs
@@ -236,7 +242,7 @@ class RecordStore:
         if audit:
             await self.audit.insert_many([{**a, "_id": str(uuid.uuid4()), "userId": user_id, "opId": body.opId, "at": at, "ver": ver} for a in audit], session=s)
         result = {"ok": True, "version": ver, "revs": revs}
-        await self.applied.insert_one({"_id": body.opId, "result": result, "at": at, "userId": user_id}, session=s)
+        await self.applied.insert_one({"_id": body.opId, "result": result, "at": at, "exp": datetime.now(timezone.utc), "userId": user_id}, session=s)
         return result
 
     async def _derive_po_status(self, ops, ver, s):

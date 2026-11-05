@@ -4,7 +4,7 @@ import type { DB, User, ActivityLog } from "./types";
 import { defaultDocumentFormats, seedDB } from "./seed";
 import { defaultPermissionsForRole, normalizePermissions } from "./permissions";
 import { apiLogin, fetchState, fetchChanges, commitOps, fetchRemoteVersion, getToken, setToken, type RemoteState } from "./api";
-import { applyChanges, computeOps, renumber, type SyncOp } from "./sync";
+import { applyChanges, applyOpsLocally, computeOps, renumber, type PullInfo, type SyncOp } from "./sync";
 
 const SESSION_KEY = "amrest_erp_session";
 const THEME_KEY = "amrest_theme";
@@ -154,11 +154,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const vrevs = useRef<Record<string, number>>({});
   const inflight = useRef<{ opId: string; ops: SyncOp[]; snapshot: DB } | null>(null);
   const blocked = useRef(false);
+  const pulled = useRef<PullInfo>(new Map());
   const setSaveState = (st: SaveState, msg = "") => {
     setSaveStateRaw(st); setSyncError(msg);
     setSyncStatus(st === "saved" ? "connected" : st === "saving" || st === "unsaved" ? "syncing" : "error");
   };
-  const pendingOps = () => (dbRef.current && baseRef.current ? computeOps(baseRef.current, dbRef.current, revs.current, vrevs.current) : []);
+  const pendingOps = () => (dbRef.current && baseRef.current ? computeOps(baseRef.current, dbRef.current, revs.current, vrevs.current, pulled.current) : []);
   const adopt = useCallback((remote: RemoteState) => {
     const next = migrateDB(remote.data || seedDB());
     baseRef.current = next; dbRef.current = next;
@@ -176,7 +177,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const pull = useCallback(async () => {
     const ch = await fetchChanges(version.current);
     if (!ch.records.length && !ch.values.length) { version.current = ch.version; return; }
-    const r = applyChanges(baseRef.current, dbRef.current, revs.current, vrevs.current, ch);
+    const r = applyChanges(baseRef.current, dbRef.current, revs.current, vrevs.current, ch, pulled.current);
     baseRef.current = r.base; dbRef.current = r.local; version.current = ch.version;
     setDb(r.local);
   }, []);
@@ -202,11 +203,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     saving.current = false;
     if (res.status === "ok") {
       res.revs.forEach(r => { if (r.key) vrevs.current[r.key] = r.rev; else if (r.coll && r.rid) (revs.current[r.coll] = revs.current[r.coll] || {})[r.rid] = r.rev; });
-      ops.forEach(o => { if (o.kind === "delete" && o.coll && o.rid) delete revs.current[o.coll]?.[o.rid]; });
+      ops.forEach(o => { if (o.kind === "delete" && o.coll && o.rid) delete revs.current[o.coll]?.[o.rid]; if (o.coll && o.rid && o.kind !== "inc") pulled.current.delete(`${o.coll}:${o.rid}`); });
       baseRef.current = snapshot;
       inflight.current = null;
       saveUnsaved(null);
-      if (res.version > version.current + 1) { try { await pull(); } catch {} } else version.current = res.version;
+      try { await pull(); } catch { version.current = Math.max(version.current, res.version); }
       if (pendingOps().length) { setSaveState("unsaved"); schedule(400); } else setSaveState("saved");
       return;
     }
@@ -228,7 +229,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const b: any = baseRef.current, l: any = dbRef.current;
       setConflicts(res.conflicts.map((c: any) => {
         const mine = c.key ? (c.key.startsWith("settings.") ? l.settings?.[c.key.slice(9)] : l[c.key]) : (l[c.coll] || []).find((x: any) => x.id === c.rid);
-        const orig = c.key ? (c.key.startsWith("settings.") ? b.settings?.[c.key.slice(9)] : b[c.key]) : (b[c.coll] || []).find((x: any) => x.id === c.rid);
+        const orig = c.key ? (c.key.startsWith("settings.") ? b.settings?.[c.key.slice(9)] : b[c.key]) : (pulled.current.get(`${c.coll}:${c.rid}`)?.data ?? (b[c.coll] || []).find((x: any) => x.id === c.rid));
         const fields = mine && typeof mine === "object" && !Array.isArray(mine)
           ? Object.keys(mine).filter(k => JSON.stringify(mine[k]) !== JSON.stringify(orig?.[k])).map(k => ({ field: k, base: orig?.[k], mine: mine[k], theirs: c.theirs?.[k] }))
           : [{ field: c.key || "value", base: orig, mine, theirs: c.theirs }];
@@ -261,6 +262,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       l[coll] = put(l[coll] || [], mode === "reload" ? c.theirs : (c.theirs ? { ...c.theirs, ...mineChanges } : c.mine));
       if (c.rev != null && c.theirs) (revs.current[coll] = revs.current[coll] || {})[c.rid!] = c.rev; else delete revs.current[coll]?.[c.rid!];
     });
+    if (mode === "reload") {
+      // Drop activity-log / audit lines that described the discarded changes.
+      const nums = conflicts.map(c => String(c.mine?.number || c.theirs?.number || "")).filter(Boolean);
+      const baseLog = new Set((b.logs || []).map((x: any) => x.id)), baseAudit = new Set((b.grnAudit || []).map((x: any) => x.id));
+      l.logs = (l.logs || []).filter((x: any) => baseLog.has(x.id) || !nums.some(n => String(x.action).includes(n)));
+      if (l.grnAudit) l.grnAudit = l.grnAudit.filter((x: any) => baseAudit.has(x.id) || !nums.includes(String(x.grnNumber)));
+    }
+    conflicts.forEach(c => { if (c.coll && c.rid) pulled.current.delete(`${c.coll}:${c.rid}`); });
     baseRef.current = b; dbRef.current = l; setDb(l);
     setConflicts([]); blocked.current = false;
     saveUnsaved(null);
@@ -276,7 +285,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     let saved: any = null;
     try { saved = JSON.parse(localStorage.getItem(UNSAVED_KEY) || "null"); } catch {}
     if (saved?.ops?.length) {
-      inflight.current = { opId: saved.opId, ops: saved.ops, snapshot: next };
+      const withMine = applyOpsLocally(next, saved.ops) as DB;
+      dbRef.current = withMine; setDb(withMine);
+      inflight.current = { opId: saved.opId, ops: saved.ops, snapshot: withMine };
       setSaveState("unsaved", "Re-sending changes that were not saved last time…");
       setTimeout(async () => { await flushRef.current(); try { await pull(); } catch {} }, 0);
     } else setSaveState("saved");

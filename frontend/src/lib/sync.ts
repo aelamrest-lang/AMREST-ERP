@@ -1,6 +1,11 @@
 import type { RemoteChanges } from "./api";
 
 type Revs = Record<string, Record<string, number>>;
+// Records refreshed from other users while possibly open in a form: original rev/data, so a stale form can't revert their change.
+export type PullInfo = Map<string, { rev: number; data: any; at: number }>;
+const PULL_TTL = 30 * 60 * 1000;
+const revertsPulled = (x: any, bx: any, p?: { data: any; at: number }) =>
+  !!p && Date.now() - p.at < PULL_TTL && Object.keys(bx || {}).some(f => !same(bx[f], p.data?.[f]) && same(x[f], p.data?.[f]));
 export interface SyncOp { kind: "upsert" | "delete" | "inc" | "set"; coll?: string; rid?: string; baseRev?: number | null; data?: any; delta?: number; key?: string; value?: any }
 
 const same = (a: any, b: any) => a === b || JSON.stringify(a) === JSON.stringify(b);
@@ -8,7 +13,7 @@ const without = (o: any, k: string) => { const { [k]: _x, ...rest } = o || {}; r
 const DERIVED_PO = ["Approved", "Partially Received", "Completed"];
 
 // Turns the difference between the last server-confirmed state and the local state into record-level operations.
-export function computeOps(base: any, local: any, revs: Revs, vrevs: Record<string, number>): SyncOp[] {
+export function computeOps(base: any, local: any, revs: Revs, vrevs: Record<string, number>, pulled: PullInfo = new Map()): SyncOp[] {
   const ops: SyncOp[] = [];
   const keys = new Set([...Object.keys(base || {}), ...Object.keys(local || {})]);
   keys.forEach(key => {
@@ -27,14 +32,17 @@ export function computeOps(base: any, local: any, revs: Revs, vrevs: Record<stri
         const bx: any = bm.get(x.id);
         if (!bx) { ops.push({ kind: "upsert", coll: key, rid: x.id, baseRev: null, data: x }); return; }
         if (x === bx || same(x, bx)) return;
+        const p = pulled.get(`${key}:${x.id}`);
+        const stale = revertsPulled(x, bx, p);
         if (key === "items") {
-          const delta = (Number(x.currentStock) || 0) - (Number(bx.currentStock) || 0);
+          const staleStock = !!p && Date.now() - p.at < PULL_TTL && !same(bx.currentStock, p.data?.currentStock) && same(x.currentStock, p.data?.currentStock);
+          const delta = staleStock ? 0 : (Number(x.currentStock) || 0) - (Number(bx.currentStock) || 0);
           if (Math.abs(delta) > 1e-9) ops.push({ kind: "inc", coll: key, rid: x.id, delta: Math.round(delta * 1e6) / 1e6 });
-          if (!same(without(x, "currentStock"), without(bx, "currentStock"))) ops.push({ kind: "upsert", coll: key, rid: x.id, baseRev: revs[key]?.[x.id] ?? 0, data: x });
+          if (!same(without(x, "currentStock"), without(bx, "currentStock"))) ops.push({ kind: "upsert", coll: key, rid: x.id, baseRev: (revertsPulled(without(x, "currentStock"), without(bx, "currentStock"), p) ? p!.rev : revs[key]?.[x.id]) ?? 0, data: x });
           return;
         }
         if (key === "purchaseOrders" && DERIVED_PO.includes(x.status) && DERIVED_PO.includes(bx.status) && same(without(x, "status"), without(bx, "status"))) return;
-        ops.push({ kind: "upsert", coll: key, rid: x.id, baseRev: revs[key]?.[x.id] ?? 0, data: x });
+        ops.push({ kind: "upsert", coll: key, rid: x.id, baseRev: (stale ? p!.rev : revs[key]?.[x.id]) ?? 0, data: x });
       });
       if (key !== "logs") (b || []).forEach((x: any) => { if (!lm.has(x.id)) ops.push({ kind: "delete", coll: key, rid: x.id, baseRev: revs[key]?.[x.id] ?? 0 }); });
       return;
@@ -45,7 +53,7 @@ export function computeOps(base: any, local: any, revs: Revs, vrevs: Record<stri
 }
 
 // Applies other users' committed changes. Records this tab is still editing keep their old base/rev so a clash is detected on save.
-export function applyChanges(base: any, local: any, revs: Revs, vrevs: Record<string, number>, ch: RemoteChanges) {
+export function applyChanges(base: any, local: any, revs: Revs, vrevs: Record<string, number>, ch: RemoteChanges, pulled: PullInfo = new Map()) {
   const nb: any = { ...base }, nl: any = { ...local, settings: { ...local.settings } };
   nb.settings = { ...base.settings };
   const byColl = new Map<string, RemoteChanges["records"]>();
@@ -59,6 +67,7 @@ export function applyChanges(base: any, local: any, revs: Revs, vrevs: Record<st
       const untouched = l === b || (l && b && same(l, b));
       if (coll === "items" && r.data && l && b && !untouched && same(without(l, "currentStock"), without(b, "currentStock"))) {
         const mine = (Number(l.currentStock) || 0) - (Number(b.currentStock) || 0);
+        if (!pulled.has(`${coll}:${r.rid}`)) pulled.set(`${coll}:${r.rid}`, { rev: revs[coll][r.rid] ?? 0, data: b, at: Date.now() });
         bl[bi] = r.data; ll[li] = { ...r.data, currentStock: (Number(r.data.currentStock) || 0) + mine }; revs[coll][r.rid] = r.rev;
         return;
       }
@@ -68,6 +77,7 @@ export function applyChanges(base: any, local: any, revs: Revs, vrevs: Record<st
       }
       if (!b && l) return;
       if (r.deleted) { if (bi >= 0) bl.splice(bi, 1); if (li >= 0) ll.splice(li, 1); delete revs[coll][r.rid]; return; }
+      if (b && coll !== "logs" && !pulled.has(`${coll}:${r.rid}`)) pulled.set(`${coll}:${r.rid}`, { rev: revs[coll][r.rid] ?? 0, data: b, at: Date.now() });
       if (bi >= 0) bl[bi] = r.data; else bl = [r.data, ...bl];
       if (li >= 0) ll[li] = r.data; else ll = [r.data, ...ll];
       revs[coll][r.rid] = r.rev;
@@ -101,4 +111,17 @@ export function renumber(local: any, dups: { coll: string; rid: string }[]) {
     out[d.coll] = list.map(x => x.id === d.rid ? { ...x, number: nextShort + m[3] } : x);
   });
   return { db: out, map };
+}
+
+// Puts a not-yet-saved batch (from a previous session) into local state so it is visible and can be renumbered / reviewed.
+export function applyOpsLocally(local: any, ops: SyncOp[]) {
+  const out: any = { ...local, settings: { ...local.settings } };
+  ops.forEach(o => {
+    if (o.kind === "set" && o.key) { if (o.key.startsWith("settings.")) out.settings[o.key.slice(9)] = o.value; else out[o.key] = o.value; return; }
+    const list: any[] = out[o.coll!] || [];
+    if (o.kind === "upsert") out[o.coll!] = list.some(x => x.id === o.rid) ? list.map(x => x.id === o.rid ? (o.coll === "items" ? { ...o.data, currentStock: x.currentStock } : o.data) : x) : [o.data, ...list];
+    else if (o.kind === "delete") out[o.coll!] = list.filter(x => x.id !== o.rid);
+    else if (o.kind === "inc") out[o.coll!] = list.map(x => x.id === o.rid ? { ...x, currentStock: (Number(x.currentStock) || 0) + (o.delta || 0) } : x);
+  });
+  return out;
 }
