@@ -66,14 +66,36 @@ export async function saveRemoteDB(dbState: DB): Promise<void> {
   });
 }
 
-export function saveRemoteDBFinal(dbState: DB): void {
+export class ConflictError extends Error {}
+
+// Sends only the changed top-level collections; server rejects (409) if someone else saved since baseVersion.
+export async function patchRemoteDB(baseVersion: number, changes: Partial<DB>): Promise<number> {
   const token = getToken();
-  fetch(`${API}/erp/state`, {
-    method: "PUT",
+  const res = await fetch(`${API}/erp/state`, {
+    method: "PATCH",
     headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    body: JSON.stringify({ data: dbState }),
-    keepalive: true,
+    body: JSON.stringify({ baseVersion, changes }),
+  });
+  if (res.status === 409) throw new ConflictError("conflict");
+  if (res.status === 401) { setToken(null); throw new Error("Unauthorized"); }
+  if (!res.ok) { let msg = `HTTP ${res.status}`; try { const j = await res.json(); msg = j.detail?.message || j.detail || msg; } catch {} throw new Error(msg); }
+  return (await res.json()).version;
+}
+
+export function patchRemoteDBFinal(baseVersion: number, changes: Partial<DB>): void {
+  const token = getToken();
+  const body = JSON.stringify({ baseVersion, changes });
+  fetch(`${API}/erp/state`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body,
+    keepalive: body.length < 60000,
   }).catch(() => {});
+}
+
+export async function fetchRemoteState(): Promise<{ data: DB | null; version: number }> {
+  const res = await request("/erp/state");
+  return { data: (res?.data as DB) || null, version: res?.version ?? 0 };
 }
 
 export async function fetchRemoteVersion(): Promise<number> {

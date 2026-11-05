@@ -3,7 +3,8 @@ import { legacyDispatch } from "./invoice";
 import type { DB, User, ActivityLog } from "./types";
 import { defaultDocumentFormats, seedDB } from "./seed";
 import { defaultPermissionsForRole, normalizePermissions } from "./permissions";
-import { apiLogin, fetchRemoteDB, saveRemoteDB, saveRemoteDBFinal, fetchRemoteVersion, getToken, setToken } from "./api";
+import { apiLogin, fetchRemoteState, patchRemoteDB, patchRemoteDBFinal, fetchRemoteVersion, getToken, setToken, ConflictError } from "./api";
+import { changedKeys, merge3 } from "./merge";
 
 const SESSION_KEY = "amrest_erp_session";
 const THEME_KEY = "amrest_theme";
@@ -137,9 +138,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [syncStatus, setSyncStatus] = useState<Ctx["syncStatus"]>("syncing");
   const [syncError, setSyncError] = useState("");
   const saveTimer = useRef<any>(null);
-  const pendingSave = useRef<DB | null>(null);
   const saving = useRef(false);
   const localVersion = useRef<number>(0);
+  const baseRef = useRef<DB | null>(null);
+  const dbRef = useRef<DB | null>(null);
+  const hasLocalChanges = () => !!dbRef.current && Object.keys(changedKeys(baseRef.current, dbRef.current)).length > 0;
+  const adopt = useCallback((data: DB | null, version: number) => {
+    const next = migrateDB(data || seedDB());
+    baseRef.current = next;
+    dbRef.current = next;
+    localVersion.current = version;
+    setDb(next);
+    return next;
+  }, []);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
@@ -160,12 +171,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
       setSyncStatus("syncing");
       try {
-        const remote = await fetchRemoteDB();
+        const remote = await fetchRemoteState();
         if (cancelled) return;
-        const next = migrateDB(remote || seedDB());
-        setDb(next);
+        const next = adopt(remote.data, remote.version);
         writeCachedSettings(next.settings);
-        localVersion.current = await fetchRemoteVersion().catch(() => 0);
         setSyncStatus("connected");
         setSyncError("");
         const sessionId = localStorage.getItem(SESSION_KEY);
@@ -192,56 +201,71 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => { cancelled = true; };
   }, []);
 
-  // Poll for external changes every 15s
+  // Poll for external changes every 15s (only adopt remote when this tab has nothing unsaved)
   useEffect(() => {
     if (!currentUser) return;
     const int = setInterval(async () => {
-      if (!getToken() || pendingSave.current || saving.current) return;
+      if (!getToken() || saving.current || saveTimer.current || hasLocalChanges()) return;
       try {
         const v = await fetchRemoteVersion();
-        if (v > localVersion.current && !pendingSave.current && !saving.current) {
-          const remote = await fetchRemoteDB();
-          if (remote) {
-            const next = migrateDB(remote);
-            setDb(next);
-            localVersion.current = v;
-          }
+        if (v !== localVersion.current) {
+          const remote = await fetchRemoteState();
+          if (!saving.current && !saveTimer.current && !hasLocalChanges()) adopt(remote.data, remote.version);
         }
       } catch {}
     }, 15000);
     return () => clearInterval(int);
-  }, [currentUser]);
+  }, [currentUser, adopt]);
+
+  const flushSave = useCallback(async () => {
+    if (saving.current) return;
+    saving.current = true;
+    setSyncStatus("syncing");
+    try {
+      for (let attempt = 0; attempt < 6; attempt++) {
+        const local = dbRef.current!;
+        const changes = changedKeys(baseRef.current, local);
+        if (!Object.keys(changes).length) break;
+        try {
+          localVersion.current = await patchRemoteDB(localVersion.current, changes);
+          baseRef.current = local;
+        } catch (err) {
+          if (!(err instanceof ConflictError)) throw err;
+          // Someone else saved first: merge their records with ours, then retry.
+          const remote = await fetchRemoteState();
+          const remoteDb = migrateDB(remote.data || seedDB());
+          const merged = merge3(baseRef.current, dbRef.current, remoteDb) as DB;
+          merged.logs = [...merged.logs].sort((a, b) => b.timestamp.localeCompare(a.timestamp)).slice(0, 500);
+          baseRef.current = remoteDb;
+          localVersion.current = remote.version;
+          dbRef.current = merged;
+          setDb(merged);
+        }
+      }
+      setSyncStatus("connected");
+      setSyncError("");
+    } catch (err: any) {
+      setSyncStatus("error");
+      setSyncError(err?.message || "Save failed");
+    } finally {
+      saving.current = false;
+    }
+    if (hasLocalChanges() && !saveTimer.current) saveTimer.current = setTimeout(() => { saveTimer.current = null; flushSave(); }, 1500);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const persistRemote = useCallback((next: DB) => {
-    pendingSave.current = next;
+    dbRef.current = next;
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async () => {
-      const payload = pendingSave.current;
-      if (!payload) return;
-      pendingSave.current = null;
-      setSyncStatus("syncing");
-      saving.current = true;
-      try {
-        await saveRemoteDB(payload);
-        localVersion.current += 1;
-        setSyncStatus("connected");
-        setSyncError("");
-      } catch (err: any) {
-        setSyncStatus("error");
-        setSyncError(err?.message || "Save failed");
-      } finally {
-        saving.current = false;
-      }
-    }, 400);
-  }, []);
+    saveTimer.current = setTimeout(() => { saveTimer.current = null; flushSave(); }, 400);
+  }, [flushSave]);
 
   useEffect(() => {
     const flush = () => {
-      const p = pendingSave.current;
-      if (!p) return;
-      pendingSave.current = null;
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-      saveRemoteDBFinal(p);
+      if (!dbRef.current || saving.current) return;
+      const changes = changedKeys(baseRef.current, dbRef.current);
+      if (!Object.keys(changes).length) return;
+      if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
+      patchRemoteDBFinal(localVersion.current, changes);
     };
     const onVis = () => { if (document.visibilityState === "hidden") flush(); };
     window.addEventListener("beforeunload", flush);
@@ -263,10 +287,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const syncNow = useCallback(async () => {
     setSyncStatus("syncing");
     try {
-      const remote = await fetchRemoteDB();
-      const next = migrateDB(remote || db);
-      setDb(next);
-      localVersion.current = await fetchRemoteVersion().catch(() => 0);
+      if (hasLocalChanges()) await flushSave();
+      const remote = await fetchRemoteState();
+      adopt(remote.data, remote.version);
       setSyncStatus("connected");
       setSyncError("");
     } catch (err: any) {
@@ -295,12 +318,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const res = await apiLogin(username, password);
       // After login, hydrate state
       setSyncStatus("syncing");
-      const remote = await fetchRemoteDB();
-      const next = migrateDB(remote || seedDB());
+      const remote = await fetchRemoteState();
+      const next = adopt(remote.data, remote.version);
       const user = next.users.find(u => u.id === res.user.id) || res.user;
-      setDb(next);
       writeCachedSettings(next.settings);
-      localVersion.current = await fetchRemoteVersion().catch(() => 0);
       setCurrentUser(user);
       localStorage.setItem(SESSION_KEY, user.id);
       const entry: ActivityLog = { id: crypto.randomUUID(), userId: user.id, action: "Logged in", module: "Auth", timestamp: new Date().toISOString() };
@@ -317,17 +338,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(() => {
     if (currentUser) {
       const entry: ActivityLog = { id: crypto.randomUUID(), userId: currentUser.id, action: "Logged out", module: "Auth", timestamp: new Date().toISOString() };
-      setDb(prev => {
-        const next = { ...prev, logs: [entry, ...prev.logs].slice(0, 500) };
-        persistRemote(next);
-        return next;
-      });
+      const cur = dbRef.current || db;
+      const next = { ...cur, logs: [entry, ...cur.logs].slice(0, 500) };
+      dbRef.current = next;
+      setDb(next);
+      if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
+      patchRemoteDBFinal(localVersion.current, changedKeys(baseRef.current, next));
     }
     setCurrentUser(null);
     setToken(null);
     localStorage.removeItem(SESSION_KEY);
     setSyncStatus("not-configured");
-  }, [currentUser, persistRemote]);
+  }, [currentUser, db]);
 
   const changePassword = useCallback((oldPwd: string, newPwd: string) => {
     if (!currentUser) return { ok: false, msg: "Not logged in" };

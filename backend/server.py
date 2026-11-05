@@ -168,13 +168,54 @@ async def root():
     return {"service": "Transformer ERP & CRM", "status": "ok"}
 
 
+CHUNK_SIZE = 1000  # array items per chunk document (keeps every Mongo doc far below the 16 MB limit)
+
+
+async def _ensure_chunked():
+    """Migrate the legacy single-document state into per-collection chunk documents (once)."""
+    meta = await db.erp_state.find_one({"_id": STATE_ID}, {"data": 0})
+    if meta and meta.get("storage") == "chunked":
+        return meta
+    legacy = await db.erp_state.find_one({"_id": STATE_ID})
+    state = (legacy or {}).get("data") or seed_state()
+    if legacy and legacy.get("data"):
+        await db.erp_state_backup.replace_one({"_id": f"{STATE_ID}-pre-chunk"}, {**legacy, "_id": f"{STATE_ID}-pre-chunk", "backedUpAt": datetime.now(timezone.utc).isoformat()}, upsert=True)
+    version = (legacy or {}).get("version", 1)
+    await _write_keys(state)
+    meta = {"_id": STATE_ID, "storage": "chunked", "keys": sorted(state.keys()), "version": version,
+            "updatedAt": datetime.now(timezone.utc).isoformat(), "updatedBy": (legacy or {}).get("updatedBy")}
+    await db.erp_state.replace_one({"_id": STATE_ID}, meta, upsert=True)
+    logger.info("erp_state migrated to chunked storage (%d keys)", len(state))
+    return meta
+
+
+async def _write_keys(changes: dict):
+    for key, value in changes.items():
+        if isinstance(value, list):
+            chunks = [value[i:i + CHUNK_SIZE] for i in range(0, len(value), CHUNK_SIZE)] or [[]]
+            for idx, part in enumerate(chunks):
+                await db.erp_chunks.replace_one({"_id": f"{key}#{idx}"}, {"_id": f"{key}#{idx}", "key": key, "idx": idx, "kind": "list", "items": part}, upsert=True)
+            await db.erp_chunks.delete_many({"key": key, "idx": {"$gte": len(chunks)}})
+        else:
+            await db.erp_chunks.replace_one({"_id": f"{key}#0"}, {"_id": f"{key}#0", "key": key, "idx": 0, "kind": "value", "value": value}, upsert=True)
+            await db.erp_chunks.delete_many({"key": key, "idx": {"$gte": 1}})
+
+
+async def _read_state(keys: Optional[list] = None) -> dict:
+    query = {"key": {"$in": keys}} if keys else {}
+    out: dict = {}
+    async for c in db.erp_chunks.find(query).sort([("key", 1), ("idx", 1)]):
+        if c.get("kind") == "list":
+            out.setdefault(c["key"], []).extend(c.get("items", []))
+        else:
+            out[c["key"]] = c.get("value")
+    return out
+
+
 @api_router.post("/auth/login")
 async def login(body: LoginBody):
-    doc = await db.erp_state.find_one({"_id": STATE_ID}, {"_id": 0})
-    state = doc.get("data") if doc else None
-    if not state:
-        state = seed_state()
-        await db.erp_state.replace_one({"_id": STATE_ID}, {"_id": STATE_ID, "data": state}, upsert=True)
+    await _ensure_chunked()
+    state = await _read_state(["users"])
 
     users = state.get("users", [])
     user = next(
@@ -193,25 +234,39 @@ async def login(body: LoginBody):
 
 @api_router.get("/erp/state")
 async def get_state(user_id: str = Depends(get_current_user_id)):
-    doc = await db.erp_state.find_one({"_id": STATE_ID}, {"_id": 0})
-    if not doc or not doc.get("data"):
-        state = seed_state()
-        await db.erp_state.replace_one({"_id": STATE_ID}, {"_id": STATE_ID, "data": state}, upsert=True)
-        return {"data": state, "version": 1}
-    return {"data": doc["data"], "version": doc.get("version", 1)}
+    meta = await _ensure_chunked()
+    return {"data": await _read_state(), "version": meta.get("version", 1)}
+
+
+class PatchBody(BaseModel):
+    baseVersion: Optional[int] = None
+    changes: dict
+
+
+async def _commit(changes: dict, base_version: Optional[int], user_id: str) -> dict:
+    meta = await _ensure_chunked()
+    now = datetime.now(timezone.utc).isoformat()
+    filt = {"_id": STATE_ID} if base_version is None else {"_id": STATE_ID, "version": base_version}
+    updated = await db.erp_state.find_one_and_update(
+        filt,
+        {"$inc": {"version": 1}, "$set": {"updatedAt": now, "updatedBy": user_id}, "$addToSet": {"keys": {"$each": list(changes.keys())}}},
+        return_document=True,
+    )
+    if not updated:
+        cur = await db.erp_state.find_one({"_id": STATE_ID}, {"version": 1})
+        raise HTTPException(status_code=409, detail={"message": "State changed by another user", "version": (cur or meta).get("version")})
+    await _write_keys(changes)
+    return {"ok": True, "version": updated["version"]}
+
+
+@api_router.patch("/erp/state")
+async def patch_state(body: PatchBody, user_id: str = Depends(get_current_user_id)):
+    return await _commit(body.changes, body.baseVersion, user_id)
 
 
 @api_router.put("/erp/state")
 async def put_state(body: StateBody, user_id: str = Depends(get_current_user_id)):
-    now = datetime.now(timezone.utc).isoformat()
-    existing = await db.erp_state.find_one({"_id": STATE_ID}, {"version": 1})
-    version = (existing.get("version", 0) if existing else 0) + 1
-    await db.erp_state.replace_one(
-        {"_id": STATE_ID},
-        {"_id": STATE_ID, "data": body.data, "version": version, "updatedAt": now, "updatedBy": user_id},
-        upsert=True,
-    )
-    return {"ok": True, "version": version}
+    return await _commit(body.data, None, user_id)
 
 
 @api_router.get("/erp/version")
@@ -299,29 +354,25 @@ async def _startup_storage():
     except Exception as e:
         logger.error(f"Storage init failed: {e}")
 
-    # Ensure the aaa@amrest.in admin exists in the current state (idempotent)
+    # Migrate to chunked storage, then ensure the aaa@amrest.in admin exists (idempotent)
     try:
-        doc = await db.erp_state.find_one({"_id": STATE_ID}, {"_id": 0})
-        if doc and doc.get("data"):
-            state = doc["data"]
-            users = state.get("users", [])
-            has_new_admin = any((u.get("username", "").lower() == "aaa@amrest.in") for u in users)
-            if not has_new_admin:
-                users.append({
-                    "id": "u-admin-anwar",
-                    "name": "Anwar (Admin)",
-                    "email": "aaa@amrest.in",
-                    "username": "aaa@amrest.in",
-                    "password": "anwar@123",
-                    "role": "admin",
-                    "active": True,
-                    "createdAt": datetime.now(timezone.utc).isoformat(),
-                })
-                state["users"] = users
-                await db.erp_state.replace_one({"_id": STATE_ID}, {"_id": STATE_ID, "data": state}, upsert=True)
-                logger.info("Injected aaa@amrest.in admin into existing state")
+        await _ensure_chunked()
+        users = (await _read_state(["users"])).get("users", [])
+        if not any((u.get("username", "").lower() == "aaa@amrest.in") for u in users):
+            users.append({
+                "id": "u-admin-anwar",
+                "name": "Anwar (Admin)",
+                "email": "aaa@amrest.in",
+                "username": "aaa@amrest.in",
+                "password": "anwar@123",
+                "role": "admin",
+                "active": True,
+                "createdAt": datetime.now(timezone.utc).isoformat(),
+            })
+            await _commit({"users": users}, None, "system")
+            logger.info("Injected aaa@amrest.in admin into existing state")
     except Exception as e:
-        logger.error(f"Admin migration failed: {e}")
+        logger.error(f"State migration failed: {e}")
 
 
 async def get_current_user_from_any(
