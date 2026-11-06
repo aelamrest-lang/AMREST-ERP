@@ -126,3 +126,6 @@ Cloud-based Transformer Manufacturing ERP & CRM with modules for Sales CRM, Quot
 - Inventory: click material name → large pop-up `MaterialHistoryModal.tsx` (Stock In | Stock Out | All tabs, date filter, Excel export, running balance, clickable PO/GRN/JC → module list page).
 - Read-only, built from GRNs + Raw Material Issues only (user choice). Balance runs forward from opening stock; gap to current stock shown as "Other stock adjustments" row.
 - Raw Material Issue: new optional "Issued To" employee field (stored as `issuedTo`, shown in print slip & history; older issues show "—").
+
+## 2026-06 — Inventory keyword search (DONE, self-tested)
+- Inventory search now matches any keyword anywhere in the name, multiple keywords in any order, case-insensitive, and ignores spacing/format around sizes (4.6x2.1 = 4.6 x 2.1). Only the filter changed (`matchesKeywords` in Inventory.tsx).

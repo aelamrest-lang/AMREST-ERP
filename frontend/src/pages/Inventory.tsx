@@ -10,6 +10,12 @@ type DateMode = "today" | "yesterday" | "date" | "month" | "lastmonth" | "range"
 const isoD = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const dayBefore = (iso: string) => { const [y, m, d] = iso.split("-").map(Number); return isoD(new Date(y, m - 1, d - 1)); };
 import { userCan } from "../lib/permissions";
+const normSearch = (s: string) => s.toLowerCase().replace(/×/g, "x").replace(/(\d)\s*x\s*(?=\d)/g, "$1 x ").replace(/[^a-z0-9.]+/g, " ").replace(/(\d)([a-z])/g, "$1 $2").replace(/([a-z])(\d)/g, "$1 $2").trim();
+const matchesKeywords = (name: string, q: string) => {
+  const n = normSearch(name), nq = normSearch(q);
+  if (n.replace(/ /g, "").includes(nq.replace(/ /g, ""))) return true;
+  return nq.split(" ").every(t => n.includes(t));
+};
 import { MaterialHistoryModal } from "../components/MaterialHistoryModal";
 
 export function Inventory() {
@@ -60,7 +66,7 @@ export function Inventory() {
     let arr = catItems.slice();
     if (view === "low") arr = arr.filter(i => i.currentStock <= i.minStock);
     if (view === "value") arr = arr.filter(i => i.currentStock !== 0);
-    if (search) arr = arr.filter(i => i.name.toLowerCase().startsWith(search.toLowerCase().trim()));
+    if (search.trim()) arr = arr.filter(i => matchesKeywords(i.name, search));
     return arr;
   }, [catItems, view, search]);
 
@@ -297,7 +303,7 @@ export function Inventory() {
         <div className="p-4 flex flex-wrap items-center gap-3 border-b border-slate-100 dark:border-slate-800">
           <div className="relative flex-1 min-w-48">
             <IconSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
-            <Input className="pl-9" placeholder="Search items by starting letters (e.g. A, Co, Lu)..." value={search} onChange={(e: any) => setSearch(e.target.value)} data-testid="inventory-search"/>
+            <Input className="pl-9" placeholder="Search by any keyword (e.g. Copper, DPC, 4.6x2.1)..." value={search} onChange={(e: any) => setSearch(e.target.value)} data-testid="inventory-search"/>
           </div>
           <Select value={filter} onChange={(e: any) => setFilter(e.target.value)} className="w-52" data-testid="inv-category-filter">
             <option value="all">All Items</option><option value="raw">Raw Material</option><option value="semi">Semi-Finished Goods (SFG)</option><option value="fg">Finished Goods (FG)</option>
