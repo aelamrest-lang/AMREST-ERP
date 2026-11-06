@@ -262,6 +262,7 @@ export interface MaterialIssue {
   bomId?: string;
   storeLocation: string;
   issueBy: string;
+  issuedTo?: string;
   remarks: string;
   lines: MaterialIssueLine[];
   createdAt: string;

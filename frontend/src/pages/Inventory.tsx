@@ -10,6 +10,7 @@ type DateMode = "today" | "yesterday" | "date" | "month" | "lastmonth" | "range"
 const isoD = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const dayBefore = (iso: string) => { const [y, m, d] = iso.split("-").map(Number); return isoD(new Date(y, m - 1, d - 1)); };
 import { userCan } from "../lib/permissions";
+import { MaterialHistoryModal } from "../components/MaterialHistoryModal";
 
 export function Inventory() {
   const { db, setDB, log, currentUser } = useStore();
@@ -21,6 +22,7 @@ export function Inventory() {
   const [heldSearch, setHeldSearch] = useState("");
   const [heldType, setHeldType] = useState<"all" | "Raw Material" | "Semi-Finished" | "Finished Goods">("all");
   const [uploadMessage, setUploadMessage] = useState("");
+  const [historyItem, setHistoryItem] = useState<(typeof db.items)[0] | null>(null);
   const [sortKey, setSortKey] = useState<"current" | "hold" | "available" | "cost" | "value" | "status" | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [dateMode, setDateMode] = useState<DateMode>("today");
@@ -353,7 +355,7 @@ export function Inventory() {
               return (
                 <tr key={i.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                   <Td>
-                    <div className="font-semibold text-slate-800 dark:text-slate-100">{i.name}</div>
+                    <button type="button" className="font-semibold text-left text-slate-800 dark:text-slate-100 hover:text-indigo-600 hover:underline" onClick={() => setHistoryItem(db.items.find(x => x.id === i.id) || null)} title="View stock in / out history" data-testid={`inv-item-name-${i.id}`}>{i.name}</button>
                     <div className="mt-1"><Badge color={i.category === "Raw Material" ? "blue" : i.category === "Finished Goods" ? "green" : "yellow"}>{i.category}</Badge></div>
                   </Td>
                   <Td className="font-medium">{i.unit}</Td>
@@ -434,6 +436,7 @@ export function Inventory() {
         </Table>
         {movementRows.length === 0 && <Empty title="No stock movements yet" />}
       </Card>
+      <MaterialHistoryModal item={historyItem} onClose={() => setHistoryItem(null)} />
     </div>
   );
 }
