@@ -9,15 +9,16 @@ import { fmt2, fmtINR } from "../lib/utils";
 type Txn = {
   key: string; dir: "IN" | "OUT"; date: string; at: string; qty: number; balance: number;
   poNo?: string; grnNo?: string; party?: string; rate?: number; amount?: number; receivedBy?: string;
-  issueNo?: string; jcNo?: string; issuedTo?: string; issuedBy?: string;
+  issueNo?: string; jcNo?: string; issuedTo?: string; issuedBy?: string; adj?: boolean;
 };
 type Tab = "in" | "out" | "all";
+const round = (n: number) => Math.round(n * 1000) / 1000;
 
-const go = (route: string) => { (window as any).__amrestSetRoute?.(route); };
+const go = (route: string) => { (window as any).__amrestSetRoute?.(route); setTimeout(() => window.scrollTo(0, 0), 50); };
 
 function RefLink({ label, route, testId }: { label?: string; route: string; testId: string }) {
   if (!label) return <span className="text-slate-400">—</span>;
-  return <button type="button" className="font-mono text-xs text-indigo-600 hover:underline" onClick={() => go(route)} data-testid={testId}>{label}</button>;
+  return <button type="button" className="font-mono text-xs text-left text-indigo-600 hover:underline" onClick={() => go(route)} data-testid={testId}>{label}</button>;
 }
 
 function useItemTxns(item: Item | null): Txn[] {
@@ -40,15 +41,19 @@ function useItemTxns(item: Item | null): Txn[] {
         issueNo: mi.number, jcNo: mi.jobCardNumber, issuedTo: mi.issuedTo,
         issuedBy: db.users.find(u => u.id === mi.issueBy)?.name || mi.issueBy });
     }));
-    list.sort((a, b) => b.date.localeCompare(a.date) || b.at.localeCompare(a.at));
-    let bal = Number(item.currentStock) || 0;
-    return list.map(t => { const row = { ...t, balance: bal }; bal -= t.dir === "IN" ? t.qty : -t.qty; return row; });
+    list.sort((a, b) => a.date.localeCompare(b.date) || a.at.localeCompare(b.at));
+    let bal = Number(item.openingStock) || 0;
+    const rows: Txn[] = list.map(t => { bal += t.dir === "IN" ? t.qty : -t.qty; return { ...t, balance: round(bal) }; });
+    const gap = round((Number(item.currentStock) || 0) - bal);
+    if (gap !== 0) rows.push({ key: "adj", dir: gap > 0 ? "IN" : "OUT", adj: true, date: "", at: "", qty: Math.abs(gap), balance: round(Number(item.currentStock) || 0) });
+    return rows.reverse();
   }, [item, db.grns, db.purchaseOrders, db.materialIssues, db.parties, db.users, db.grnAudit]);
 }
 
-function exportXlsx(item: Item, rows: Txn[], tab: Tab) {
+function exportXlsx(item: Item, all: Txn[], tab: Tab) {
+  const rows = all.filter(t => !t.adj);
   const data = rows.map(t => tab === "in"
-    ? { Date: t.date, "PO Number": t.poNo || "", "GRN Number": t.grnNo || "", Supplier: t.party || "", "Received Qty": t.qty, "Purchase Rate": t.rate || 0, "Total Amount": t.amount || 0, "Received By": t.receivedBy || "", "Running Balance": t.balance }
+    ? { Date: t.date, "PO Number": t.poNo || "", "GRN Number": t.grnNo || "", Supplier: t.party || "", "Received Qty": round(t.qty), "Purchase Rate": t.rate || 0, "Total Amount": round(t.amount || 0), "Received By": t.receivedBy || "", "Running Balance": t.balance }
     : tab === "out"
       ? { "Issue Date": t.date, "Issue No": t.issueNo || "", "Job Card": t.jcNo || "", "Issued Qty": t.qty, "Issued To": t.issuedTo || "", "Issued By": t.issuedBy || "", "Running Balance": t.balance }
       : { Date: t.date, Type: t.dir === "IN" ? "Stock In" : "Stock Out", Reference: t.dir === "IN" ? `${t.poNo || ""} / ${t.grnNo || ""}` : `${t.issueNo || ""} / ${t.jcNo || ""}`, "Party / Issued To": t.dir === "IN" ? t.party || "" : t.issuedTo || "", "Qty In": t.dir === "IN" ? t.qty : "", "Qty Out": t.dir === "OUT" ? t.qty : "", Rate: t.rate ?? "", Amount: t.amount ?? "", By: t.dir === "IN" ? t.receivedBy || "" : t.issuedBy || "", "Running Balance": t.balance });
@@ -68,7 +73,14 @@ function TxnTable({ rows, tab, unit }: { rows: Txn[]; tab: Tab; unit: string }) 
         <Th>Running Balance</Th>
       </tr></thead>
       <tbody>
-        {rows.map(t => (
+        {rows.map(t => t.adj ? (
+          <tr key={t.key} className="bg-amber-50 dark:bg-amber-950/20" data-testid="mh-row-adj">
+            <Td colSpan={tab === "in" ? 8 : tab === "out" ? 6 : 8} className="text-xs text-amber-800 dark:text-amber-300">
+              <b>Other stock adjustments {t.dir === "IN" ? "+" : "−"}{fmt2(t.qty)} {unit}</b> · manual stock edits, Excel uploads or movements outside GRN / Material Issue — brings the balance to current stock
+            </Td>
+            <Td className="font-semibold" data-testid="mh-bal-adj">{fmt2(t.balance)} {unit}</Td>
+          </tr>
+        ) : (
           <tr key={t.key} className="hover:bg-slate-50 dark:hover:bg-slate-800/50" data-testid={`mh-row-${t.key}`}>
             {tab === "in" && <><Td>{t.date}</Td><Td><RefLink label={t.poNo} route="purchase" testId={`mh-po-${t.key}`}/></Td><Td><RefLink label={t.grnNo} route="grn" testId={`mh-grn-${t.key}`}/></Td><Td>{t.party || "—"}</Td><Td className="text-emerald-600 font-semibold">{fmt2(t.qty)} {unit}</Td><Td>{fmtINR(t.rate || 0)}</Td><Td>{fmtINR(t.amount || 0)}</Td><Td>{t.receivedBy || "—"}</Td></>}
             {tab === "out" && <><Td>{t.date}</Td><Td className="font-mono text-xs">{t.issueNo}</Td><Td><RefLink label={t.jcNo} route="jobcards" testId={`mh-jc-${t.key}`}/></Td><Td className="text-rose-600 font-semibold">{fmt2(t.qty)} {unit}</Td><Td>{t.issuedTo || "—"}</Td><Td>{t.issuedBy || "—"}</Td></>}
@@ -97,33 +109,34 @@ export function MaterialHistoryModal({ item, onClose }: { item: Item | null; onC
   const [tab, setTab] = useState<Tab>("all");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  const rows = useMemo(() => txns.filter(t => (tab === "all" || (tab === "in" ? t.dir === "IN" : t.dir === "OUT")) && (!from || t.date >= from) && (!to || t.date <= to)), [txns, tab, from, to]);
+  const rows = useMemo(() => txns.filter(t => (tab === "all" || (tab === "in" ? t.dir === "IN" : t.dir === "OUT")) && (t.adj ? tab === "all" && !from && !to : (!from || t.date >= from) && (!to || t.date <= to))), [txns, tab, from, to]);
   if (!item) return null;
-  const totIn = rows.filter(t => t.dir === "IN").reduce((s, t) => s + t.qty, 0);
-  const totOut = rows.filter(t => t.dir === "OUT").reduce((s, t) => s + t.qty, 0);
+  const real = rows.filter(t => !t.adj);
+  const totIn = real.filter(t => t.dir === "IN").reduce((s, t) => s + t.qty, 0);
+  const totOut = real.filter(t => t.dir === "OUT").reduce((s, t) => s + t.qty, 0);
   return (
     <Modal open={!!item} onClose={onClose} title={`Stock History · ${item.name}`} size="xl">
       <div className="space-y-4" data-testid="material-history-modal">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-          <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3"><div className="text-xs text-slate-500">Current Stock</div><div className="text-lg font-bold" data-testid="mh-current-stock">{fmt2(item.currentStock)} {item.unit}</div></div>
+          <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3"><div className="text-xs text-slate-500">Live Current Stock (today)</div><div className="text-lg font-bold" data-testid="mh-current-stock">{fmt2(item.currentStock)} {item.unit}</div></div>
           <div className="rounded-lg border border-emerald-200 dark:border-emerald-900 p-3"><div className="text-xs text-slate-500">Stock In (shown)</div><div className="text-lg font-bold text-emerald-600" data-testid="mh-total-in">{fmt2(totIn)}</div></div>
           <div className="rounded-lg border border-rose-200 dark:border-rose-900 p-3"><div className="text-xs text-slate-500">Stock Out (shown)</div><div className="text-lg font-bold text-rose-600" data-testid="mh-total-out">{fmt2(totOut)}</div></div>
-          <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3"><div className="text-xs text-slate-500">Transactions</div><div className="text-lg font-bold" data-testid="mh-count">{rows.length}</div></div>
+          <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3"><div className="text-xs text-slate-500">Transactions</div><div className="text-lg font-bold" data-testid="mh-count">{real.length}</div></div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {([["in", "Stock In"], ["out", "Stock Out"], ["all", "All Transactions"]] as const).map(([k, l]) => (
             <button key={k} type="button" onClick={() => setTab(k)} data-testid={`mh-tab-${k}`}
               className={"text-xs px-3 py-1.5 rounded-full border font-medium " + (tab === k ? "bg-indigo-600 border-indigo-600 text-white" : "border-slate-300 dark:border-slate-700 text-slate-600 hover:border-indigo-400")}>{l}</button>
           ))}
-          <div className="flex items-center gap-2 ml-auto">
-            <Input type="date" className="!w-40" value={from} onChange={(e: any) => setFrom(e.target.value)} data-testid="mh-from"/>
+          <div className="flex flex-wrap items-center gap-2 md:ml-auto w-full md:w-auto">
+            <Input type="date" className="!w-36 sm:!w-40" value={from} onChange={(e: any) => setFrom(e.target.value)} data-testid="mh-from"/>
             <span className="text-xs text-slate-400">to</span>
-            <Input type="date" className="!w-40" value={to} onChange={(e: any) => setTo(e.target.value)} data-testid="mh-to"/>
+            <Input type="date" className="!w-36 sm:!w-40" value={to} onChange={(e: any) => setTo(e.target.value)} data-testid="mh-to"/>
             {(from || to) && <button type="button" className="text-xs text-indigo-600 hover:underline" onClick={() => { setFrom(""); setTo(""); }} data-testid="mh-clear-dates">Clear</button>}
             <Button variant="outline" onClick={() => exportXlsx(item, rows, tab)} data-testid="mh-export"><IconDownload size={14}/> Excel</Button>
           </div>
         </div>
-        <p className="text-[11px] text-slate-500">Read-only view built from saved GRN and Raw Material Issue records. Running balance = stock after each transaction, worked back from current stock.</p>
+        <p className="text-[11px] text-slate-500">Read-only view built from saved GRN and Raw Material Issue records. Running balance starts from the item&apos;s opening stock; any difference to current stock is shown as an adjustment row.</p>
         <div className="max-h-[55vh] overflow-auto"><TxnTable rows={rows} tab={tab} unit={item.unit} /></div>
       </div>
     </Modal>

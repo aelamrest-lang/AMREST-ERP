@@ -1,0 +1,37 @@
+{
+  "summary": "Iter20 frontend test of the Material Inventory History modal (Inventory page) and the 'Issued To' field on Raw Material Issue, logged in as admin/admin123 on the preview URL. All 10 requested checks passed. 1) Clicking a name button (inv-item-name-<id>) opens material-history-modal titled 'Stock History · <name>'. 2) mh-current-stock equals inv-stock in Live mode (215.45 kgs for Copper Wire Swg 18.5 and 37.00 kgs for Bolt 5/16x1/2). 3) The tabs switch columns correctly: IN shows Date, PO, GRN, Supplier, Qty, Rate, Amount, Received By and Balance; OUT shows Issue Date, Issue No, Job Card, Qty, Issued To, Issued By and Balance; ALL shows the combined columns. Amount = rate*qty (1508*134.91=203444.28). The UI rows match an independent calculation from /api/erp/state (37 transactions: 20 IN, 17 OUT; totals 1080.68 / 376.20). 4) Running balance: the newest row equals current stock, and each older row matches the expected back-calculation. 5) Date filters (2026-10-20..31 gives 9 rows, all inside the range; KPIs update), Clear resets, and a future range shows the empty state. 6) Excel export downloads .xlsx files (Copper_Wire_Swg_18_5_history_in.xlsx / _all.xlsx). The sheet names and headers are correct and the export follows the active filter (4 rows). 7) PO, GRN and JC refs go to the Purchase Orders, Goods Receipt Notes and Job Cards pages, and the modal closes. 8) No /api/erp/commit requests while opening, filtering, exporting or navigating, and stock is unchanged. 9) The Issued To dropdown lists 40 operators and users. TEST issue MIS-2026-102 (1 kg Bolt 5/16x1/2, Issued To 'Istiyaq') was saved, issuedTo was stored, and it appeared in history OUT and ALL with 'Istiyaq' and Issued By 'Admin User'. Older issues show '—'. The form reset after saving. 10) Regression: Inventory date modes (Last Month banner and label, Custom Range hint), the KPI views (all 1483 / value 1228 / low 272) and Current Stock sort (asc/desc) all work. No page errors.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "MaterialHistoryModal running balance", "issue": "Opening stock and other stock changes (manual edits, Excel upload, Sync Stock, SFG, dispatch) are not GRN or Issue rows. So the back-calculated balance goes negative for older rows on 83 of 459 items with history. Example: Copper Wire Swg 18.5 oldest row is about -469 kgs; Transformer Oil reaches -68093. This is a limit of the 'only GRN + Issue' choice, but it is misleading for users. Suggest a synthetic 'Opening / Adjustments' row (or a note) for the gap, instead of showing negative balances.", "selector": "[data-testid^='mh-bal-']", "priority": "MEDIUM"},
+      {"component": "MaterialHistoryModal in historical Inventory mode", "issue": "When Inventory is in Last Month or a past date mode, the row shows historical stock (282.87) but mh-current-stock shows today's live stock (215.45). The values are correct but can confuse users. Label it 'Live Current Stock', or show the as-of value too.", "selector": "[data-testid='mh-current-stock']", "priority": "LOW"},
+      {"component": "MaterialHistoryModal Excel export", "issue": "Running Balance is written as a raw float, e.g. 215.44999999999996. Round to 2–3 decimals before json_to_sheet.", "selector": "[data-testid='mh-export']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "MaterialHistoryModal on mobile (390px)", "issues": ["The filter row (two date inputs, 'to', Excel button) overflows the modal width. The second date input runs past the edge and the Excel button is pushed off-screen. Let the date row wrap, or use full-width inputs on small screens."]},
+      {"screen": "Navigation from history refs", "issues": ["After a PO/GRN/JC ref click, the target page keeps the old scroll position (opens at the bottom of the list). Consider window.scrollTo(0,0) on route change."]},
+      {"screen": "Raw Material Issue (pre-existing)", "issues": ["Pending Issue Qty shows float noise such as 29.400000000000002 (Bolt 3/8x1.25 on JC-2026-020)", "The Material Issue print slip does not include the new 'Issued To' value"]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/iter20_history_expected.py", "/app/backend/tests/iter20_issue_helper.py"],
+  "action_items": [
+    "(Medium) Deal with negative worked-back balances: add an 'Opening / Other adjustments' row, or a note/clamp, when the oldest balance before the first GRN/Issue row is not 0",
+    "(Low) Round Running Balance and other numbers in the xlsx export",
+    "(Low) Make the modal filter row responsive on mobile",
+    "(Low) Clarify that Current Stock in the modal is live stock when Inventory is in a historical date mode",
+    "(Optional) Add Issued To to the Material Issue print slip"
+  ],
+  "critical_code_review_comments": [
+    "MaterialHistoryModal useItemTxns takes the rate from the first PO line with a matching itemId. If a PO has the same item twice at different rates, every GRN line uses the first rate. Prefer matching by the GRN line index/poItem reference if one exists.",
+    "The sort is by date, then createdAt. Records without createdAt ('' ) sort last within the same date, which may misorder same-day balances for legacy data.",
+    "Inventory passes a snapshot of db.items.find(...) into the modal. If stock changes while the modal is open (another user syncs), Current Stock and balances will not refresh. Pass the item id and look the item up from db inside the modal instead.",
+    "Issued To stores the name string, not an id. Renaming an operator or user will not update older history. This is fine for read-only use but worth noting."
+  ],
+  "updated_files": ["/app/backend/tests/iter20_history_expected.py", "/app/backend/tests/iter20_issue_helper.py"],
+  "success_rate": {"backend": "N/A (frontend only)", "frontend": "100% of requested checks passed (10/10); 1 medium and several low UX/data-presentation issues"},
+  "seed_data_creation": "Created TEST issue MIS-2026-102 (remarks 'TEST_iter20 issued-to', 1 kg Bolt 5/16x1/2 Inchi Zink, JC-2026-020, Issued To Istiyaq). It was cleaned up via /api/erp/commit: the issue and its activity log were deleted and item stock was put back to 38.0, which was verified. Note: the next MIS number had already advanced to 102 while 089-092 existed. No other data was changed.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Login uses input[name='amrest-login-username'/'amrest-login-password'] + Enter, then routes via window.__amrestSetRoute('inventory'|'rawissue'|'purchase'|'grn'|'jobcards'). Good test item: Copper Wire Swg 18.5 (13c91582-204a-4758-b6d9-030cf4637fe1), 37 transactions. iter20_history_expected.py [item_id|neg] prints the expected history rows and balances, or lists items with negative balances. iter20_issue_helper.py show|cleanup MIS-xxx removes TEST_ issues and restores stock. On Raw Material Issue, the first table is the Out Of Stock table; use 'tbody tr:has(input[type=number])' plus issue-material-search to find the issue rows. System date is 2026-11-06."
+}
