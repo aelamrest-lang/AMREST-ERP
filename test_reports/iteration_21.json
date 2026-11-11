@@ -1,0 +1,32 @@
+{
+  "summary": "Frontend E2E test of the updated multi-level BOM Mapping Engine (preview URL, admin/admin123). All 7 requested features PASS. FG combobox = 132 options and registry = 132 entries, which matches the 132 Finished Goods items in /api/erp/state (91 of them are in no Sales Order). Created a BOM for an FG that has no SO and no JC (Insulators 80 X 300 = FG_B: Core 61x83x10 M4 RM x2 + CT Secondary (75T) SFG x3). It saved and persisted after reload and in the backend. Component select lists 1280 RM + 72 SFG + 131 FG; the selected FG itself is excluded. Mapped FG_B into Epoxy Insulator DWG No. 903G1254 (FG_A) with qty 2, plus RM x qty 1. It shows the green badge 'Finished Goods · has BOM'. Explosion for FG_A: x=5.00, y=6.00, depth=2, and FG_B is not listed as a leaf. With build qty 10: x=50.00, y=60.00. Explosion Excel and BOM Items Excel both downloaded. Mapping FG_A into FG_B was blocked with the 'Circular BOM blocked' alert and nothing was added. Copy BOM FG_A to FG_B was blocked with the 'Copy blocked' alert. Editing qty (x became 5.5) and removing an item (confirm dialog, then x became 4) both work and the explosion updates live. Job Card form with BOM FG_A and qty 3 reserves the listed components only (Insulators 80 X 300 6 Nos, Core 3 Nos), with no explosion. The JC was cancelled, not saved. The 43 existing BOMs were not touched. Both test BOMs were deleted by id afterwards, so the BOM count is back to 43 and the job card count is unchanged at 31.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "BOM component select", "issue": "After Map Consumable, materialText is cleared but materialId keeps its value, so the select still shows the last item. Clicking Map again silently replaces that item's qty instead of warning about a duplicate.", "selector": "[data-testid='bom-component-select']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "BOM page header", "issues": ["When the 'BOM saved successfully.' message appears next to the Copy/Save buttons, the header wraps and the buttons move below the description (layout shift)."]}
+    ]
+  },
+  "test_report_links": ["/app/tests/bom_state_probe.py", "/app/tests/cleanup_test_boms.py"],
+  "action_items": [
+    "(Low) Reset materialId after mapping, or warn when the item already exists in the BOM.",
+    "(Low) Add data-testid to the Save BOM buttons, registry rows, the type-component input and the BOM row qty/remove controls.",
+    "(Low) Avoid the header layout shift caused by the save message."
+  ],
+  "critical_code_review_comments": [
+    "BOM.tsx: the initial materialId is rawAndSemiItems[0], which can be an FG or the selected FG itself. The cycle guard catches the self case, but a blank default would be cleaner.",
+    "bomNameSet ('has BOM' / 'Active' badge) matches by name only, while bomForItem matches by productItemId first. It also shows 'has BOM' for a BOM with 0 materials, which explodeBom treats as a leaf. Minor inconsistency.",
+    "The Copy-blocked message is confusing when the conflicting material is the target itself ('Insulators 80 X 300 would create a circular BOM with Insulators 80 X 300').",
+    "DRY: the material filter and sort-by-name logic is repeated 3 times in BOM.tsx (Excel export, table, no-match check). Extract it into one useMemo.",
+    "Production JC reserves FG components directly, as the user chose. Note that this reserves FG stock of the sub-assembly."
+  ],
+  "updated_files": ["/app/tests/bom_state_probe.py", "/app/tests/cleanup_test_boms.py"],
+  "success_rate": {"backend": "N/A (frontend only)", "frontend": "100%"},
+  "seed_data_creation": "Temporarily created BOMs for existing FGs 'Insulators 80 X 300' and 'Epoxy Insulator DWG No. 903G1254' (both had no BOM), then deleted them by id via /api/erp/commit. No items or job cards were created.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Login form: input[name=amrest-login-username] / amrest-login-password. Routes: window.__amrestSetRoute('bom' | 'jobcards'). FG combobox options use [data-testid=bom-fg-combobox-option-{itemId}]. Test IDs: RM x 8ce6ff40-5093-4764-ad01-151a10bbb55e, SFG y a2a0ef1e-5bf5-47c8-abbd-407b27037186. Use tests/bom_state_probe.py to check counts and tests/cleanup_test_boms.py <bomId...> to delete test BOMs."
+}

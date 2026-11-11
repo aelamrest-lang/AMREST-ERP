@@ -129,3 +129,8 @@ Cloud-based Transformer Manufacturing ERP & CRM with modules for Sales CRM, Quot
 
 ## 2026-06 — Inventory keyword search (DONE, self-tested)
 - Inventory search now matches any keyword anywhere in the name, multiple keywords in any order, case-insensitive, and ignores spacing/format around sizes (4.6x2.1 = 4.6 x 2.1). Only the filter changed (`matchesKeywords` in Inventory.tsx).
+
+## 2026-06 — Multi-level BOM (DONE, tested iter 21)
+- BOM page lists ALL Finished Goods (no SO/JC needed). Components can be RM, SFG or FG.
+- `lib/bomTree.ts`: createsCycle (blocks self/circular on map + copy), explodeBom (FG with BOM expanded; RM/SFG/FG-without-BOM are leaves).
+- `components/BomExplosion.tsx`: combined total requirement list for a build qty + Excel. Job Cards unchanged (hold listed components). Only FG have BOMs (user choice).

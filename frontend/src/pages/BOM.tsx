@@ -102,6 +102,7 @@ export function BOMPage() {
     log(`Mapped ${item.name} to BOM ${selectedProduct.name}`, "BOM");
     setQty(1);
     setMaterialText("");
+    setMaterialId("");
   };
 
   const removeMapped = (itemId?: string) => {
@@ -220,8 +221,8 @@ export function BOMPage() {
                 <h3 className="font-semibold text-lg">Configure BOM Blueprint Map</h3>
                 <p className="text-xs text-slate-500 mt-1">Finished products are selected as BOM models. Raw Materials, Semi-Finished and Finished Goods can be mapped as components. No Sales Order or Job Card needed.</p>
               </div>
-              <div className="flex items-center gap-2">
-                {saveMessage && <span className="text-xs font-medium text-emerald-600">{saveMessage}</span>}
+              <div className="flex items-center gap-2 flex-wrap justify-end ml-auto">
+                {saveMessage && <span className="text-xs font-medium text-emerald-600 whitespace-nowrap">{saveMessage}</span>}
                 {(canCreate || canEdit) && currentBom && currentBom.materials.length > 0 && (
                   <Button variant="outline" onClick={openCopyDialog} data-testid="copy-bom-btn"><IconPlus size={14}/> Copy BOM</Button>
                 )}
