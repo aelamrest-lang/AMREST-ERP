@@ -6,6 +6,8 @@ import type { BOM } from "../lib/types";
 import { IconPlus, IconTrash, IconSearch, IconEdit, IconCheck } from "../components/icons";
 import { userCan } from "../lib/permissions";
 import { FinishedGoodCombobox } from "../components/FinishedGoodCombobox";
+import { BomExplosion } from "../components/BomExplosion";
+import { createsCycle } from "../lib/bomTree";
 
 export function BOMPage() {
   const { db, setDB, log, currentUser } = useStore();
@@ -13,19 +15,8 @@ export function BOMPage() {
   const canEdit = userCan(currentUser, "bom", "edit");
   const canDelete = userCan(currentUser, "bom", "delete");
 
-  // Show Finished Goods that either (a) appear in a Sales Order OR (b) already have a BOM linked (name match).
-  // Once a BOM exists for a FG it stays permanently visible with status "Active", even after the SO is dispatched/deleted.
-  const finishedProducts = useMemo(() => {
-    const soNames = new Set<string>();
-    db.salesOrders.forEach(so => (so.items || []).forEach(it => it.name && soNames.add(it.name.trim().toLowerCase())));
-    const bomNames = new Set<string>();
-    db.boms.forEach(b => b.name && bomNames.add(b.name.trim().toLowerCase()));
-    return db.items.filter(i => {
-      if (i.category !== "Finished Goods") return false;
-      const n = i.name.trim().toLowerCase();
-      return soNames.has(n) || bomNames.has(n);
-    });
-  }, [db.items, db.salesOrders, db.boms]);
+  // Every registered Finished Good can have a BOM — no Sales Order / Job Card required.
+  const finishedProducts = useMemo(() => db.items.filter(i => i.category === "Finished Goods"), [db.items]);
 
   // Set of FG-name (lowercase) that already have a BOM — used to show an Active badge in the registry.
   const bomNameSet = useMemo(() => {
@@ -33,7 +24,7 @@ export function BOMPage() {
     db.boms.forEach(b => b.name && s.add(b.name.trim().toLowerCase()));
     return s;
   }, [db.boms]);
-  const rawAndSemiItems = useMemo(() => db.items.filter(i => i.category === "Raw Material" || i.category === "Semi-Finished"), [db.items]);
+  const rawAndSemiItems = useMemo(() => db.items.filter(i => i.category === "Raw Material" || i.category === "Semi-Finished" || i.category === "Finished Goods"), [db.items]);
 
   const [selectedProductId, setSelectedProductId] = useState(finishedProducts[0]?.id || "");
   const [materialId, setMaterialId] = useState(rawAndSemiItems[0]?.id || "");
@@ -55,10 +46,10 @@ export function BOMPage() {
 
   const filteredMaterials = useMemo(() => {
     const term = (materialSearch || materialText).toLowerCase();
-    return rawAndSemiItems.filter(i =>
+    return rawAndSemiItems.filter(i => i.id !== selectedProduct?.id).filter(i =>
       !term || i.name.toLowerCase().includes(term) || i.category.toLowerCase().includes(term)
     );
-  }, [rawAndSemiItems, materialSearch, materialText]);
+  }, [rawAndSemiItems, materialSearch, materialText, selectedProduct]);
 
   const registryProducts = useMemo(() => {
     const term = registrySearch.toLowerCase();
@@ -80,8 +71,9 @@ export function BOMPage() {
   const mapConsumable = () => {
     if (!selectedProduct) return alert("Select a finished product model first.");
     const item = rawAndSemiItems.find(i => i.id === materialId) || rawAndSemiItems.find(i => i.name.toLowerCase() === materialText.toLowerCase());
-    if (!item) return alert("Select or type a valid raw/semi-finished material.");
+    if (!item) return alert("Select or type a valid Raw Material, Semi-Finished or Finished Goods item.");
     if (!qty || qty <= 0) return alert("Enter required consumption quantity.");
+    if (createsCycle(db, selectedProduct.id, item.id)) return alert(item.id === selectedProduct.id ? "A Finished Good cannot be a component of its own BOM." : `Circular BOM blocked: ${item.name}'s BOM already uses ${selectedProduct.name} (directly or at a lower level).`);
 
     setDB(d => {
       const existing = d.boms.find(b => b.productItemId === selectedProduct.id) || d.boms.find(b => b.name === selectedProduct.name);
@@ -184,6 +176,8 @@ export function BOMPage() {
       return;
     }
     const existing = db.boms.find(b => b.productItemId === target.id) || db.boms.find(b => b.name === target.name);
+    const loop = currentBom.materials.find(m => m.itemId && createsCycle(db, target.id, m.itemId));
+    if (loop) { alert(`Copy blocked: ${loop.name} would create a circular BOM with ${target.name}.`); return; }
     if (existing && !window.confirm(`${target.name} already has a BOM with ${existing.materials.length} material(s). Overwrite it?`)) return;
 
     const clonedMaterials = currentBom.materials.map(m => ({ ...m }));
@@ -224,7 +218,7 @@ export function BOMPage() {
             <div className="flex items-start justify-between gap-3 flex-wrap">
               <div>
                 <h3 className="font-semibold text-lg">Configure BOM Blueprint Map</h3>
-                <p className="text-xs text-slate-500 mt-1">Finished products are selected as BOM models. Only Raw Materials and Semi-Finished items can be mapped as consumables.</p>
+                <p className="text-xs text-slate-500 mt-1">Finished products are selected as BOM models. Raw Materials, Semi-Finished and Finished Goods can be mapped as components. No Sales Order or Job Card needed.</p>
               </div>
               <div className="flex items-center gap-2">
                 {saveMessage && <span className="text-xs font-medium text-emerald-600">{saveMessage}</span>}
@@ -250,7 +244,7 @@ export function BOMPage() {
               <h4 className="font-semibold mb-3">Add / Map Consumable Material</h4>
               <div className="grid md:grid-cols-[1.2fr_1fr_0.7fr_auto] gap-3 items-end">
                 <div>
-                  <Label>Type Raw / Semi-Finished Material</Label>
+                  <Label>Type Component (RM / SFG / FG)</Label>
                   <Input
                     value={materialText}
                     list="bom-material-type-options"
@@ -258,26 +252,27 @@ export function BOMPage() {
                     onChange={(e: any) => typeMaterial(e.target.value)}
                   />
                   <datalist id="bom-material-type-options">
-                    {rawAndSemiItems.map(i => <option key={i.id} value={i.name}>{i.category}</option>)}
+                    {filteredMaterials.map(i => <option key={i.id} value={i.name}>{i.category}</option>)}
                   </datalist>
                 </div>
                 <div>
-                  <Label>Select Raw / Semi-Finished Material</Label>
-                  <Select value={materialId} onChange={(e: any) => selectMaterial(e.target.value)}>
+                  <Label>Select Component (RM / SFG / FG)</Label>
+                  <Select value={materialId} onChange={(e: any) => selectMaterial(e.target.value)} data-testid="bom-component-select">
                     <option value="">Choose material...</option>
                     {filteredMaterials.map(i => <option key={i.id} value={i.id}>{i.name} ({i.category})</option>)}
                   </Select>
                 </div>
                 <div>
                   <Label>Consumption Qty (Per Unit)</Label>
-                  <Input type="number" value={qty} min={0} step="0.001" placeholder="e.g. 180" onChange={(e: any) => setQty(Number(e.target.value))} />
+                  <Input type="number" value={qty} min={0} step="0.001" placeholder="e.g. 180" data-testid="bom-qty-input" onChange={(e: any) => setQty(Number(e.target.value))} />
                 </div>
-                <Button disabled={!canCreate && !canEdit} onClick={mapConsumable}><IconPlus size={14}/> Map Consumable</Button>
+                <Button disabled={!canCreate && !canEdit} onClick={mapConsumable} data-testid="bom-map-btn"><IconPlus size={14}/> Map Consumable</Button>
               </div>
               <div className="mt-3 flex flex-wrap gap-2">
                 <Input className="max-w-sm" value={materialSearch} onChange={(e: any) => setMaterialSearch(e.target.value)} placeholder="Filter material dropdown..." />
                 <Badge color="blue">Raw Materials</Badge>
                 <Badge color="yellow">Semi-Finished</Badge>
+                <Badge color="green">Finished Goods</Badge>
               </div>
             </div>
 
@@ -352,7 +347,7 @@ export function BOMPage() {
                           <Td className="font-mono text-xs text-slate-500">{idx + 1}</Td>
                           <Td>
                             <div className="font-semibold">{item?.name || m.name}</div>
-                            {item && <Badge color={item.category === "Raw Material" ? "blue" : "yellow"}>{item.category}</Badge>}
+                            {item && <Badge color={item.category === "Raw Material" ? "blue" : item.category === "Finished Goods" ? "green" : "yellow"}>{item.category}{item.category === "Finished Goods" && bomNameSet.has(item.name.trim().toLowerCase()) ? " · has BOM" : ""}</Badge>}
                           </Td>
                           <Td>{m.unit}</Td>
                           <Td>{canEdit ? <Input className="max-w-32" type="number" value={m.qty} step="0.001" onChange={(e: any) => updateQty(m.itemId, Number(e.target.value))} /> : <span className="font-semibold">{m.qty}</span>}</Td>
@@ -369,6 +364,7 @@ export function BOMPage() {
                   return n.includes(q);
                 }).length === 0 && <Empty title="No matches" subtitle={`No BOM items match "${bomItemSearch}"`} />}
               </div>
+              {selectedProduct && currentBom && currentBom.materials.length > 0 && <div className="mt-4"><BomExplosion productId={selectedProduct.id} productName={selectedProduct.name} /></div>}
               <div className="mt-4 flex items-center justify-end gap-2">
                 {saveMessage && <span className="text-xs font-medium text-emerald-600">{saveMessage}</span>}
                 {(canCreate || canEdit) && <Button onClick={saveCurrentBom}><IconCheck size={14}/> Save BOM</Button>}
